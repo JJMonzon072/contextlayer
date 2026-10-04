@@ -11,6 +11,12 @@ dist/
 .env.*
 !.env.example
 
+# Extension signing keys and packed artifacts ("Pack extension" writes dist.pem
+# next to the folder; the key fixes the extension id and must never be committed)
+*.pem
+*.crx
+*.zip
+
 # Tests
 coverage/
 playwright-report/
