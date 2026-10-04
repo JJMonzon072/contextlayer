@@ -64,14 +64,29 @@ export async function getJson<T>(
   try {
     body = await response.json()
   } catch (error) {
-    throw new HttpError('invalid-response', 'The response is not valid JSON.', { cause: error })
+    throw invalidOrUnavailable(response, 'The response is not valid JSON.', error)
   }
 
   try {
     return schema.parse(body)
   } catch (error) {
-    throw new HttpError('invalid-response', 'The response does not match the expected contract.', {
-      cause: error,
-    })
+    throw invalidOrUnavailable(
+      response,
+      'The response does not match the expected contract.',
+      error,
+    )
   }
+}
+
+/**
+ * A 5xx whose body is not ours (a proxy error page, Fastify's own 503 while it
+ * shuts down) means the service is unavailable, not that the contract drifted.
+ */
+function invalidOrUnavailable(response: Response, message: string, cause: unknown): HttpError {
+  return response.status >= 500
+    ? new HttpError('status', `Unexpected HTTP status ${response.status}.`, {
+        status: response.status,
+        cause,
+      })
+    : new HttpError('invalid-response', message, { cause })
 }
