@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "vue-tsc --build",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@contextlayer/shared": "workspace:*",
@@ -18,7 +19,9 @@
     "vue": "catalog:"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@contextlayer/config": "workspace:*",
+    "@playwright/test": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@vitejs/plugin-vue": "catalog:",

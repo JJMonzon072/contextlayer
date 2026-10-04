@@ -6,6 +6,7 @@ packages:
 # packages. Packages reference these with the `catalog:` protocol.
 catalog:
   '@eslint/js': ^10.0.1
+  '@playwright/test': ^1.63.0
   '@tailwindcss/vite': ^4.3.3
   '@types/node': ^22.20.5
   '@vitejs/plugin-vue': ^6.0.9
