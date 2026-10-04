@@ -1,0 +1,35 @@
+{
+  "name": "@contextlayer/extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ContextLayer Chrome extension (Manifest V3): service worker, content script and popup.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx scripts/build.ts --watch",
+    "build": "tsx scripts/build.ts",
+    "typecheck": "vue-tsc --build",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@contextlayer/shared": "workspace:*",
+    "@contextlayer/ui": "workspace:*",
+    "vue": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@contextlayer/config": "workspace:*",
+    "@tailwindcss/vite": "catalog:",
+    "@types/chrome": "^0.3.4",
+    "@types/node": "catalog:",
+    "@vitejs/plugin-vue": "catalog:",
+    "eslint": "catalog:",
+    "jsdom": "catalog:",
+    "tailwindcss": "catalog:",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

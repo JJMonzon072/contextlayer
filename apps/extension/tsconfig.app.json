@@ -1,0 +1,10 @@
+{
+  "extends": "@contextlayer/config/tsconfig/vue.json",
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "types": ["vite/client", "chrome"]
+  },
+  "include": ["src", "test"],
+  "exclude": ["test/build"]
+}
