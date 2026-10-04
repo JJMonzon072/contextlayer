@@ -1,3 +1,18 @@
 packages:
   - apps/*
   - packages/*
+
+# Single source of truth for dependency versions shared by several workspace
+# packages. Packages reference these with the `catalog:` protocol.
+catalog:
+  '@eslint/js': ^10.0.1
+  '@vue/eslint-config-typescript': ^14.9.0
+  eslint: ^10.12.0
+  eslint-config-prettier: ^10.1.8
+  eslint-plugin-vue: ^10.11.1
+  globals: ^17.13.0
+  prettier: ^3.9.9
+  typescript: ~6.0.3
+  typescript-eslint: ^8.71.0
+  vitest: ^5.0.3
+  zod: ^4.6.5

@@ -30,5 +30,8 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+# Local AI/editor tooling caches
+.impeccable/
+
 # Local working log for AI-assisted sessions (never committed)
 AI_HANDOFF.md
