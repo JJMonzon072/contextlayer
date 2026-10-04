@@ -9,6 +9,7 @@
 import { EXTENSION_VERSION } from '../config'
 import { logger } from '../lib/logger'
 import { requestApiHealth } from '../messaging/background-client'
+import { failure } from '../messaging/protocol'
 import { handleContentMessage } from './handle-message'
 import { createOverlay } from './overlay'
 
@@ -30,7 +31,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         logger.warn('could not show the on-page toast', error)
       }
     },
-  }).then(sendResponse)
+  })
+    .catch(() => failure('INTERNAL_ERROR', 'Unexpected error while handling the message.'))
+    .then(sendResponse)
 
   return true
 })

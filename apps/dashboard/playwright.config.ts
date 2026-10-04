@@ -3,9 +3,14 @@ import { defineConfig, devices } from '@playwright/test'
 const isCI = Boolean(process.env.CI)
 
 /**
- * End-to-end tests against the BUILT dashboard (`vite preview`) and the BUILT
- * API (`node dist/server.js`). Run `pnpm build` and `docker compose up -d` first;
- * the root `pnpm test:e2e` script does the build for you.
+ * End-to-end tests against the BUILT dashboard (`vite preview`) and the API.
+ * Run `pnpm build` and `docker compose up -d` first; the root `pnpm test:e2e`
+ * script does the build for you.
+ *
+ * Servers already listening locally are reused (on CI they are always started
+ * from the build): if `pnpm dev` is running, the tests talk to the dev API on
+ * :3000. The API port is fixed at 3000 for e2e because the preview proxy and
+ * the extension build point there (see .env.example).
  */
 export default defineConfig({
   testDir: './e2e',
