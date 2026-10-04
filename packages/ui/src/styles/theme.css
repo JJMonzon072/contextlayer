@@ -1,0 +1,28 @@
+/*
+ * ContextLayer design tokens for Tailwind CSS v4.
+ *
+ * Usage in an app stylesheet:
+ *   @import 'tailwindcss';
+ *   @import '@contextlayer/ui/theme.css';
+ *
+ * `@source` makes Tailwind scan this package's components, which live outside
+ * the consuming app and would otherwise not be detected.
+ */
+@source '..';
+
+@theme {
+  /* System font stack: no web-font download, works offline and on locked-down networks. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --color-brand-50: oklch(0.97 0.02 265);
+  --color-brand-100: oklch(0.93 0.04 265);
+  --color-brand-200: oklch(0.87 0.08 265);
+  --color-brand-300: oklch(0.78 0.13 265);
+  --color-brand-400: oklch(0.68 0.18 265);
+  --color-brand-500: oklch(0.59 0.21 265);
+  --color-brand-600: oklch(0.51 0.22 265);
+  --color-brand-700: oklch(0.44 0.2 265);
+  --color-brand-800: oklch(0.37 0.16 265);
+  --color-brand-900: oklch(0.31 0.12 265);
+}
