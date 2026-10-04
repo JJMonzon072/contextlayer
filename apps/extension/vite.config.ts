@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defaultClientConditions, loadEnv, type InlineConfig, type Plugin } from 'vite'
 
-import { createManifest } from './manifest.config'
+import { createManifest, parseApiBaseUrl } from './manifest.config'
 
 /**
  * The extension is produced by two Vite builds that share this file
@@ -32,11 +32,7 @@ interface ExtensionEnv {
 
 function readExtensionEnv(mode: string): ExtensionEnv {
   const env = loadEnv(mode, workspaceRoot, '')
-  const rawUrl = env.EXTENSION_API_BASE_URL ?? 'http://localhost:3000'
-  const apiBaseUrl = new URL(rawUrl)
-  if (apiBaseUrl.protocol !== 'http:' && apiBaseUrl.protocol !== 'https:') {
-    throw new Error(`EXTENSION_API_BASE_URL must be an http(s) URL, got "${rawUrl}"`)
-  }
+  const apiBaseUrl = parseApiBaseUrl(env.EXTENSION_API_BASE_URL)
 
   const packageJson = JSON.parse(
     readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
@@ -115,7 +111,9 @@ export function createContentScriptConfig(options: BuildOptions): InlineConfig {
     publicDir: false,
     define: {
       ...base.define,
-      // Library mode does not replace this, and Vue reads it at runtime.
+      // Defensive: library mode does not replace this. The Phase 1 content script
+      // does not read it, but any dependency that does (Vue, once the guide player
+      // mounts components in the page) would throw "process is not defined".
       'process.env.NODE_ENV': JSON.stringify(options.mode),
     },
     build: {

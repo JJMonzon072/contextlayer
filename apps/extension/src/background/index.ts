@@ -8,6 +8,7 @@
  */
 import { EXTENSION_VERSION } from '../config'
 import { logger } from '../lib/logger'
+import { failure } from '../messaging/protocol'
 import { fetchApiHealth } from './api-client'
 import { handleBackgroundMessage } from './handle-message'
 
@@ -22,7 +23,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     onApiError: (error) => {
       logger.warn('API request failed', error)
     },
-  }).then(sendResponse)
+  })
+    .catch(() => failure('INTERNAL_ERROR', 'Unexpected error while handling the message.'))
+    .then(sendResponse)
 
   // Keep the message channel open for the asynchronous response.
   return true

@@ -51,8 +51,36 @@ export function createManifest({
         run_at: 'document_idle',
       },
     ],
-    // A pattern without a port matches every port, so the API origin is used
-    // as-is (scheme + host + port): the narrowest grant that still works.
-    host_permissions: [`${apiBaseUrl.origin}/*`],
+    // A pattern without a port matches every port, so the port is always
+    // explicit, including the scheme default that `URL.origin` would omit.
+    host_permissions: [originPattern(apiBaseUrl)],
   }
+}
+
+/** `https://api.example.com` → `https://api.example.com:443/*` (port pinned). */
+export function originPattern(url: URL): string {
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80')
+  return `${url.protocol}//${url.hostname}:${port}/*`
+}
+
+/**
+ * Validates `EXTENSION_API_BASE_URL`. Only an origin is accepted: the API serves
+ * its routes at the root and only the origin is baked into the build, so a
+ * path, query or fragment would otherwise be dropped silently.
+ */
+export function parseApiBaseUrl(raw: string | undefined): URL {
+  const value = raw?.trim() ? raw.trim() : 'http://localhost:3000'
+  const url = URL.canParse(value) ? new URL(value) : undefined
+  if (
+    url === undefined ||
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.pathname !== '/' ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    throw new Error(
+      `EXTENSION_API_BASE_URL must be an http(s) origin such as https://api.example.com, got "${value}"`,
+    )
+  }
+  return url
 }
