@@ -2,19 +2,24 @@
  * Root of every piece of UI ContextLayer injects into a host page.
  *
  * Isolation strategy (see docs/adr/0013-shadow-dom-ui-isolation.md):
- * - A custom element host with a CLOSED shadow root: page CSS cannot style our
- *   UI and page scripts cannot reach into it through `host.shadowRoot`.
- * - `:host { all: initial }` stops inherited page styles (font, color...) leaking in.
+ * - The host is a plain <div>, never a custom element: a page could define a
+ *   custom element with our tag before we run and reach the shadow root through
+ *   `ElementInternals`. Built-in elements cannot be redefined by the page.
+ * - CLOSED shadow root: page scripts cannot reach our UI through `host.shadowRoot`.
+ * - `:host { all: initial !important }` stops page styles (font, color, even
+ *   `div { display: none }`) from leaking into or hiding the host.
  * - Sizes in px, not rem: rem follows the page's root font-size.
  * - Styles via a constructable stylesheet (`adoptedStyleSheets`), no <style> tag.
  * - Floating UI uses the Popover API, which renders in the browser's top layer,
  *   above any page z-index or `overflow: hidden` container.
+ * - The host only exists while there is something to show and carries no
+ *   version or other data a page could use to fingerprint the extension.
  */
-export const OVERLAY_HOST_TAG = 'contextlayer-root'
+export const OVERLAY_HOST_ATTRIBUTE = 'data-contextlayer-root'
 
 const OVERLAY_CSS = `
 :host {
-  all: initial;
+  all: initial !important;
 }
 
 .toast {
@@ -33,50 +38,60 @@ const OVERLAY_CSS = `
 `
 
 export interface Overlay {
-  readonly host: HTMLElement
   showToast(text: string, durationMs?: number): void
   destroy(): void
 }
 
-export function mountOverlay(doc: Document, version: string): Overlay {
-  // A host left by a previous instance (e.g. an orphaned content script after
-  // an extension update) is replaced instead of duplicated.
-  doc.querySelector(OVERLAY_HOST_TAG)?.remove()
+interface MountedOverlay {
+  host: HTMLElement
+  toast: HTMLElement
+}
 
-  const host = doc.createElement(OVERLAY_HOST_TAG)
-  host.dataset.contextlayerVersion = version
-  const shadow = host.attachShadow({ mode: 'closed' })
-
-  const sheet = new CSSStyleSheet()
-  sheet.replaceSync(OVERLAY_CSS)
-  shadow.adoptedStyleSheets = [sheet]
-
-  const toast = doc.createElement('div')
-  toast.className = 'toast'
-  toast.popover = 'manual'
-  toast.setAttribute('role', 'status')
-  shadow.append(toast)
-
-  // documentElement survives SPA frameworks that replace <body> content.
-  doc.documentElement.append(host)
-
+export function createOverlay(doc: Document): Overlay {
+  let mounted: MountedOverlay | undefined
   let hideTimer: ReturnType<typeof setTimeout> | undefined
 
+  function mount(): MountedOverlay {
+    const host = doc.createElement('div')
+    host.setAttribute(OVERLAY_HOST_ATTRIBUTE, '')
+    const shadow = host.attachShadow({ mode: 'closed' })
+
+    const sheet = new CSSStyleSheet()
+    sheet.replaceSync(OVERLAY_CSS)
+    shadow.adoptedStyleSheets = [sheet]
+
+    const toast = doc.createElement('div')
+    toast.className = 'toast'
+    toast.popover = 'manual'
+    toast.setAttribute('role', 'status')
+    shadow.append(toast)
+
+    // documentElement survives SPA frameworks that replace <body> content.
+    doc.documentElement.append(host)
+    return { host, toast }
+  }
+
+  function unmount() {
+    clearTimeout(hideTimer)
+    mounted?.host.remove()
+    mounted = undefined
+  }
+
   return {
-    host,
     showToast(text, durationMs = 3_500) {
+      // The page may have removed our node (e.g. a framework re-rendering <html>).
+      if (!mounted?.host.isConnected) {
+        unmount()
+        mounted = mount()
+      }
+
       // textContent, never innerHTML: overlay text must not become markup.
-      toast.textContent = text
-      if (!toast.matches(':popover-open')) toast.showPopover()
+      mounted.toast.textContent = text
+      if (!mounted.toast.matches(':popover-open')) mounted.toast.showPopover()
 
       clearTimeout(hideTimer)
-      hideTimer = setTimeout(() => {
-        if (toast.matches(':popover-open')) toast.hidePopover()
-      }, durationMs)
+      hideTimer = setTimeout(unmount, durationMs)
     },
-    destroy() {
-      clearTimeout(hideTimer)
-      host.remove()
-    },
+    destroy: unmount,
   }
 }
