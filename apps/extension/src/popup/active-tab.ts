@@ -8,7 +8,7 @@ import {
 
 const NOT_AVAILABLE = failure(
   'NOT_AVAILABLE',
-  'ContextLayer is not running on this page. In Phase 1 it only runs on localhost.',
+  'ContextLayer is not running on this page. In Phase 1 it only runs on the local dashboard (localhost:5173 and :4173).',
 )
 
 /**

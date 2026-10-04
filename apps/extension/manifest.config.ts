@@ -4,18 +4,23 @@
  * Permission policy (see docs/adr/0007-chrome-manifest-v3-extension.md):
  * - No `permissions` yet: Phase 1 needs none of the privileged APIs.
  * - `host_permissions` only covers the ContextLayer API origin, so the service
- *   worker can call it without CORS. Pages never get broad host access here.
- * - The content script is statically declared for local development hosts only.
+ *   worker can call it without CORS.
+ * - Content-script match patterns ALSO grant host access, so they are pinned to
+ *   exact origins too: in Phase 1 the content script only runs on the local
+ *   dashboard (dev and preview servers), the one page every developer has.
  *   Customer domains will be granted at runtime (optional host permissions +
- *   `chrome.scripting.registerContentScripts`) in the guide player phase.
+ *   `chrome.scripting.registerContentScripts`) in Phase 4.
  */
 interface ManifestOptions {
   version: string
   apiBaseUrl: URL
 }
 
-/** Development hosts where the Phase 1 content script runs (any port). */
-export const CONTENT_SCRIPT_MATCHES = ['http://localhost/*', 'http://127.0.0.1/*']
+/**
+ * Pages where the Phase 1 content script runs: the local dashboard (Vite dev and
+ * preview). Ports are explicit because a pattern without a port matches all ports.
+ */
+export const CONTENT_SCRIPT_MATCHES = ['http://localhost:5173/*', 'http://localhost:4173/*']
 
 export function createManifest({
   version,
@@ -46,7 +51,8 @@ export function createManifest({
         run_at: 'document_idle',
       },
     ],
-    // Match patterns ignore ports, so the origin is reduced to scheme + host.
-    host_permissions: [`${apiBaseUrl.protocol}//${apiBaseUrl.hostname}/*`],
+    // A pattern without a port matches every port, so the API origin is used
+    // as-is (scheme + host + port): the narrowest grant that still works.
+    host_permissions: [`${apiBaseUrl.origin}/*`],
   }
 }
