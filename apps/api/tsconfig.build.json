@@ -1,0 +1,12 @@
+{
+  "extends": "@contextlayer/config/tsconfig/node.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+    // Production builds resolve workspace packages through their compiled
+    // `dist` output (default export conditions), never through `src`.
+    "customConditions": []
+  },
+  "include": ["src"]
+}

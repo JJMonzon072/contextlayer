@@ -14,7 +14,9 @@
     "typecheck": "pnpm --recursive --if-present run typecheck",
     "lint": "pnpm --recursive --if-present run lint",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @contextlayer/api run db:generate",
+    "db:migrate": "pnpm --filter @contextlayer/api run db:migrate"
   },
   "devDependencies": {
     "prettier": "catalog:"

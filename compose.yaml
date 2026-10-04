@@ -1,0 +1,29 @@
+# Local development infrastructure. Application processes (API, dashboard,
+# extension build) run on the host with `pnpm dev`; only stateful services
+# run in containers. See docs/adr/0008-local-first-development.md.
+name: contextlayer
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-contextlayer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-contextlayer}
+      POSTGRES_DB: ${POSTGRES_DB:-contextlayer}
+    ports:
+      # Bound to loopback only: the dev database is never exposed on the LAN.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      # PostgreSQL 18+ images keep data under /var/lib/postgresql/<major>/,
+      # so the volume is mounted on the parent directory.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres-data:
