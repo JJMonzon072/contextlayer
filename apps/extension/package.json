@@ -28,7 +28,7 @@
     "eslint": "catalog:",
     "jsdom": "catalog:",
     "tailwindcss": "catalog:",
-    "tsx": "^4.23.15",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",

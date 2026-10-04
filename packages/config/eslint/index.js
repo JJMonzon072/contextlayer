@@ -24,7 +24,10 @@ const ignores = globalIgnores([
   '**/drizzle/meta/**',
 ])
 
-/** Rules we tighten or relax on top of the typescript-eslint presets. */
+/**
+ * Rules we tighten or relax on top of the typescript-eslint presets.
+ * @type {import('eslint').Linter.RulesRecord}
+ */
 const sharedRules = {
   eqeqeq: ['error', 'always'],
   'no-console': 'error',

@@ -19,6 +19,7 @@ catalog:
   jsdom: ^30.1.0
   prettier: ^3.9.9
   tailwindcss: ^4.3.3
+  tsx: ^4.23.15
   typescript: ~6.0.3
   typescript-eslint: ^8.71.0
   vite: ^8.3.2
@@ -31,3 +32,8 @@ catalog:
 # esbuild's postinstall verifies its platform-specific binary.
 allowBuilds:
   esbuild: true
+
+# Versions published less than a day ago are rejected (pnpm's default
+# minimumReleaseAge). Strict mode makes pnpm fail instead of silently adding
+# the package to `minimumReleaseAgeExclude`; exclusions must be deliberate.
+minimumReleaseAgeStrict: true

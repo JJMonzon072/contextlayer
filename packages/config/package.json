@@ -8,6 +8,10 @@
     "./eslint": "./eslint/index.js",
     "./tsconfig/*": "./tsconfig/*"
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
   "dependencies": {
     "@eslint/js": "catalog:",
     "@vue/eslint-config-typescript": "catalog:",
@@ -15,6 +19,11 @@
     "eslint-plugin-vue": "catalog:",
     "globals": "catalog:",
     "typescript-eslint": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:"
   },
   "peerDependencies": {
     "eslint": "^10.0.0",
