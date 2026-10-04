@@ -12,13 +12,35 @@ const CODE_BY_STATUS: Partial<Record<number, ApiErrorCode>> = {
   503: 'SERVICE_UNAVAILABLE',
 }
 
+/** Client-facing messages for errors whose own message may contain internals. */
+const GENERIC_MESSAGES: Record<ApiErrorCode, string> = {
+  BAD_REQUEST: 'Bad request',
+  VALIDATION_FAILED: 'Request validation failed',
+  UNAUTHORIZED: 'Authentication required',
+  FORBIDDEN: 'Forbidden',
+  NOT_FOUND: 'Not found',
+  CONFLICT: 'Conflict',
+  RATE_LIMITED: 'Too many requests',
+  INTERNAL_ERROR: 'Internal server error',
+  SERVICE_UNAVAILABLE: 'Service temporarily unavailable',
+}
+
 export function errorBody(code: ApiErrorCode, message: string, requestId: string): ApiError {
   return { error: { code, message, requestId } }
 }
 
+/** Fastify's own errors (`FST_*`) carry short, input-free messages that are safe to return. */
+function isFastifyError(error: FastifyError): boolean {
+  return typeof error.code === 'string' && error.code.startsWith('FST_')
+}
+
 /**
- * Every error leaves the API in the shared `ApiError` envelope. 5xx details are
- * logged with the request id but never sent to the client.
+ * Every error leaves the API in the shared `ApiError` envelope:
+ * - schema validation failures → 400 `VALIDATION_FAILED`;
+ * - 5xx → logged with the request id; the client only gets a generic message
+ *   (503 is preserved so clients and load balancers can tell "try later" from a crash);
+ * - 4xx → Fastify's own messages are returned; any other error message is replaced
+ *   by a generic one, because it may contain internal details.
  */
 export function registerErrorHandling(app: FastifyInstance): void {
   app.setNotFoundHandler((request, reply) => {
@@ -29,16 +51,23 @@ export function registerErrorHandling(app: FastifyInstance): void {
     if (hasZodFastifySchemaValidationErrors(error)) {
       return reply
         .code(400)
-        .send(errorBody('VALIDATION_FAILED', 'Request validation failed', request.id))
+        .send(errorBody('VALIDATION_FAILED', GENERIC_MESSAGES.VALIDATION_FAILED, request.id))
     }
 
-    const statusCode = error.statusCode ?? 500
+    const statusCode =
+      error.statusCode !== undefined && error.statusCode >= 400 ? error.statusCode : 500
+
     if (statusCode >= 500) {
-      request.log.error({ err: error }, 'unhandled error')
-      return reply.code(500).send(errorBody('INTERNAL_ERROR', 'Internal server error', request.id))
+      request.log.error({ err: error }, 'request failed')
+      const code: ApiErrorCode = statusCode === 503 ? 'SERVICE_UNAVAILABLE' : 'INTERNAL_ERROR'
+      return reply
+        .code(code === 'SERVICE_UNAVAILABLE' ? 503 : 500)
+        .send(errorBody(code, GENERIC_MESSAGES[code], request.id))
     }
 
+    request.log.info({ err: error }, 'request rejected')
     const code = CODE_BY_STATUS[statusCode] ?? 'BAD_REQUEST'
-    return reply.code(statusCode).send(errorBody(code, error.message, request.id))
+    const message = isFastifyError(error) ? error.message : GENERIC_MESSAGES[code]
+    return reply.code(statusCode).send(errorBody(code, message, request.id))
   })
 }

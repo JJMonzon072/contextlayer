@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --build",
+    "typecheck": "vue-tsc --build --force",
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "playwright test"
