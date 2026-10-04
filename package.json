@@ -13,12 +13,16 @@
     "build": "pnpm --recursive --if-present run build",
     "typecheck": "pnpm --recursive --if-present run typecheck",
     "lint": "pnpm --recursive --if-present run lint",
+    "test": "vitest run",
+    "test:e2e": "pnpm build && pnpm --recursive --workspace-concurrency=1 --if-present run test:e2e",
+    "test:e2e:install": "pnpm --filter @contextlayer/dashboard exec playwright install chromium",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @contextlayer/api run db:generate",
     "db:migrate": "pnpm --filter @contextlayer/api run db:migrate"
   },
   "devDependencies": {
-    "prettier": "catalog:"
+    "prettier": "catalog:",
+    "vitest": "catalog:"
   }
 }

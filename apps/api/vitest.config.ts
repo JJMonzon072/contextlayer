@@ -1,11 +1,11 @@
+import { defaultServerConditions } from 'vite'
 import { defineProject } from 'vitest/config'
 
-const sourceConditions = ['@contextlayer/source']
-
 export default defineProject({
-  // Resolve workspace packages from source so tests never depend on a prior build.
-  resolve: { conditions: sourceConditions },
-  ssr: { resolve: { conditions: sourceConditions } },
+  // Node test files go through Vite's SSR resolver, so the custom condition
+  // belongs in `ssr.resolve.conditions`, and Vite's defaults must be kept.
+  // Workspace packages then resolve from source: tests never need a prior build.
+  ssr: { resolve: { conditions: ['@contextlayer/source', ...defaultServerConditions] } },
   test: {
     name: 'api',
     environment: 'node',
