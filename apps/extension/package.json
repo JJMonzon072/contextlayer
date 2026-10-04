@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx scripts/build.ts --watch",
     "build": "tsx scripts/build.ts",
-    "typecheck": "vue-tsc --build",
+    "typecheck": "vue-tsc --build --force",
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "playwright test"

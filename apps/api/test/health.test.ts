@@ -104,6 +104,49 @@ describe('error handling', () => {
     expect(body.error).toMatchObject({ code: 'INTERNAL_ERROR', message: 'Internal server error' })
     expect(response.body).not.toContain('secret stack detail')
   })
+
+  it('preserves 503 so clients can tell "try later" from a crash', async () => {
+    app = await buildApp({ database: fakeDatabase(() => Promise.resolve()) })
+    app.get('/busy', () => {
+      throw Object.assign(new Error('pool exhausted on 10.0.0.5'), { statusCode: 503 })
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/busy' })
+
+    expect(response.statusCode).toBe(503)
+    expect(apiErrorSchema.parse(response.json()).error.code).toBe('SERVICE_UNAVAILABLE')
+    expect(response.body).not.toContain('10.0.0.5')
+  })
+
+  it('replaces the message of non-Fastify client errors with a generic one', async () => {
+    app = await buildApp({ database: fakeDatabase(() => Promise.resolve()) })
+    app.get('/denied', () => {
+      throw Object.assign(new Error('user 42 missing from workspace_members'), { statusCode: 403 })
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/denied' })
+
+    expect(response.statusCode).toBe(403)
+    expect(apiErrorSchema.parse(response.json()).error).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Forbidden',
+    })
+  })
+
+  it("keeps Fastify's own client error messages", async () => {
+    app = await buildApp({ database: fakeDatabase(() => Promise.resolve()) })
+    app.post('/echo', () => ({}))
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/echo',
+      headers: { 'content-type': 'application/json' },
+      payload: '{not json',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(apiErrorSchema.parse(response.json()).error.message).toMatch(/JSON/)
+  })
 })
 
 describe('createHealthService', () => {
