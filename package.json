@@ -12,6 +12,11 @@
     "dev": "pnpm --recursive --parallel --if-present run dev",
     "build": "pnpm --recursive --if-present run build",
     "typecheck": "pnpm --recursive --if-present run typecheck",
-    "lint": "pnpm --recursive --if-present run lint"
+    "lint": "pnpm --recursive --if-present run lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "catalog:"
   }
 }
