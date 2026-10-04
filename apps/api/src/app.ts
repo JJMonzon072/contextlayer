@@ -15,6 +15,9 @@ import { healthRoutes } from './modules/health/health.routes.js'
 import { createHealthService } from './modules/health/health.service.js'
 import { readApiVersion } from './version.js'
 
+/** Upper bound for each dependency probe of `GET /health`. */
+const HEALTH_PROBE_TIMEOUT_MS = 2_000
+
 export interface AppDependencies {
   database: Pick<Database, 'ping' | 'close'>
   /** Defaults to a silent logger, which keeps tests quiet. */
@@ -48,9 +51,10 @@ export async function buildApp({ database, logger = pino({ level: 'silent' }) }:
   await app.register(helmet)
 
   const healthService = createHealthService({
-    probes: { database: () => database.ping() },
+    probes: { database: () => database.ping({ timeoutMs: HEALTH_PROBE_TIMEOUT_MS }) },
     version: readApiVersion(),
     logger: app.log,
+    timeoutMs: HEALTH_PROBE_TIMEOUT_MS,
   })
   await app.register(healthRoutes, { healthService })
 

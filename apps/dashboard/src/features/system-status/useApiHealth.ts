@@ -4,6 +4,8 @@ import { onScopeDispose, readonly, shallowRef } from 'vue'
 import { HttpError } from '../../lib/http'
 import { fetchHealthReport } from './health-api'
 
+const REQUEST_TIMEOUT_MS = 5_000
+
 export type HealthState =
   { kind: 'loading' } | { kind: 'ready'; report: HealthReport } | { kind: 'error'; message: string }
 
@@ -12,7 +14,10 @@ export type HealthState =
  * Starting a new check aborts the previous one, so a slow response can never
  * overwrite a newer result.
  */
-export function useApiHealth(fetchReport = fetchHealthReport) {
+export function useApiHealth(
+  fetchReport = fetchHealthReport,
+  { timeoutMs = REQUEST_TIMEOUT_MS }: { timeoutMs?: number } = {},
+) {
   const state = shallowRef<HealthState>({ kind: 'loading' })
   let controller: AbortController | undefined
 
@@ -23,7 +28,10 @@ export function useApiHealth(fetchReport = fetchHealthReport) {
     state.value = { kind: 'loading' }
 
     try {
-      const report = await fetchReport(current.signal)
+      // A hung API must not leave the card in "Checking…" forever: the timeout
+      // aborts the request and surfaces as an error (current.signal stays live).
+      const signal = AbortSignal.any([current.signal, AbortSignal.timeout(timeoutMs)])
+      const report = await fetchReport(signal)
       if (!current.signal.aborted) state.value = { kind: 'ready', report }
     } catch (error) {
       if (current.signal.aborted) return

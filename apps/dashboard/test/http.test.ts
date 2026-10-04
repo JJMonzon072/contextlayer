@@ -59,6 +59,27 @@ describe('getJson', () => {
     })
   })
 
+  it('treats a 5xx whose body is not ours as a status error, not contract drift', async () => {
+    // Fastify's own body while it is shutting down.
+    stubFetch(() =>
+      json({ error: 'Service Unavailable', message: 'Service Unavailable', statusCode: 503 }, 503),
+    )
+
+    await expect(
+      getJson('/health', healthReportSchema, { acceptedStatuses: [200, 503] }),
+    ).rejects.toMatchObject({ kind: 'status', status: 503 })
+  })
+
+  it('treats a non-JSON 5xx page from a proxy as a status error', async () => {
+    stubFetch(() =>
+      Promise.resolve(new Response('<html>Service Unavailable</html>', { status: 503 })),
+    )
+
+    await expect(
+      getJson('/health', healthReportSchema, { acceptedStatuses: [200, 503] }),
+    ).rejects.toMatchObject({ kind: 'status', status: 503 })
+  })
+
   it('wraps network failures', async () => {
     stubFetch(() => Promise.reject(new TypeError('Failed to fetch')))
 
