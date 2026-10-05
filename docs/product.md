@@ -128,7 +128,7 @@ Run events are reported by a content script inside pages ContextLayer does not c
 ## Product constraints
 
 - **Local-first**: everything runs on one machine with Docker Compose and pnpm, without cloud accounts or paid services ([ADR 0008](adr/0008-local-first-development.md)); cloud hosting is optional ([deployment](deployment.md)).
-- **Chrome only**: Manifest V3, minimum Chrome 120 today, at least 140 once extension sign-in lands ([ADR 0015](adr/0015-authentication-strategy.md), Proposed).
+- **Chrome only**: Manifest V3, minimum Chrome 120, raised only when a specific API requires it.
 - **No source changes to target applications**: a team may add a `data-contextlayer-id` attribute for sturdier targeting, but no guide may depend on it.
 - **Least privilege on sites**: access is requested per application origin at runtime, and users or policy can withhold it anytime, so "no access" is a normal player state (R-03; [Chrome Web Store help](https://support.google.com/chrome_webstore/answer/2664769)).
 - **Privacy, record only what a step needs**: no session replay, keystroke logging or page snapshots. Descriptors hold only signals about the picked element, with Proposed limits (capped strings, redacted emails and long digit runs, URL patterns instead of raw URLs). Events carry ids, positions and timestamps, never page text. A Chrome Web Store release falls under the Limited Use policy, which since 2026-08-01 requires collected data to be strictly necessary to the single purpose and prominently disclosed ([Chrome blog](https://developer.chrome.com/blog/cws-policy-updates-2026)).

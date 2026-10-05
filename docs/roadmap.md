@@ -119,7 +119,7 @@ Risks: R-04 (versioned descriptor contract), R-11 (content validated on write), 
 - [ ] Time-boxed spike, then ADR 0015 → Accepted.
 - [ ] Manifest `key` generated locally with openssl (private key never committed) for a stable extension id; `externally_connectable` pinned to the dashboard origin; the service worker checks `sender.origin` and `state`.
 - [ ] One-time code + PKCE: `POST /v1/extension/codes`, `/token`, `/revoke`; grant and token tables.
-- [ ] Access token in `chrome.storage.session`; rotating refresh token in `chrome.storage.local` restricted to trusted contexts ([needs Chrome 140](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/storage/StorageArea/setAccessLevel), so `minimum_chrome_version` rises to at least 140); reuse detection with a grace window.
+- [ ] Access token in `chrome.storage.session`; rotating refresh token in `chrome.storage.local` restricted to trusted contexts ([`setAccessLevel`](https://developer.chrome.com/docs/extensions/reference/api/storage#method-StorageArea-setAccessLevel), documented for every storage area since Chrome 102, so `minimum_chrome_version` stays at 120); reuse detection with a grace window.
 - [ ] Dashboard "Connected browsers" page with revoke; workspace selection.
 
 4b — Site access and lifecycle:
