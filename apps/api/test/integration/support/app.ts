@@ -1,4 +1,4 @@
-import type { LightMyRequestResponse } from 'fastify'
+import type { FastifyBaseLogger, LightMyRequestResponse } from 'fastify'
 
 import { buildApp } from '../../../src/app.js'
 import type { AppConfig } from '../../../src/config/env.js'
@@ -8,11 +8,14 @@ import { connectTestDatabase } from './test-database.js'
 export type TestApp = Awaited<ReturnType<typeof buildApp>>
 
 /** The real app on the test database. `app.close()` also closes its pool. */
-export function buildTestApp(options: { now?: () => Date; config?: Partial<AppConfig> } = {}) {
+export function buildTestApp(
+  options: { now?: () => Date; config?: Partial<AppConfig>; logger?: FastifyBaseLogger } = {},
+) {
   return buildApp({
     config: testConfig(options.config),
     database: connectTestDatabase(),
     ...(options.now && { now: options.now }),
+    ...(options.logger && { logger: options.logger }),
   })
 }
 

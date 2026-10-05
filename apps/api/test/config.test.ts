@@ -1,3 +1,4 @@
+import { DEVELOPMENT_EXTENSION_ID } from '@contextlayer/shared'
 import { describe, expect, it } from 'vitest'
 
 import { ConfigError, loadConfig } from '../src/config/env.js'
@@ -20,7 +21,18 @@ describe('loadConfig', () => {
         dashboardOrigins: ['http://localhost:5173', 'http://localhost:4173'],
         trustProxy: [],
       },
-      rateLimits: { windowMs: 900_000, loginMax: 10, registerMax: 20 },
+      rateLimits: {
+        windowMs: 900_000,
+        loginMax: 10,
+        registerMax: 20,
+        extensionTokenMax: 120,
+        extensionCodeMax: 30,
+      },
+      extension: {
+        id: DEVELOPMENT_EXTENSION_ID,
+        accessTokenTtlMs: 15 * 60_000,
+        grantTtlMs: 30 * 86_400_000,
+      },
     })
   })
 
@@ -29,6 +41,7 @@ describe('loadConfig', () => {
       DATABASE_URL,
       NODE_ENV: 'production',
       DASHBOARD_ORIGIN: 'https://app.example.com',
+      EXTENSION_ID: 'a'.repeat(32),
     })
 
     expect(production.session.cookieName).toBe('__Host-cl_session')
@@ -89,5 +102,25 @@ describe('loadConfig', () => {
     ]) {
       expect(() => loadConfig({ DATABASE_URL, DASHBOARD_ORIGIN: value })).toThrow(ConfigError)
     }
+  })
+
+  it('requires the extension id in production and validates its format', () => {
+    const production = {
+      DATABASE_URL,
+      NODE_ENV: 'production',
+      DASHBOARD_ORIGIN: 'https://app.example.com',
+    }
+
+    expect(() => loadConfig(production)).toThrow(/EXTENSION_ID is required in production/)
+    expect(() => loadConfig({ DATABASE_URL, EXTENSION_ID: 'not-an-id' })).toThrow(/EXTENSION_ID/)
+    expect(loadConfig({ ...production, EXTENSION_ID: 'b'.repeat(32) }).extension.id).toBe(
+      'b'.repeat(32),
+    )
+  })
+
+  it('caps extension connections at 30 days', () => {
+    expect(() => loadConfig({ DATABASE_URL, EXTENSION_GRANT_DAYS: '31' })).toThrow(
+      /EXTENSION_GRANT_DAYS/,
+    )
   })
 })
