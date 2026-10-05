@@ -6,13 +6,13 @@ Related: [ADR 0004](adr/0004-postgresql-primary-database.md) (PostgreSQL), [ADR 
 
 ## 1. Overview
 
-| Group          | Tables                                                                    | Arrives in            |
-| -------------- | ------------------------------------------------------------------------- | --------------------- |
-| Identity       | `users`, `sessions`                                                       | Implemented (Phase 2) |
-| Tenancy        | `workspaces`, `workspace_members`                                         | Implemented (Phase 2) |
-| Content        | `applications`, `guides`, `guide_steps`, `guide_versions`                 | Implemented (Phase 3) |
-| Extension auth | `extension_grants`, `extension_refresh_tokens`, `extension_access_tokens` | Planned (Phase 4)     |
-| Analytics      | `guide_runs`, `guide_events`                                              | Planned (Phase 7)     |
+| Group          | Tables                                                                                            | Arrives in            |
+| -------------- | ------------------------------------------------------------------------------------------------- | --------------------- |
+| Identity       | `users`, `sessions`                                                                               | Implemented (Phase 2) |
+| Tenancy        | `workspaces`, `workspace_members`                                                                 | Implemented (Phase 2) |
+| Content        | `applications`, `guides`, `guide_steps`, `guide_versions`                                         | Implemented (Phase 3) |
+| Extension auth | `extension_grants`, `extension_auth_codes`, `extension_refresh_tokens`, `extension_access_tokens` | Implemented (Phase 4) |
+| Analytics      | `guide_runs`, `guide_events`                                                                      | Planned (Phase 7)     |
 
 ```mermaid
 erDiagram
@@ -20,6 +20,8 @@ erDiagram
   users ||--o{ workspace_members : "is"
   workspaces ||--o{ workspace_members : "has"
   workspace_members ||--o{ extension_grants : "connects browsers"
+  workspace_members ||--o{ extension_auth_codes : "approves"
+  extension_auth_codes }o--o| extension_grants : "creates"
   extension_grants ||--o{ extension_refresh_tokens : "rotates"
   extension_grants ||--o{ extension_access_tokens : "issues"
   extension_refresh_tokens |o--o{ extension_refresh_tokens : "parent of"
@@ -177,7 +179,7 @@ create table applications (                                -- target web apps wh
     and array_to_string(origins, ',') ~ '^https?://[^/?#@,*[:space:]]+(,https?://[^/?#@,*[:space:]]+)*$'
     and array_to_string(origins, ',') = lower(array_to_string(origins, ',')))
 );
--- Planned (Phase 4): applications_origins_gin on applications using gin (origins).
+create index applications_origins_gin on applications using gin (origins);  -- 0005 (Phase 4)
 
 create table guides (
   id                uuid primary key default uuidv7(),
@@ -233,35 +235,63 @@ create table guide_versions (
 -- except setting published_by to NULL (the anonymizing ON DELETE SET NULL).
 -- Trigger guide_versions_undeletable (0003): BEFORE DELETE, rejects every delete.
 
--- Extension auth: Phase 4 (token semantics in ADR 0015)
+-- Extension auth: Phase 4, migration 0004 (token semantics in ADR 0015).
+-- Every credential is stored as its SHA-256 hash (32 bytes), never in clear.
 create table extension_grants (                            -- one per connected browser
-  id           uuid primary key default uuidv7(),
-  user_id      uuid not null,
-  workspace_id uuid not null,
-  label        text not null,
-  created_at   timestamptz not null default now(),
-  last_used_at timestamptz,
-  revoked_at   timestamptz,
-  foreign key (workspace_id, user_id) references workspace_members (workspace_id, user_id) on delete cascade
+  id             uuid primary key default uuidv7(),
+  user_id        uuid not null,
+  workspace_id   uuid not null,
+  client_id      text not null check (client_id ~ '^[a-p]{32}$'),   -- the extension id
+  label          text not null,                            -- 'Chrome on macOS'
+  created_at     timestamptz not null,
+  expires_at     timestamptz not null check (expires_at > created_at),  -- at most 30 days, never extended
+  last_used_at   timestamptz,                              -- written at most once a minute
+  revoked_at     timestamptz,
+  revoked_reason text check (revoked_reason in
+    ('disconnected', 'dashboard', 'refresh-reuse', 'code-replay', 'replaced')),
+  check ((revoked_at is null) = (revoked_reason is null)),
+  constraint extension_grants_member_fk foreign key (workspace_id, user_id)
+    references workspace_members (workspace_id, user_id) on delete cascade
 );
+create index extension_grants_user_idx on extension_grants (user_id, id desc);   -- "Connected browsers"
 create index extension_grants_member_idx on extension_grants (workspace_id, user_id);
 
-create table extension_refresh_tokens (                    -- rotation + reuse detection
+create table extension_auth_codes (                        -- one-time, 60 s, PKCE S256
+  id                    uuid primary key default uuidv7(),
+  code_hash             bytea not null unique check (octet_length(code_hash) = 32),
+  user_id               uuid not null,
+  workspace_id          uuid not null,
+  client_id             text not null check (client_id ~ '^[a-p]{32}$'),
+  code_challenge        text not null check (code_challenge ~ '^[A-Za-z0-9_-]{43}$'),
+  code_challenge_method text not null check (code_challenge_method = 'S256'),
+  label                 text not null,
+  created_at            timestamptz not null,
+  expires_at            timestamptz not null check (expires_at > created_at),
+  consumed_at           timestamptz,                       -- set once: UPDATE … WHERE consumed_at IS NULL
+  grant_id              uuid references extension_grants (id) on delete set null,  -- revoked on replay
+  constraint extension_auth_codes_member_fk foreign key (workspace_id, user_id)
+    references workspace_members (workspace_id, user_id) on delete cascade
+);
+create index extension_auth_codes_member_idx on extension_auth_codes (workspace_id, user_id);
+create index extension_auth_codes_grant_idx on extension_auth_codes (grant_id);
+
+create table extension_refresh_tokens (                    -- strict rotation + reuse detection
   id         uuid primary key default uuidv7(),
   grant_id   uuid not null references extension_grants (id) on delete cascade,
   token_hash bytea not null unique check (octet_length(token_hash) = 32),
   parent_id  uuid references extension_refresh_tokens (id) on delete set null,
-  used_at    timestamptz,                                  -- presented again after use => revoke grant
-  expires_at timestamptz not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null,
+  expires_at timestamptz not null,                         -- the grant's expiry
+  used_at    timestamptz                                   -- presented again after use => revoke grant
 );
 create index extension_refresh_tokens_grant_idx on extension_refresh_tokens (grant_id);
 create index extension_refresh_tokens_parent_idx on extension_refresh_tokens (parent_id);
 
-create table extension_access_tokens (                     -- short-lived, opaque
+create table extension_access_tokens (                     -- 15 min, opaque
   id         uuid primary key default uuidv7(),
   grant_id   uuid not null references extension_grants (id) on delete cascade,
   token_hash bytea not null unique check (octet_length(token_hash) = 32),
+  created_at timestamptz not null,
   expires_at timestamptz not null
 );
 create index extension_access_tokens_grant_idx on extension_access_tokens (grant_id);
@@ -309,7 +339,7 @@ create index guide_events_run_idx on guide_events (run_id);
 | `sessions (user_id)`                                 | "your sessions", "log out everywhere", the cascade when a user is deleted |
 | `workspace_members (user_id)`                        | "my workspaces" (the primary key covers lookups by workspace)             |
 | `applications (workspace_id, id)` unique             | per-workspace lists (cursor by id), target of the composite FK            |
-| `applications using gin (origins)`                   | Planned (Phase 4): `origins @> array[$origin]` for the extension          |
+| `applications using gin (origins)`                   | `origins @> array[$origin]`: published guides for a page (Phase 4)        |
 | `guides (workspace_id, id desc)`                     | cursor-paginated guide lists                                              |
 | `guides (workspace_id, application_id, id desc)`     | per-application lists; the composite FK check when an application goes    |
 | `guide_steps (guide_id, position)`                   | ordered steps (the index of the deferrable unique constraint)             |
@@ -318,6 +348,7 @@ create index guide_events_run_idx on guide_events (run_id);
 | `guide_events (workspace_id, occurred_at)`           | per-tenant time ranges                                                    |
 | `guide_events (client_event_id)` unique, `(run_id)`  | idempotent insert, run timeline                                           |
 | token-table `token_hash` uniques, `grant_id` indexes | token lookups, cascades                                                   |
+| `extension_grants (user_id, id desc)`                | "Connected browsers", newest first                                        |
 
 ## 6. JSON documents
 
@@ -498,17 +529,27 @@ Differences from the Phase 1 proposal (section 4 shows the result):
 - **`guide_steps.target` is nullable.** Steps are written in Phase 3, before Edit Mode can capture an element (Phase 5). A placeholder descriptor would be fabricated data that the player would try to resolve; `null` means "not captured yet" and also covers unanchored steps (question 3 below).
 - **`guides.revision` and `guide_versions.guide_revision`** answer question 7 below and make publishing idempotent ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
 - **List indexes follow the cursor:** `(workspace_id, id desc)` instead of `(workspace_id, updated_at desc, id desc)` and `(workspace_id, status)`. Lists sort by the immutable id, and status is a filter on small per-workspace sets.
-- **The GIN index on `origins`** waits for its first query (Phase 4).
+- **The GIN index on `origins`** waited for its first query: migration `0005_applications_origins_index` (Phase 4).
 - **Explicit constraint names**, because the API maps violations by name: `guides_application_fk`, `guide_versions_guide_id_version_key`.
 - **ON DELETE RESTRICT reports SQLSTATE 23001**, not 23503, so `isForeignKeyViolation` accepts both.
 
+### 8.2 The Phase 4 extension migrations
+
+**Implemented.** `0004_extension_connections.sql` (generated) creates the four extension tables above; `0005_applications_origins_index.sql` adds the GIN index. Grants and codes reference `workspace_members` with a composite key and cascade with it, so removing a member disconnects their browsers and drops their pending codes. `apps/api/test/integration/extension-constraints.test.ts` writes directly with Drizzle to prove the database refuses short hashes, non-S256 challenges, malformed client ids, a revocation time without a reason (and the reverse), unknown reasons and grants for non-members.
+
+Differences from the Phase 1 proposal (section 4 shows the result):
+
+- **`extension_auth_codes` is a table** (question 1, resolved): a 60-second code must work with several API processes; it is consumed with a conditional `UPDATE … WHERE consumed_at IS NULL RETURNING`.
+- **A workspace switch is a new grant** (question 8, resolved): the previous grant is revoked with reason `replaced`, so history and "Connected browsers" stay truthful.
+- **`client_id`, `expires_at` and `revoked_reason`** on grants: tokens are issued to one extension id, a grant ends after at most 30 days whatever the rotation, and the dashboard shows why a connection ended.
+
 ## 9. Open questions
 
-1. **Handoff codes:** `POST /v1/extension/codes` needs storage for a 60-second, single-use, hashed code bound to a PKCE challenge. Use an `extension_auth_codes` table, or memory (only works with a single API process)?
+1. ~~**Handoff codes**~~ Resolved in Phase 4: an `extension_auth_codes` table (section 8.2).
 2. **Origin ownership:** `origins text[]` cannot enforce one application per origin within a workspace. Use a service check (racy) or an `application_origins (workspace_id, origin)` table with a unique constraint?
 3. ~~**Unanchored steps**~~ Resolved in Phase 3: `target` is nullable. How the player shows a step without a target is decided in Phase 6.
 4. **Rollback:** should `guides.live_version_id` pin an older version, instead of players always reading the highest one?
 5. **Abandonment:** besides an explicit `run_abandoned`, should a job close idle runs, and after how long?
 6. **Cleanup and retention** of expired sessions and tokens and of old events: an in-process job or a CLI run by cron? The answer also decides when partitioning pays off.
 7. ~~**Concurrent draft edits**~~ Resolved in Phase 3: a revision counter (`guides.revision`); `PUT …/steps` requires `expectedRevision` and `PATCH` accepts it, 409 on mismatch.
-8. **Workspace switch in the extension:** a new grant, or a mutable `extension_grants.workspace_id`?
+8. ~~**Workspace switch in the extension**~~ Resolved in Phase 4: a new grant; the previous one is revoked (`replaced`).

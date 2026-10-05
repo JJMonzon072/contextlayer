@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-05: **Phases 1–3 are done; Phases 4–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-05: **Phases 1–4 are done; Phases 5–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -14,7 +14,7 @@ Status on 2026-10-05: **Phases 1–3 are done; Phases 4–8 are Planned.** A pha
 | 1     | Foundation                | Done    | none                                            |
 | 2     | Identity and workspaces   | Done    | 2a API + CI, 2b dashboard                       |
 | 3     | Guides API and management | Done    | 3a API, 3b dashboard                            |
-| 4     | Extension connection      | Planned | 4a auth handoff, 4b site access                 |
+| 4     | Extension connection      | Done    | 4a spike, 4b API, 4c connection, 4d site access |
 | 5     | Edit Mode (guide builder) | Planned | none                                            |
 | 6     | Guide player              | Planned | 6a playback, 6b dynamic pages, 6c shadow/frames |
 | 7     | Analytics                 | Planned | none                                            |
@@ -51,7 +51,7 @@ Verification (at commit `21fa0ae`): `pnpm typecheck` and `pnpm lint` pass in all
 
 Out of scope: accounts, guides, picker, player, analytics, tables, CI, production images.
 
-Carried forward: no CI (Phase 2); API tests use a fake database (Phase 2); `content.js` is ~89 kB (~26 kB gzip), mostly zod (Phase 5 budget); content script limited to the local dashboard origins `localhost:5173` and `localhost:4173` (customer origins in Phase 4).
+Carried forward: no CI (Phase 2); API tests use a fake database (Phase 2); `content.js` is ~89 kB (~26 kB gzip), mostly zod (Phase 5 budget); content script limited to the local dashboard origins `localhost:5173` and `localhost:4173` (replaced by per-site registration in Phase 4).
 
 Risks addressed (mitigation started): every risk whose [register](technical-risks.md#register) row lists 1 (baseline): R-01, R-02, R-03, R-05, R-09, R-10, R-11, R-12, R-13, R-14, R-15, R-16, R-17, R-18, R-19.
 
@@ -126,7 +126,7 @@ Changed from the plan:
 - **`guides.revision` and `guide_versions.guide_revision`** were added. They drive "unpublished changes", optimistic concurrency (`expectedRevision`, 409) and idempotent publishing ([data model](data-model.md) open question 7, resolved).
 - **Lists are ordered by UUIDv7 id (newest first)**, not by `updated_at`: an immutable key cannot skip or repeat rows while guides are edited during paging.
 - **Guide routes are flat:** `/v1/workspaces/:workspaceId/guides?applicationId=…`, as in [API](api.md).
-- **Not yet built:** the GIN index on `applications.origins` arrives with the extension's origin lookup (Phase 4).
+- **Not yet built:** the GIN index on `applications.origins` arrived with the extension's origin lookup (Phase 4, migration `0005`).
 - **Editors can publish:** answers [product](product.md) open question 7 for now.
 - **Rich text is edited as plain text:** blank lines make paragraphs, `- ` lines make lists. Formatting the editor cannot express is kept and shown read-only.
 
@@ -146,34 +146,56 @@ Risks addressed: R-04 (versioned descriptor contract), R-11 (content validated o
 
 ## Phase 4 — Extension connection
 
-**Planned (Phase 4).** Depends on Phases 2 and 3. Goal: the extension holds its own revocable tokens for one workspace and runs only on application origins the user granted.
+**Done (Implemented, Phase 4).** Goal: the extension holds its own revocable tokens for one workspace and runs only on application origins the user turned on and Chrome granted.
 
-4a — Auth handoff:
+4a — Spike:
 
-- [ ] Time-boxed spike, then ADR 0015 → Accepted.
-- [ ] Manifest `key` generated locally with openssl (private key never committed) for a stable extension id; `externally_connectable` pinned to the dashboard origin; the service worker checks `sender.origin` and `state`.
-- [ ] One-time code + PKCE: `POST /v1/extension/codes`, `/token`, `/revoke`; grant and token tables.
-- [ ] Access token in `chrome.storage.session`; rotating refresh token in `chrome.storage.local` restricted to trusted contexts ([`setAccessLevel`](https://developer.chrome.com/docs/extensions/reference/api/storage#method-StorageArea-setAccessLevel), documented for every storage area since Chrome 102, so `minimum_chrome_version` stays at 120); reuse detection with a grace window.
-- [ ] Dashboard "Connected browsers" page with revoke; workspace selection.
+- [x] Throwaway extension in Playwright's Chromium 153.0.8010.12: worker request headers, `externally_connectable` senders, storage access levels and their persistence, worker termination mid-request, match patterns, the permission prompt under automation, `chrome://extensions` toggles, dynamic scripts across reloads and restarts. Results in [ADR 0015](adr/0015-authentication-strategy.md) (now Accepted) and [ADR 0017](adr/0017-per-application-site-access.md). Chrome 120 (`minimum_chrome_version`) was not tested.
 
-4b — Site access and lifecycle:
+4b — API:
 
-- [ ] `optional_host_permissions` requested in a user gesture; `chrome.scripting.registerContentScripts` driven by the service worker's `permissions.onAdded`, because [the popup can close when Chrome shows the prompt](https://issues.chromium.org/issues/40721470).
-- [ ] On install and update: re-register dynamic scripts ([an update wipes them](https://github.com/chromium/chromium/blob/main/extensions/browser/user_script_manager.cc)) and inject into open tabs; orphaned scripts remove their UI.
-- [ ] [Withheld access to the API origin removes the service worker's CORS bypass](https://github.com/chromium/chromium/blob/main/extensions/common/cors_util.cc): CORS allow-list for the pinned extension origin or a re-request (Proposed).
-- [ ] `GET /v1/extension/guides?url=`.
+- [x] Migrations `0004_extension_connections` (grants, one-time codes, refresh and access tokens: SHA-256 hashes only, S256 only, `client_id` shape, revocation pairs; codes and grants cascade with the membership) and `0005_applications_origins_index` (GIN on `applications.origins`).
+- [x] `extension` module: `POST codes` and `GET`/`DELETE connections` (dashboard cookie + CSRF guard), `POST token` (code + PKCE verifier, or refresh token; exempt from the CSRF guard), `POST revoke`, `GET session`, `GET applications`, `GET guides?origin=` and `GET guides/:id` (bearer only). Per-IP rate limits on codes and tokens. The route table is in [ADR 0015](adr/0015-authentication-strategy.md).
+- [x] Strict refresh rotation with reuse detection and no grace window; a reused refresh token or a replayed code revokes the grant, and the revocation commits although the request fails. Grants last at most 30 days; rotation never extends them.
+- [x] Discovery: the workspace comes from the grant; only the latest published version of non-archived guides, read from the immutable snapshot; members may read; two workspaces registering the same origin never see each other's guides.
 
-Out of scope: Edit Mode, playback, `launchWebAuthFlow`, other browsers.
+4c — Connection:
 
-Exit criteria:
+- [x] Stable extension id from a committed development public key; production builds pass `EXTENSION_PUBLIC_KEY` and `EXTENSION_ID` (checked against each other).
+- [x] Service worker: PKCE attempt in `storage.session` before the dashboard opens; the handoff is accepted only from the top frame of the dashboard tab it opened, on the exact dashboard origin, with the matching `state`, once; single-flight refresh, one retry, no loops; network errors keep the credentials; late refresh answers are dropped; refresh token in `storage.local` only after `setAccessLevel(TRUSTED_CONTEXTS)`.
+- [x] Dashboard `/extension/connect` (login keeps the link, explicit workspace choice, confirmation, success only after the extension confirms) and "Connected browsers" (list, revoke with confirmation, revocation reasons).
+- [x] Popup: disconnected, connecting, connected, API unreachable, API access withheld, connection ended; connect, switch workspace, cancel, disconnect (reports when the server could not confirm).
 
-- Playwright: connect from the dashboard → popup shows the workspace; revoke → next API call gets 401 and the popup shows "disconnected".
-- API tests: codes are single-use and expire; a wrong PKCE verifier fails; refresh reuse outside the grace window revokes the grant.
-- Service worker stopped [through CDP](https://developer.chrome.com/docs/extensions/how-to/test/test-serviceworker-termination-with-puppeteer) (`Target.closeTarget` on the worker target, as in the linked guide; `ServiceWorker.stopAllWorkers` also works) → still signed in.
-- A content script on a granted origin cannot read `chrome.storage.local`.
-- Granting an origin injects into an already-open tab; reloading the extension leaves no orphaned UI.
+4d — Site access ([ADR 0017](adr/0017-per-application-site-access.md)):
 
-Risks: R-01, R-02, R-03, R-12, R-13, R-14. ADRs: 0015 (above); revisit [ADR 0007](adr/0007-chrome-manifest-v3-extension.md) and [ADR 0012](adr/0012-service-worker-api-gateway.md) (`sender.origin`, `sender.tab`, frame checks); new ADR: per-application site access.
+- [x] `optional_host_permissions` requested from the popup click for the exact origin, only for registered applications; no static content scripts any more.
+- [x] Popup site card: unsupported page, not registered, available, Chrome access removed, active with published guides (no play button).
+- [x] Idempotent reconciliation of dynamic content scripts with deterministic ids, injection into open tabs, `page.deactivate` teardown, re-registration on install, update and browser start; no polling.
+- [x] Content script inert until the worker accepts `page.hello` from Chrome's sender fields; one copy per world; orphans stop themselves.
+
+Changed from the plan:
+
+- **No grace window on refresh-token reuse.** Strict detection instead; a refresh answer lost after the server rotated ends the connection and the user connects again ([ADR 0015](adr/0015-authentication-strategy.md)).
+- **One dashboard origin per build** in `externally_connectable` (`EXTENSION_DASHBOARD_URL`); the e2e build points at the preview server instead of listing `:4173` in every development build.
+- **A committed development key** instead of one generated per developer: every clone and CI run gets the same id, and no private key is needed.
+- **`GET /v1/extension/guides?origin=`** (exact origin) instead of `?url=`: matching a guide's start path against the page URL belongs to the player (Phase 6).
+- **Withheld API access is detected and explained** in the popup; the CORS fallback for the extension origin stays Proposed.
+- **End-to-end tests run on their own database** (`contextlayer_e2e`, created, migrated and emptied by `apps/api/scripts/e2e-server.ts`, API on :3100) with every server started by Playwright and no traces (they would record credentials). The extension suite uses an e2e build that pre-grants one stand-in customer site, because Chrome's permission prompt cannot be answered under automation; the prompt is a manual check ([ADR 0017](adr/0017-per-application-site-access.md)).
+
+Verification (at commit `19ca0a6`):
+
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint` and `pnpm build` pass.
+- `pnpm test` runs 501 tests in 53 files:
+  - 73 shared contract tests;
+  - 178 API integration tests on PostgreSQL 18, including code expiry and replay, PKCE mismatch, strict rotation with racing refreshes, revocation reasons, per-route authentication (a bearer never falls back to a cookie, a cookie route refuses any `Authorization`), and published guides isolated between two workspaces that register the same origin;
+  - 84 extension tests (handoff sender matrix, connection manager, refresh, site access with a fake Chrome) and 108 dashboard tests.
+- `pnpm test:e2e` passes dashboard 12/12 and extension 22/22 in Playwright's Chromium 153.0.8010.12, on the dedicated `contextlayer_e2e` database; the extension suite also passed `--repeat-each=3` (66/66). axe: 0 violations on the popup and the connect page.
+- Migrations `0000`–`0005` apply to an empty database (throwaway, dropped afterwards) and `drizzle-kit check` is clean.
+- Manual check of Chrome's own permission prompt: documented in [ADR 0017](adr/0017-per-application-site-access.md), not run by the suites.
+
+Out of scope: Edit Mode (Phase 5), playback (Phase 6), `launchWebAuthFlow`, other browsers, "log out everywhere".
+
+Risks addressed: R-01 (state in storage, worker restarts tested), R-02 (open tabs and orphans), R-03 (per-origin optional grants, withheld access), R-12 (bearer tokens, fixed endpoints, no proxy), R-13 (handoff, storage, rotation). ADRs: [ADR 0015](adr/0015-authentication-strategy.md) Accepted; new [ADR 0017](adr/0017-per-application-site-access.md); [ADR 0007](adr/0007-chrome-manifest-v3-extension.md) and [ADR 0012](adr/0012-service-worker-api-gateway.md) updated.
 
 ## Phase 5 — Edit Mode (guide builder)
 

@@ -4,7 +4,7 @@ ContextLayer is a Digital Adoption Platform. A Chrome extension lets an organiza
 
 The goal is to cut training and onboarding time for business software by teaching people in context instead of in slide decks.
 
-> **Status: Phase 3 (Applications, guides and publishing) is complete.** In the dashboard, a team registers the web applications it uses, writes step-by-step guides for them, and publishes immutable versions while the draft keeps evolving. Accounts, sessions, workspaces and roles arrived in Phase 2. Connecting the extension, picking elements in Edit Mode, the in-page player and analytics are planned in [docs/roadmap.md](docs/roadmap.md).
+> **Status: Phase 4 (Extension connection and site access) is complete.** The extension connects to one workspace through the dashboard (one-time code + PKCE, its own revocable tokens), and runs on a customer application only after the user turns that site on and Chrome grants it; the popup lists the site's published guides. Applications, guides and immutable published versions arrived in Phase 3; accounts, sessions, workspaces and roles in Phase 2. Picking elements in Edit Mode, the in-page player and analytics are planned in [docs/roadmap.md](docs/roadmap.md).
 
 ## How it fits together
 
@@ -28,7 +28,7 @@ flowchart LR
   API --> DB
 ```
 
-Within the extension, only the service worker talks to the API; content scripts run inside third-party pages and never hold credentials (the dashboard reaches the API through its own origin under `/api`). See [docs/architecture.md](docs/architecture.md) for the full picture.
+Within the extension, only the service worker talks to the API and holds the extension's tokens; content scripts run inside third-party pages, only on sites the user turned on, and never hold credentials (the dashboard reaches the API through its own origin under `/api`). See [docs/architecture.md](docs/architecture.md) for the full picture.
 
 ## Repository layout
 
@@ -92,10 +92,15 @@ Then:
 1. Run `pnpm dev` (or `pnpm build`) so `apps/extension/dist` exists.
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the `apps/extension/dist` folder.
-4. Pin ContextLayer and open its popup: the **API** badge should read **Operational**.
-5. Open the dashboard at http://localhost:5173 (reload the tab if it was already open before you loaded the extension), open the popup and click **Check this page**: a toast confirms that ContextLayer is active on the page.
+4. Pin ContextLayer and open its popup: the **API** badge should read **Operational**. Every clone builds the same extension id (`ebdclkadgcmjipockfofmlakcfijojko`, from a committed development key), which the dashboard and the API expect.
 
-After changing extension code, click the reload icon on the extension card and reload the target page (content scripts are not re-injected into open tabs). Until Phase 4 the content script only runs on the local dashboard (`http://localhost:5173` and the preview server on `:4173`): content-script match patterns grant host access, so they are kept as narrow as the API permission. Customer applications are enabled at runtime in Phase 4.
+### Connect it to a workspace and turn on a site
+
+1. In the popup, click **Connect to ContextLayer**. A dashboard tab opens: sign in if asked, choose a workspace, review what the extension will be able to read, and click **Connect**. The popup then shows your name and the workspace. **Connected browsers** in the dashboard lists the connection and can revoke it; **Switch workspace** in the popup runs the same flow again and revokes the previous connection.
+2. Register the web application you want guides on (dashboard → **Applications**, with its exact origin, for example `http://localhost:8080`) and publish a guide for it.
+3. Open that application, open the popup and click **Turn on for this site**. Chrome asks to allow access to that one site; after **Allow**, the popup lists the site's published guides (playing them arrives in Phase 6). **Turn off for this site** stops ContextLayer there and gives the access back.
+
+ContextLayer only runs on sites that are registered in the connected workspace, turned on in this browser and granted by Chrome; there are no install-time grants besides the API. After changing extension code, click the reload icon on the extension card (Developer mode must stay on, or Chrome disables an unpacked extension on reload); enabled sites are re-injected into open tabs automatically.
 
 ## Scripts
 
@@ -114,20 +119,21 @@ After changing extension code, click the reload icon on the extension card and r
 
 ## Testing
 
-- **Unit and component tests** (Vitest): contracts, configuration, password hashing and session tokens, the CSRF guard, the dashboard HTTP client, session store, route guards, forms and workspace switcher, extension message routing and manifest policy. They need no running services.
+- **Unit and component tests** (Vitest): contracts, configuration, password hashing and session tokens, the CSRF guard, the dashboard HTTP client, session store, route guards, forms and workspace switcher, the extension connect page; in the extension, message routing and the sender matrix, the PKCE handoff checks, token refresh (single flight, no loops, late answers), storage placement, site access with a fake Chrome, and manifest policy. They need no running services.
 - **API integration tests** (Vitest, `apps/api/test/integration`) run the real API against PostgreSQL:
   - Registration, login, logout, idle and absolute session expiry, revocation, CSRF and rate limits.
   - The workspace role rules; applications, guides and ordered steps, including a forced failure halfway through a step replacement that must leave the previous order intact.
   - Publishing, including racing publishes that must create exactly one version.
+  - Extension connections: one-time codes (expiry, single use, replay), PKCE, refresh rotation and reuse detection, revocation, per-route authentication, and published guides by origin with tenant isolation.
   - The database constraints, and tenant-isolation matrices over every route. They use a separate database, `TEST_DATABASE_URL` (default `contextlayer_test`), which they create, migrate and truncate between tests; they refuse to run against a database whose name does not end in `_test`. Run them alone with `pnpm --filter @contextlayer/api test:integration`.
-- **End-to-end tests** (Playwright) run against the built artifacts:
+- **End-to-end tests** (Playwright) run against the built artifacts, on their own database: `apps/api/scripts/e2e-server.ts` starts the built API on port 3100 against `E2E_DATABASE_URL` (default `contextlayer_e2e`), which it creates, migrates and empties on every run, and refuses any database whose name does not end in `_e2e`. Playwright starts every server itself (API, dashboard preview on 4173, stand-in customer sites on 4179/4180) and never reuses a running `pnpm dev`. No traces are recorded, because they would contain cookies and tokens.
   - Dashboard:
     - Authentication: register, create the first workspace, sign out, sign back in and find the workspace again; wrong credentials; form validation.
     - Guide authoring: register an application (an invalid origin is explained), write a guide with three steps, publish version 1, edit, publish version 2, and check that version 1 did not change. Another account gets 404 for the same guide.
     - The system status page: real API, a simulated 503, an unreachable API.
+    - The extension connect page without the extension installed.
     - An axe audit of every screen.
-    - Each run registers new `e2e-…@example.test` accounts in the development database.
-  - Extension: loads the unpacked build in Chromium and checks the service worker, the popup ↔ service worker ↔ API path, the closed Shadow DOM root of the injected UI, and a content script ↔ service worker ↔ API round trip.
+  - Extension: loads an e2e build (`dist-e2e`, pointing at the e2e servers) in Chromium and checks the stable id; the full connection through the real dashboard (login, workspace choice, approval); refused handoffs from other tabs, subframes, customer sites and with guessed or replayed state; worker restart, extension reload and browser restart; refresh rotation; a lost refresh answer ending the connection; disconnect, revocation from the dashboard and workspace switch; turning a site on from the real toolbar popup, injection into open tabs (top frames only, no duplicates), teardown when access ends, withdrawal through `chrome://extensions`, orphaned scripts after a reload; and that a content script can neither run privileged commands nor read `chrome.storage`. The e2e build pre-grants one stand-in site because Chrome's permission prompt cannot be answered under automation; the prompt itself is a manual check ([ADR 0017](docs/adr/0017-per-application-site-access.md)).
 - **CI**: [GitHub Actions](.github/workflows/ci.yml) runs all of the above (format, typecheck, lint, migrations, unit + integration tests, build, e2e) on every pull request and on pushes to `main`, with PostgreSQL as a service container. It needs no secrets.
 
 ## Configuration
@@ -143,6 +149,16 @@ Authentication settings (all optional in development):
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS`, `LOGIN_RATE_LIMIT_MAX`, `REGISTER_RATE_LIMIT_MAX` | Login attempts per IP + email and registrations per IP, per window                             |
 | `TRUST_PROXY`                                                                       | Reverse proxies whose `X-Forwarded-For` is trusted, so rate limits see the real client address |
 | `TEST_DATABASE_URL`                                                                 | Database used by the integration tests (its name must end in `_test`)                          |
+| `E2E_DATABASE_URL`                                                                  | Database used by the Playwright suites (its name must end in `_e2e`; read from the shell)      |
+
+Extension settings:
+
+| Variable                                                          | Purpose                                                                                                                                  |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `EXTENSION_API_BASE_URL`, `EXTENSION_DASHBOARD_URL`               | Origins baked into the extension build (https outside localhost)                                                                         |
+| `EXTENSION_PUBLIC_KEY`, `EXTENSION_ID`                            | Production key and id (checked against each other). The dashboard and the API read `EXTENSION_ID`; **required by the API in production** |
+| `EXTENSION_ACCESS_TOKEN_MINUTES`, `EXTENSION_GRANT_DAYS`          | Access-token lifetime (15 min, at most 60) and connection lifetime (30 days, at most 30)                                                 |
+| `EXTENSION_CODE_RATE_LIMIT_MAX`, `EXTENSION_TOKEN_RATE_LIMIT_MAX` | Connection codes and token requests per IP, per window                                                                                   |
 
 The session cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. It is named `__Host-cl_session` in production and `cl_session` in development, because the `__Host-` prefix is not reliable on `http://localhost`.
 
@@ -151,7 +167,7 @@ The session cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. It i
 - [Product](docs/product.md): problem, users, MVP scope and non-goals.
 - [Architecture](docs/architecture.md): components, module boundaries, communication flows, security model.
 - [Technical risks](docs/technical-risks.md): Manifest V3, DOM targeting, isolation, security, and their mitigations.
-- [Data model](docs/data-model.md): PostgreSQL schema (identity and content tables implemented, the rest planned).
+- [Data model](docs/data-model.md): PostgreSQL schema (identity, content and extension tables implemented, analytics planned).
 - [API](docs/api.md): module boundaries, conventions, implemented and planned endpoints.
 - [Deployment](docs/deployment.md): local setup today, provider-agnostic production options later.
 - [Roadmap](docs/roadmap.md): delivery phases and exit criteria.
@@ -164,7 +180,9 @@ The session cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. It i
 - **Dashboard shows "Unreachable"**: the API is not running. Start it with `pnpm dev` and check http://localhost:3000/health/live.
 - **Dashboard shows "Degraded"**: the API is up but PostgreSQL is not. Run `docker compose up -d` and check `docker compose ps`.
 - **Extension changes are not visible**: reload the extension in `chrome://extensions`, then reload the page.
-- **E2E tests fail before running**: run `pnpm test:e2e:install` once, and make sure PostgreSQL is up and migrated (`pnpm db:migrate`).
+- **E2E tests fail before running**: run `pnpm test:e2e:install` once and make sure PostgreSQL is up. The suites need ports 3100, 4173, 4179 and 4180 free (stop a running `vite preview`).
+- **The popup says the connection expired or was revoked**: it was revoked in **Connected browsers**, reached its 30-day end, or a refresh answer was lost after the server rotated the token (by design, see [ADR 0015](docs/adr/0015-authentication-strategy.md)). Click **Connect to ContextLayer** again.
+- **"Chrome is blocking ContextLayer's access to its server"**: site access was turned off in `chrome://extensions` → ContextLayer → Site access. Turn it back on.
 - **`relation "users" does not exist`**: the development database has not been migrated. Run `pnpm db:migrate`.
 - **"Too many attempts" when signing in or registering locally**: the auth rate limits are in memory, so restarting the API resets them. Raise `LOGIN_RATE_LIMIT_MAX` or `REGISTER_RATE_LIMIT_MAX` in `.env` if you hit them often while developing.
 
