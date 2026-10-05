@@ -27,7 +27,7 @@ These costs are accepted deliberately: enterprise policy can force-install the e
 
 ## Users and personas
 
-Phase 1 has no real users; these personas are hypotheses, not research results. Roles are the Phase 2 workspace roles; the permission matrix is an open question.
+There are no real users yet; these personas are hypotheses, not research results. Roles are the Phase 2 workspace roles. Phase 3 permissions: any member reads applications, `admin` and above manage them, `editor` and above write and publish guides.
 
 | Persona                        | Proposed role       | Goals                                                                                       | Surfaces                         |
 | ------------------------------ | ------------------- | ------------------------------------------------------------------------------------------- | -------------------------------- |
@@ -39,13 +39,13 @@ Phase 1 has no real users; these personas are hypotheses, not research results. 
 
 | Term              | Meaning                                                                                                                                                           | Status                                                        |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Workspace         | Tenant boundary; every tenant-owned row carries `workspace_id`.                                                                                                   | Planned (Phase 2)                                             |
-| Member            | A user in a workspace with one role: `owner`, `admin`, `editor` or `member`.                                                                                      | Planned (Phase 2)                                             |
-| Application       | A target web app, identified by its origins (e.g. `https://crm.example.com`); determines where the extension requests access.                                     | Planned (Phase 3)                                             |
-| Guide             | Ordered steps for one application; `draft`, `published` or `archived`; a start URL pattern.                                                                       | Planned (Phase 3)                                             |
-| Step              | Position, title, body (restricted rich text, never HTML), target descriptor, optional URL pattern, placement.                                                     | Planned (Phase 3)                                             |
+| Workspace         | Tenant boundary; every tenant-owned row carries `workspace_id`.                                                                                                   | Implemented (Phase 2)                                         |
+| Member            | A user in a workspace with one role: `owner`, `admin`, `editor` or `member`.                                                                                      | Implemented (Phase 2)                                         |
+| Application       | A target web app, identified by its origins (e.g. `https://crm.example.com`); determines where the extension requests access.                                     | Implemented (Phase 3)                                         |
+| Guide             | Ordered steps for one application; `draft`, `published` or `archived`; a start URL pattern.                                                                       | Implemented (Phase 3)                                         |
+| Step              | Position, title, body (restricted rich text, never HTML), target descriptor (captured in Phase 5), optional URL pattern, placement.                               | Implemented (Phase 3)                                         |
 | Target descriptor | Versioned JSON of signals captured at pick time (test attributes, role and accessible name, text, CSS path, ancestors, URL pattern), used to re-find the element. | Proposed ([ADR 0014](adr/0014-element-targeting-strategy.md)) |
-| Guide version     | Immutable snapshot of a guide and its steps, frozen at publish; learners see only versions, never drafts.                                                         | Planned (Phase 3)                                             |
+| Guide version     | Immutable snapshot of a guide and its steps, frozen at publish; learners see only versions, never drafts.                                                         | Implemented (Phase 3)                                         |
 | Run               | One learner's attempt at one guide version: `in_progress`, `completed` or `abandoned`.                                                                            | Planned (Phase 7)                                             |
 | Event             | Append-only run record (`run_started`, `step_viewed`, `step_completed`, `target_not_found`, `run_completed`, `run_abandoned`), deduplicated by a client id.       | Planned (Phase 7)                                             |
 | Edit Mode         | Authoring state: picking elements on the page, typing in the side panel (unobservable by the host page).                                                          | Planned (Phase 5)                                             |
@@ -92,7 +92,7 @@ Precondition: the application is registered (Phase 3); the author's extension is
 | ---------------------------------------------------------------------------------------------- | --------------------- |
 | Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1) |
 | Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2) |
-| Applications; guide CRUD with ordered steps; publish to versions                               | Planned (Phase 3)     |
+| Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3) |
 | Extension connected to a workspace; per-application site access                                | Planned (Phase 4)     |
 | Edit Mode: element picking, target capture, instructions, save                                 | Planned (Phase 5)     |
 | Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Planned (Phase 6)     |
@@ -142,7 +142,7 @@ Run events are reported by a content script inside pages ContextLayer does not c
 4. **Default for a missing target**: unanchored, skip or end (ADR 0014 allows a per-step policy).
 5. **Advance on action?** Advancing when the learner uses the target mirrors real work; a Next button is simpler.
 6. **Multi-page guides**: run state across full page loads, in the first player release or later?
-7. **Role permissions**: can `editor` publish? Can `member` see aggregates?
+7. **Role permissions**: can `member` see aggregates? (Phase 3 lets `editor` and above publish; it can be narrowed to `admin` later.)
 8. **Republish mid-run**: the run keeps its version; tell the learner?
 9. **Localization** of guide text and of text-based targeting signals.
 10. **Distribution and retention**: enterprise force-install or Web Store listing; how long events are kept.

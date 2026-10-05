@@ -1,6 +1,6 @@
 # Data model
 
-> **Status.** **Implemented (Phase 2):** `users`, `sessions`, `workspaces` and `workspace_members`, created by `apps/api/drizzle/0000_identity.sql` ([section 8](#8-the-phase-2-first-migration)). Their Drizzle tables live with their modules (`apps/api/src/modules/auth/auth.schema.ts`, `modules/workspaces/workspaces.schema.ts`) and are re-exported from `apps/api/src/infrastructure/database/schema.ts`. **Proposed:** every other table; each arrives with the phase that needs it. **Implemented (Phase 1):** the Drizzle client with `casing: 'snake_case'`, `apps/api/drizzle.config.ts` and the `pnpm db:generate` / `pnpm db:migrate` scripts, verified against PostgreSQL 18.6.
+> **Status.** **Implemented (Phase 2):** `users`, `sessions`, `workspaces` and `workspace_members`, created by `apps/api/drizzle/0000_identity.sql` ([section 8](#8-the-phase-2-first-migration)). **Implemented (Phase 3):** `applications`, `guides`, `guide_steps` and `guide_versions`, created by `0001_content.sql` and `0002_content_constraints.sql` ([section 8.1](#81-the-phase-3-content-migrations)). Their Drizzle tables live with their modules (`apps/api/src/modules/<module>/<module>.schema.ts`) and are re-exported from `apps/api/src/infrastructure/database/schema.ts`. **Proposed:** every other table; each arrives with the phase that needs it. **Implemented (Phase 1):** the Drizzle client with `casing: 'snake_case'`, `apps/api/drizzle.config.ts` and the `pnpm db:generate` / `pnpm db:migrate` scripts, verified against PostgreSQL 18.6.
 
 Related: [ADR 0004](adr/0004-postgresql-primary-database.md) (PostgreSQL), [ADR 0005](adr/0005-drizzle-orm.md) (Drizzle), [ADR 0014](adr/0014-element-targeting-strategy.md) (target descriptors), [ADR 0015](adr/0015-authentication-strategy.md) (authentication), [API](api.md), [technical risks](technical-risks.md), [roadmap](roadmap.md).
 
@@ -10,7 +10,7 @@ Related: [ADR 0004](adr/0004-postgresql-primary-database.md) (PostgreSQL), [ADR 
 | -------------- | ------------------------------------------------------------------------- | --------------------- |
 | Identity       | `users`, `sessions`                                                       | Implemented (Phase 2) |
 | Tenancy        | `workspaces`, `workspace_members`                                         | Implemented (Phase 2) |
-| Content        | `applications`, `guides`, `guide_steps`, `guide_versions`                 | Planned (Phase 3)     |
+| Content        | `applications`, `guides`, `guide_steps`, `guide_versions`                 | Implemented (Phase 3) |
 | Extension auth | `extension_grants`, `extension_refresh_tokens`, `extension_access_tokens` | Planned (Phase 4)     |
 | Analytics      | `guide_runs`, `guide_events`                                              | Planned (Phase 7)     |
 
@@ -42,7 +42,9 @@ Not drawn: the denormalized `workspace_id` on `guides`, `guide_runs` and `guide_
 - **Limits:** string lengths and array sizes live in the zod contracts in `packages/shared`. The database enforces only the invariants that would corrupt meaning: enumerations, status/timestamp pairs, positions, hash sizes.
 - **Foreign keys:** PostgreSQL [does not index referencing columns](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-FK), so every FK column used in joins or tenant and content delete checks gets an explicit index. Accepted exception: the actor columns `guides.created_by`, `guide_versions.published_by` and `guide_runs.user_id` are not indexed, because deleting a user is rare and may scan them. `sessions` gets a full `sessions (user_id)` index, because a partial index cannot serve the cascade.
 
-## 3. Design decisions (Proposed)
+## 3. Design decisions
+
+Sections 3.1–3.6, 3.8 (application-level isolation) and 3.10 are implemented; 3.7 and row-level security are still Proposed.
 
 ### 3.1 UUIDv7 primary keys
 
@@ -77,7 +79,7 @@ Decision: `email text` plus `unique index users_email_lower_key on users (lower(
 
 ### 3.6 Mutable drafts, immutable published snapshots
 
-Authors edit `guides` and `guide_steps`. Publishing copies the guide and its ordered steps into `guide_versions.snapshot` (`version = max + 1`) in one transaction. Players read only the latest snapshot of a `published` guide, and runs reference `guide_version_id`. Half-finished edits therefore never reach end users, and an event's `step_position` keeps its meaning.
+Implemented in Phase 3 and recorded in [ADR 0016](adr/0016-immutable-published-guide-versions.md). Authors edit `guides` and `guide_steps`. Publishing copies the guide and its ordered steps into `guide_versions.snapshot` (`version = max + 1`) in one transaction, under a `FOR UPDATE` lock on the guide row that every draft change also takes. Triggers reject every DELETE of a version and every UPDATE other than setting `published_by` to `NULL` (what `ON DELETE SET NULL` does when the publisher's account is deleted; a manual update that only clears `published_by` is accepted too). The snapshot, version number, draft revision and publication date never change. `guides.revision` counts draft changes and each version stores the revision it froze (`guide_revision`): that tells whether the draft has unpublished changes, lets the API refuse stale writes (`expectedRevision`), and makes publishing an unchanged draft return the existing version. Players read only the latest snapshot of a `published` guide, and runs reference `guide_version_id`. Half-finished edits therefore never reach end users, and an event's `step_position` keeps its meaning.
 
 - **Rejected:** playing live rows (draft edits leak, analytics drift); copy-on-write versioned step rows (every query needs a version filter); event sourcing (too much machinery for an MVP).
 - **Trade-offs:** duplication (about 100 KB per version for 20 steps); the snapshot needs its own `version`; ids inside JSON are not FK-checked.
@@ -107,7 +109,7 @@ Tables queried by tenant carry `workspace_id`. Child tables reached only through
 
 ### 3.10 Deferrable unique positions
 
-`unique (guide_id, position) deferrable initially deferred`. A non-deferrable unique constraint is [checked row by row](https://www.postgresql.org/docs/current/sql-createtable.html), so `set position = position + 1` can collide midway through the update. `INITIALLY IMMEDIATE` would defer only to the end of each statement. `PUT …/steps` runs several statements in one transaction (update kept steps, insert new ones, delete removed ones), so the check has to wait for commit.
+Implemented in Phase 3 (`0002_content_constraints.sql`). `unique (guide_id, position) deferrable initially deferred`. A non-deferrable unique constraint is [checked row by row](https://www.postgresql.org/docs/current/sql-createtable.html), so `set position = position + 1` can collide midway through the update. `INITIALLY IMMEDIATE` would defer only to the end of each statement. `PUT …/steps` runs several statements in one transaction (update kept steps, insert new ones, delete removed ones), so the check has to wait for commit.
 
 - **Rejected:** negative-position two-pass updates (obscure); fractional rank keys (keys grow and need rebalancing); delete-and-reinsert (step ids change).
 - **Caveats:** a deferrable unique constraint cannot be an `ON CONFLICT` arbiter or an FK target, and neither is needed here. Drizzle 0.45's `unique()` builder cannot express `DEFERRABLE` (it only has `nullsNotDistinct()`), so this constraint lives in a custom migration (section 7).
@@ -160,17 +162,22 @@ create table workspace_members (
 );
 create index workspace_members_user_idx on workspace_members (user_id);
 
--- Content: Phase 3
+-- Content: Implemented (Phase 3). 0001_content.sql + 0002_content_constraints.sql.
 create table applications (                                -- target web apps where guides run
   id           uuid primary key default uuidv7(),
   workspace_id uuid not null references workspaces (id) on delete restrict,
   name         text not null,
-  origins      text[] not null check (cardinality(origins) between 1 and 20), -- 'https://crm.example.com'
+  origins      text[] not null,                            -- normalized: 'https://crm.example.com'
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
-  unique (workspace_id, id)
+  constraint applications_workspace_id_id_key unique (workspace_id, id),
+  constraint applications_origins_check check (
+    cardinality(origins) between 1 and 20
+    and array_position(origins, null) is null
+    and array_to_string(origins, ',') ~ '^https?://[^/?#@,*[:space:]]+(,https?://[^/?#@,*[:space:]]+)*$'
+    and array_to_string(origins, ',') = lower(array_to_string(origins, ',')))
 );
-create index applications_origins_gin on applications using gin (origins);
+-- Planned (Phase 4): applications_origins_gin on applications using gin (origins).
 
 create table guides (
   id                uuid primary key default uuidv7(),
@@ -178,26 +185,32 @@ create table guides (
   application_id    uuid not null,
   title             text not null,
   description       text not null default '',
-  status            text not null default 'draft' check (status in ('draft', 'published', 'archived')),
+  status            text not null default 'draft'
+                    constraint guides_status_check check (status in ('draft', 'published', 'archived')),
   start_url_pattern jsonb,                                 -- URLPatternInit; null = any page of the app
+  revision          integer not null default 1,            -- +1 on every draft change (ADR 0016)
   created_by        uuid references users (id) on delete set null,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   archived_at       timestamptz,
-  check ((status = 'archived') = (archived_at is not null)),
-  foreign key (workspace_id, application_id) references applications (workspace_id, id) on delete restrict
+  constraint guides_archived_check check ((status = 'archived') = (archived_at is not null)),
+  constraint guides_revision_check check (revision >= 1),
+  constraint guides_start_url_pattern_check
+    check (start_url_pattern is null or jsonb_typeof(start_url_pattern) = 'object'),
+  constraint guides_application_fk foreign key (workspace_id, application_id)
+    references applications (workspace_id, id) on delete restrict
 );
-create index guides_workspace_status_idx on guides (workspace_id, status);
-create index guides_workspace_updated_idx on guides (workspace_id, updated_at desc, id desc);
-create index guides_application_idx on guides (application_id);
+create index guides_workspace_list_idx on guides (workspace_id, id desc);
+create index guides_application_list_idx on guides (workspace_id, application_id, id desc);
 
 create table guide_steps (
   id          uuid primary key default uuidv7(),
   guide_id    uuid not null references guides (id) on delete cascade,
-  position    integer not null check (position >= 0),    -- 0-based, contiguous
+  position    integer not null check (position >= 0),    -- 0-based, contiguous (the API assigns it)
   title       text not null,
   body        jsonb not null check (jsonb_typeof(body) = 'object' and body ? 'version'),
-  target      jsonb not null check (jsonb_typeof(target) = 'object' and target ? 'version'),
+  target      jsonb                                      -- null until captured (Phase 5) or unanchored
+              check (target is null or (jsonb_typeof(target) = 'object' and target ? 'version')),
   url_pattern jsonb,                                       -- author-edited; null = target.page.urlPattern
   placement   text not null default 'auto' check (placement in ('auto', 'top', 'right', 'bottom', 'left')),
   created_at  timestamptz not null default now(),
@@ -206,15 +219,19 @@ create table guide_steps (
 );
 
 create table guide_versions (
-  id           uuid primary key default uuidv7(),
-  guide_id     uuid not null references guides (id) on delete restrict,
-  version      integer not null check (version >= 1),
-  snapshot     jsonb not null                              -- { version: 1, guide: {...}, steps: [...] }
-               check (jsonb_typeof(snapshot) = 'object' and snapshot ? 'version'),
-  published_by uuid references users (id) on delete set null,
-  published_at timestamptz not null default now(),
-  unique (guide_id, version)
+  id             uuid primary key default uuidv7(),
+  guide_id       uuid not null references guides (id) on delete restrict,
+  version        integer not null check (version >= 1),
+  guide_revision integer not null check (guide_revision >= 1), -- the draft revision it froze
+  snapshot       jsonb not null                            -- { version: 1, guide: {...}, steps: [...] }
+                 check (jsonb_typeof(snapshot) = 'object' and snapshot ? 'version'),
+  published_by   uuid references users (id) on delete set null,
+  published_at   timestamptz not null default now(),
+  constraint guide_versions_guide_id_version_key unique (guide_id, version)
 );
+-- Trigger guide_versions_immutable (0002): BEFORE UPDATE, rejects any change
+-- except setting published_by to NULL (the anonymizing ON DELETE SET NULL).
+-- Trigger guide_versions_undeletable (0003): BEFORE DELETE, rejects every delete.
 
 -- Extension auth: Phase 4 (token semantics in ADR 0015)
 create table extension_grants (                            -- one per connected browser
@@ -291,11 +308,12 @@ create index guide_events_run_idx on guide_events (run_id);
 | `sessions (token_hash)` unique                       | the session lookup on every request                                       |
 | `sessions (user_id)`                                 | "your sessions", "log out everywhere", the cascade when a user is deleted |
 | `workspace_members (user_id)`                        | "my workspaces" (the primary key covers lookups by workspace)             |
-| `applications using gin (origins)`                   | `origins @> array[$origin]` when the extension asks for guides            |
-| `guides (workspace_id, status)`                      | guide lists, player discovery                                             |
-| `guides (workspace_id, updated_at desc, id desc)`    | cursor-paginated "recently edited" lists                                  |
+| `applications (workspace_id, id)` unique             | per-workspace lists (cursor by id), target of the composite FK            |
+| `applications using gin (origins)`                   | Planned (Phase 4): `origins @> array[$origin]` for the extension          |
+| `guides (workspace_id, id desc)`                     | cursor-paginated guide lists                                              |
+| `guides (workspace_id, application_id, id desc)`     | per-application lists; the composite FK check when an application goes    |
 | `guide_steps (guide_id, position)`                   | ordered steps (the index of the deferrable unique constraint)             |
-| `guide_versions (guide_id, version)` unique          | latest version per guide                                                  |
+| `guide_versions (guide_id, version)` unique          | latest version per guide, version history                                 |
 | `guide_runs (guide_version_id, status)`              | completion per version                                                    |
 | `guide_events (workspace_id, occurred_at)`           | per-tenant time ranges                                                    |
 | `guide_events (client_event_id)` unique, `(run_id)`  | idempotent insert, run timeline                                           |
@@ -378,7 +396,7 @@ Shortened from the targeting research ([ADR 0014](adr/0014-element-targeting-str
 }
 ```
 
-Rules: unknown versions are rejected on write. Captured strings are capped (about 80 characters) and emails and long digit runs are redacted. Pages are stored as URLPattern init objects (`:projectId`), never as raw URLs, because captured signals can carry personal data from customer applications. `minScore` and `minMargin` are starting values, to be calibrated against a fixture corpus.
+Rules (Implemented, `packages/shared/src/target-descriptor.ts`): unknown versions and unknown keys are rejected on write. Captured strings are capped at 80 characters, selectors at 512; 1–12 locators, at most 6 anchors, 5 frame and 5 shadow hops and 12 attributes; the whole descriptor stays under 16 384 characters. Capture (Phase 5) will also redact emails and long digit runs. Pages are stored as URLPattern init objects (`:projectId`), never as raw URLs, because captured signals can carry personal data from customer applications. `minScore` and `minMargin` are starting values, to be calibrated against a fixture corpus.
 
 ### Rich-text body v1
 
@@ -415,7 +433,7 @@ Adapted from the research example: its `"format": "cl-richtext@1"` tag becomes a
 }
 ```
 
-Allowed: `paragraph` and `list` blocks; `text` with the marks `bold`, `italic` and `code`; `link` with an `https:` href only, rendered with `rel="noopener noreferrer"`. No HTML, styles or images. Proposed limits: 20 blocks and 2,000 characters per step.
+Allowed: `paragraph` and `list` blocks; `text` with the marks `bold`, `italic` and `code`; `link` with an `https:` href only, rendered with `rel="noopener noreferrer"`. No HTML, styles or images. Limits (Implemented, `packages/shared/src/rich-text.ts`): 20 blocks, 2,000 characters and 200 text runs per step, no control characters. The dashboard edits it as plain text (paragraphs and bulleted lists) and renders it with text nodes only.
 
 ## 7. Migrations workflow (Drizzle Kit)
 
@@ -471,13 +489,26 @@ export const users = pgTable(
 
 The integration tests run every migration against a separate database (`TEST_DATABASE_URL`, name ending in `_test`) and truncate the tables between tests; the development database is never touched by tests.
 
+### 8.1 The Phase 3 content migrations
+
+**Implemented.** `0001_content.sql` is generated by drizzle-kit from `modules/applications/applications.schema.ts` and `modules/guides/guides.schema.ts`. `0002_content_constraints.sql` is a custom migration (`drizzle-kit generate --custom`) with what drizzle-kit cannot express: the deferrable unique position and the trigger that rejects updates of versions. `0003_protect_published_versions.sql` (custom, added after the Phase 3 review) adds the trigger that rejects deleting a version: 0002 had left a direct `DELETE` possible. Verified from an empty database, with `drizzle-kit check`, and by `apps/api/test/integration/content-constraints.test.ts`, which writes directly with Drizzle to prove the database refuses bad origins, cross-tenant applications, duplicate positions at commit, duplicate version numbers, updates and direct deletes of versions, and deletes that would lose history.
+
+Differences from the Phase 1 proposal (section 4 shows the result):
+
+- **`guide_steps.target` is nullable.** Steps are written in Phase 3, before Edit Mode can capture an element (Phase 5). A placeholder descriptor would be fabricated data that the player would try to resolve; `null` means "not captured yet" and also covers unanchored steps (question 3 below).
+- **`guides.revision` and `guide_versions.guide_revision`** answer question 7 below and make publishing idempotent ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
+- **List indexes follow the cursor:** `(workspace_id, id desc)` instead of `(workspace_id, updated_at desc, id desc)` and `(workspace_id, status)`. Lists sort by the immutable id, and status is a filter on small per-workspace sets.
+- **The GIN index on `origins`** waits for its first query (Phase 4).
+- **Explicit constraint names**, because the API maps violations by name: `guides_application_fk`, `guide_versions_guide_id_version_key`.
+- **ON DELETE RESTRICT reports SQLSTATE 23001**, not 23503, so `isForeignKeyViolation` accepts both.
+
 ## 9. Open questions
 
 1. **Handoff codes:** `POST /v1/extension/codes` needs storage for a 60-second, single-use, hashed code bound to a PKCE challenge. Use an `extension_auth_codes` table, or memory (only works with a single API process)?
 2. **Origin ownership:** `origins text[]` cannot enforce one application per origin within a workspace. Use a service check (racy) or an `application_origins (workspace_id, origin)` table with a unique constraint?
-3. **Unanchored steps** (a centered intro card) would need a nullable `target`; v1 keeps it `not null`.
+3. ~~**Unanchored steps**~~ Resolved in Phase 3: `target` is nullable. How the player shows a step without a target is decided in Phase 6.
 4. **Rollback:** should `guides.live_version_id` pin an older version, instead of players always reading the highest one?
 5. **Abandonment:** besides an explicit `run_abandoned`, should a job close idle runs, and after how long?
 6. **Cleanup and retention** of expired sessions and tokens and of old events: an in-process job or a CLI run by cron? The answer also decides when partitioning pays off.
-7. **Concurrent draft edits** from the dashboard and the side panel: check `expectedUpdatedAt` (409 on mismatch) or add a revision counter?
+7. ~~**Concurrent draft edits**~~ Resolved in Phase 3: a revision counter (`guides.revision`); `PUT …/steps` requires `expectedRevision` and `PATCH` accepts it, 409 on mismatch.
 8. **Workspace switch in the extension:** a new grant, or a mutable `extension_grants.workspace_id`?

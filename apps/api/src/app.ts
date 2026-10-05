@@ -15,8 +15,12 @@ import type { AppConfig } from './config/env.js'
 import { registerCsrfGuard } from './http/csrf-guard.js'
 import { registerErrorHandling } from './http/error-handler.js'
 import type { Database } from './infrastructure/database/client.js'
+import { applicationRoutes } from './modules/applications/applications.routes.js'
+import { createApplicationsService } from './modules/applications/applications.service.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
+import { guideRoutes } from './modules/guides/guides.routes.js'
+import { createGuidesService } from './modules/guides/guides.service.js'
 import { createRequireSession } from './modules/auth/require-session.js'
 import { healthRoutes } from './modules/health/health.routes.js'
 import { createHealthService } from './modules/health/health.service.js'
@@ -99,6 +103,16 @@ export async function buildApp({
     listWorkspaces: (userId) => workspaces.listForUser(userId),
   })
   const workspaces = createWorkspacesService({ db: database.db, users: auth })
+  const memberships = {
+    roleOf: (workspaceId: string, userId: string) => workspaces.roleOf(workspaceId, userId),
+  }
+  const applications = createApplicationsService({ db: database.db, memberships })
+  const guides = createGuidesService({
+    db: database.db,
+    memberships,
+    applications,
+    publishers: auth,
+  })
   const requireSession = createRequireSession(auth, config.session.cookieName)
 
   // Versioned product API: authenticated data must never sit in a cache.
@@ -113,6 +127,8 @@ export async function buildApp({
       requireSession,
     })
     await v1.register(workspaceRoutes, { workspaces, requireSession })
+    await v1.register(applicationRoutes, { applications, requireSession })
+    await v1.register(guideRoutes, { guides, requireSession })
   })
 
   return app
