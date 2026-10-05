@@ -9,18 +9,30 @@ export type DrizzleDatabase = NodePgDatabase<typeof schema>
 export type DbExecutor =
   DrizzleDatabase | Parameters<Parameters<DrizzleDatabase['transaction']>[0]>[0]
 
-/** True when `error` (or the driver error Drizzle wraps) violates `constraint`. */
-export function isUniqueViolation(error: unknown, constraint: string): boolean {
+function violates(error: unknown, sqlState: string, constraint: string): boolean {
   const driverError: unknown =
     error instanceof Error && error.cause !== undefined ? error.cause : error
   return (
     typeof driverError === 'object' &&
     driverError !== null &&
     'code' in driverError &&
-    driverError.code === '23505' &&
+    driverError.code === sqlState &&
     'constraint' in driverError &&
     driverError.constraint === constraint
   )
+}
+
+/** True when `error` (or the driver error Drizzle wraps) violates the unique `constraint`. */
+export function isUniqueViolation(error: unknown, constraint: string): boolean {
+  return violates(error, '23505', constraint)
+}
+
+/**
+ * True when `error` violates the foreign key `constraint`. PostgreSQL reports
+ * `23503` for NO ACTION and `23001` (restrict_violation) for ON DELETE RESTRICT.
+ */
+export function isForeignKeyViolation(error: unknown, constraint: string): boolean {
+  return violates(error, '23503', constraint) || violates(error, '23001', constraint)
 }
 
 export interface Database {

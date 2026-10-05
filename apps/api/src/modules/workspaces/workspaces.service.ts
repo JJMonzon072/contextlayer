@@ -85,6 +85,11 @@ export function createWorkspacesService(deps: { db: DrizzleDatabase; users: User
       return toWorkspaceSummary(membership)
     },
 
+    /** The caller's role, or undefined when not a member (other modules authorize with it). */
+    async roleOf(workspaceId: string, userId: string): Promise<WorkspaceRole | undefined> {
+      return (await findMembership(db, workspaceId, userId))?.role
+    },
+
     async get(userId: string, workspaceId: string): Promise<Result<WorkspaceSummary>> {
       const membership = await findMembership(db, workspaceId, userId)
       return membership ? { ok: true, value: toWorkspaceSummary(membership) } : fail('not-found')
