@@ -13,14 +13,11 @@ import { API_BASE_URL, DASHBOARD_ORIGIN, EXTENSION_VERSION } from '../config'
 import { logger } from '../lib/logger'
 import { CONNECTION_CHANGED, failure } from '../messaging/protocol'
 import { createApiClient, fetchApiHealth } from './api-client'
-import { createAuth } from './auth'
-import { createConnectionManager } from './connection'
+import { createWorkerCore } from './core'
 import { handleBackgroundMessage } from './handle-message'
 import { createSiteAccess, type SiteChrome } from './site-access'
 import { chromeStorage } from './storage'
-import { createVault } from './vault'
 
-const vault = createVault(chromeStorage())
 const api = createApiClient(API_BASE_URL)
 const now = () => Date.now()
 const apiPattern = originMatchPattern(API_BASE_URL)
@@ -74,19 +71,17 @@ const onConnectionChanged = () => {
   reconcileSites()
   return Promise.resolve()
 }
-const auth = createAuth({ vault, api, now, onEnded: onConnectionChanged })
-const site = createSiteAccess({ vault, auth, chrome: siteChrome, apiPattern, now })
-const connection = createConnectionManager({
-  vault,
-  auth,
+const { vault, auth, connection } = createWorkerCore({
+  storage: chromeStorage(),
   api,
+  now,
   openTab: async (url) => (await chrome.tabs.create({ url })).id,
   apiAccess: () => siteChrome.hasHostAccess(apiPattern),
   dashboardOrigin: DASHBOARD_ORIGIN,
   extensionId: chrome.runtime.id,
-  now,
   onChanged: onConnectionChanged,
 })
+const site = createSiteAccess({ vault, auth, chrome: siteChrome, apiPattern, now })
 
 // Restrict chrome.storage.local before anything can write a credential to it.
 void vault.ready().then((restricted) => {

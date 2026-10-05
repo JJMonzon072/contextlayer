@@ -16,6 +16,7 @@ import {
   type PageSender,
   type SiteChrome,
 } from '../src/background/site-access'
+import { createLifecycle } from '../src/background/lifecycle'
 import { createVault } from '../src/background/vault'
 import { fakeApi, json, memoryStorage, NOW, tokenResponse, type Call } from './support/fakes'
 
@@ -114,7 +115,14 @@ async function setup(
     }
     return json(404)
   })
-  const auth = createAuth({ vault, api, now: () => NOW, onEnded: () => Promise.resolve() })
+  const lifecycle = createLifecycle()
+  const auth = createAuth({
+    vault,
+    api,
+    lifecycle,
+    now: () => NOW,
+    onEnded: () => Promise.resolve(),
+  })
   if (options.connected ?? true) await auth.save(tokenResponse())
   const fake = fakeChrome()
   const site = createSiteAccess({

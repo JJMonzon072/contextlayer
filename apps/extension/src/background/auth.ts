@@ -7,11 +7,20 @@ import {
 import type { z } from 'zod'
 
 import { ApiUnreachableError, type ApiClient } from './api-client'
+import type { Lifecycle } from './lifecycle'
 import type { AccessRecord, Vault } from './vault'
 
 /** The connection is gone (revoked, expired, reused): the user must connect again. */
 export class ConnectionEndedError extends Error {
-  override readonly name = 'ConnectionEndedError'
+  override readonly name: string = 'ConnectionEndedError'
+}
+
+/**
+ * The connection a request started with was replaced or disconnected while it
+ * was in flight. Nothing was cleared: the current connection, if any, is fine.
+ */
+export class ConnectionChangedError extends ConnectionEndedError {
+  override readonly name = 'ConnectionChangedError'
 }
 
 /** No connection at all. */
@@ -20,28 +29,50 @@ export class NotConnectedError extends Error {
 }
 
 /** Refresh slightly before expiry, so a token never expires in flight. */
-const EXPIRY_MARGIN_MS = 30_000
+export const EXPIRY_MARGIN_MS = 30_000
 
 export type Auth = ReturnType<typeof createAuth>
 
+/** Writes a token response as the stored connection. Callers hold the life-cycle lock. */
+export async function storeTokens(
+  vault: Vault,
+  tokens: ExtensionTokenResponse,
+): Promise<AccessRecord> {
+  const access = {
+    grantId: tokens.connection.id,
+    token: tokens.accessToken,
+    expiresAt: Date.parse(tokens.accessTokenExpiresAt),
+  }
+  await vault.saveConnection({
+    access,
+    refresh: { grantId: tokens.connection.id, token: tokens.refreshToken },
+    connection: tokens.connection,
+  })
+  return access
+}
+
 /**
  * Access tokens for the API, with strict refresh rotation (ADR 0015):
- * - one refresh in flight per worker; concurrent callers share it;
+ * - one refresh in flight per connection; concurrent callers of the same
+ *   connection share it, a newer connection never waits for an older one's;
  * - a request that gets 401 refreshes once and retries once, never more;
  * - a network failure keeps the credentials (the API may just be down);
  * - a refused refresh ends the connection and clears every credential;
- * - a refresh response is saved only if the connection it belonged to is still
- *   the current one, so a late answer cannot resurrect a disconnected session.
+ * - every result is applied inside a life-cycle transition, and only if the
+ *   connection is still the one the request started with: a late answer can
+ *   neither bring back a disconnected connection nor overwrite or clear a newer
+ *   one.
  */
 export function createAuth(deps: {
   vault: Vault
   api: ApiClient
+  lifecycle: Lifecycle
   now: () => number
   /** Called after the credentials of a connection were cleared because it ended. */
   onEnded: () => Promise<void>
 }) {
-  const { vault, api, now, onEnded } = deps
-  let inflight: Promise<AccessRecord> | undefined
+  const { vault, api, lifecycle, now, onEnded } = deps
+  let inflight: { generation: number; promise: Promise<AccessRecord> } | undefined
 
   async function tokenRequest(
     body: ExtensionTokenRequest,
@@ -53,60 +84,80 @@ export function createAuth(deps: {
     return extensionTokenResponseSchema.parse(await response.json())
   }
 
-  async function end(): Promise<void> {
-    await vault.clearConnection(true, now())
+  /** Ends the connection of `generation` if it is still the stored one. */
+  async function endIfCurrent(generation: number): Promise<void> {
+    const ended = await lifecycle.exclusive(async () => {
+      if (lifecycle.credentialGeneration() !== generation) return false
+      lifecycle.invalidateCredentials()
+      await vault.clearConnection(true, now())
+      return true
+    })
+    if (!ended) throw new ConnectionChangedError('The connection changed during the request.')
     await onEnded()
   }
 
-  async function doRefresh(): Promise<AccessRecord> {
-    const refresh = await vault.readRefresh()
+  async function doRefresh(generation: number): Promise<AccessRecord> {
+    const refresh = await lifecycle.exclusive(async () =>
+      lifecycle.credentialGeneration() === generation ? await vault.readRefresh() : 'changed',
+    )
+    if (refresh === 'changed') throw new ConnectionChangedError('The connection changed.')
     if (!refresh) throw new NotConnectedError()
     const result = await tokenRequest({ grantType: 'refresh_token', refreshToken: refresh.token })
-    // The user may have disconnected or reconnected while the request was in flight.
-    const current = await vault.readRefresh()
-    if (current?.token !== refresh.token) throw new ConnectionEndedError('The connection changed.')
-    if (result === 'refused') {
-      await end()
+    const outcome = await lifecycle.exclusive(async () => {
+      // The user may have disconnected or reconnected while the request was in flight.
+      if (lifecycle.credentialGeneration() !== generation) return 'changed' as const
+      // Defense in depth: the stored token must still be the one just rotated.
+      if ((await vault.readRefresh())?.token !== refresh.token) return 'changed' as const
+      if (result === 'refused') {
+        lifecycle.invalidateCredentials()
+        await vault.clearConnection(true, now())
+        return 'ended' as const
+      }
+      return storeTokens(vault, result)
+    })
+    if (outcome === 'changed') throw new ConnectionChangedError('The connection changed.')
+    if (outcome === 'ended') {
+      await onEnded()
       throw new ConnectionEndedError('The connection was revoked or expired.')
     }
-    return save(result)
+    return outcome
   }
 
-  async function save(tokens: ExtensionTokenResponse): Promise<AccessRecord> {
-    const access = {
-      grantId: tokens.connection.id,
-      token: tokens.accessToken,
-      expiresAt: Date.parse(tokens.accessTokenExpiresAt),
-    }
-    await vault.saveConnection({
-      access,
-      refresh: { grantId: tokens.connection.id, token: tokens.refreshToken },
-      connection: tokens.connection,
+  function refreshOnce(generation: number): Promise<AccessRecord> {
+    if (inflight?.generation === generation) return inflight.promise
+    const promise = doRefresh(generation).finally(() => {
+      if (inflight?.promise === promise) inflight = undefined
     })
-    return access
+    inflight = { generation, promise }
+    return promise
   }
 
-  function refreshOnce(): Promise<AccessRecord> {
-    inflight ??= doRefresh().finally(() => {
-      inflight = undefined
-    })
-    return inflight
-  }
-
-  async function accessToken(): Promise<string> {
-    const connection = await vault.readConnection()
+  /** A usable access token and the generation of the connection it belongs to. */
+  async function credential(): Promise<{ token: string; generation: number }> {
+    const snapshot = await lifecycle.exclusive(async () => ({
+      generation: lifecycle.credentialGeneration(),
+      connection: await vault.readConnection(),
+      access: await vault.readAccess(),
+    }))
+    const { generation, connection, access } = snapshot
     if (!connection) throw new NotConnectedError()
-    const access = await vault.readAccess()
     if (access?.grantId === connection.id && access.expiresAt - EXPIRY_MARGIN_MS > now()) {
-      return access.token
+      return { token: access.token, generation }
     }
-    return (await refreshOnce()).token
+    return { token: (await refreshOnce(generation)).token, generation }
   }
 
   return {
     tokenRequest,
-    save,
-    accessToken,
+
+    /** Installs a new connection (outside the code exchange: tests and tooling). */
+    save: (tokens: ExtensionTokenResponse): Promise<AccessRecord> =>
+      lifecycle.exclusive(async () => {
+        lifecycle.invalidateCredentials()
+        return storeTokens(vault, tokens)
+      }),
+
+    accessToken: async (): Promise<string> => (await credential()).token,
 
     /** GET or POST an extension route with the access token; at most one refresh and retry. */
     async authorized<T>(
@@ -114,11 +165,13 @@ export function createAuth(deps: {
       schema: z.ZodType<T> | undefined,
       init: { method?: string; body?: unknown } = {},
     ): Promise<T | undefined> {
-      let response = await api.request(path, { ...init, bearer: await accessToken() })
+      const first = await credential()
+      let response = await api.request(path, { ...init, bearer: first.token })
       if (response.status === 401) {
-        response = await api.request(path, { ...init, bearer: (await refreshOnce()).token })
+        const fresh = await refreshOnce(first.generation)
+        response = await api.request(path, { ...init, bearer: fresh.token })
         if (response.status === 401) {
-          await end()
+          await endIfCurrent(first.generation)
           throw new ConnectionEndedError('The connection was revoked.')
         }
       }

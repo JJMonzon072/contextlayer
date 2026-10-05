@@ -4,21 +4,52 @@ import { vi } from 'vitest'
 import type { ApiClient } from '../../src/background/api-client'
 import type { ExtensionStorage, StorageArea } from '../../src/background/storage'
 
-/** An in-memory chrome.storage area. */
-export function memoryArea(): StorageArea & { data: Map<string, unknown> } {
+/**
+ * An in-memory chrome.storage area. `holdNextSet(key)` makes the next write of
+ * that key wait until the returned `release()` is called, so a test can stop a
+ * credential write halfway and run another operation in between.
+ */
+export function memoryArea(): StorageArea & {
+  data: Map<string, unknown>
+  holdNextSet: (key: string) => { reached: Promise<void>; release: () => void }
+} {
   const data = new Map<string, unknown>()
+  const holds = new Map<string, { arrive: () => void; gate: Promise<void> }>()
   const keys = (value: string | string[]) => (Array.isArray(value) ? value : [value])
   return {
     data,
+    holdNextSet: (key) => {
+      const reached = deferred<undefined>()
+      const gate = deferred<undefined>()
+      holds.set(key, {
+        arrive: () => {
+          reached.resolve(undefined)
+        },
+        gate: gate.promise,
+      })
+      return {
+        reached: reached.promise,
+        release: () => {
+          gate.resolve(undefined)
+        },
+      }
+    },
     get: (value) =>
       Promise.resolve(
         Object.fromEntries(
           keys(value).flatMap((key) => (data.has(key) ? [[key, data.get(key)]] : [])),
         ),
       ),
-    set: (items) => {
+    set: async (items) => {
+      for (const key of Object.keys(items)) {
+        const hold = holds.get(key)
+        if (hold) {
+          holds.delete(key)
+          hold.arrive()
+          await hold.gate
+        }
+      }
       for (const [key, item] of Object.entries(items)) data.set(key, structuredClone(item))
-      return Promise.resolve()
     },
     remove: (value) => {
       for (const key of keys(value)) data.delete(key)

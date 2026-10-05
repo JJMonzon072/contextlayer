@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ApiUnreachableError } from '../src/background/api-client'
 import { ConnectionEndedError, createAuth, NotConnectedError } from '../src/background/auth'
+import { createLifecycle } from '../src/background/lifecycle'
 import { createVault } from '../src/background/vault'
 import {
   deferred,
@@ -21,7 +22,7 @@ async function setup(handler: (call: Call) => Response | Promise<Response>) {
   const vault = createVault(storage)
   const { api, calls } = fakeApi(handler)
   const onEnded = vi.fn(() => Promise.resolve())
-  const auth = createAuth({ vault, api, now: () => NOW, onEnded })
+  const auth = createAuth({ vault, api, lifecycle: createLifecycle(), now: () => NOW, onEnded })
   const initial = tokenResponse({ accessExpiresAt: NOW - 1 })
   await auth.save(initial)
   return { storage, vault, auth, calls, onEnded, initial }
@@ -34,7 +35,13 @@ describe('extension auth', () => {
     const storage = memoryStorage()
     const vault = createVault(storage)
     const { api, calls } = fakeApi(() => json(500))
-    const auth = createAuth({ vault, api, now: () => NOW, onEnded: () => Promise.resolve() })
+    const auth = createAuth({
+      vault,
+      api,
+      lifecycle: createLifecycle(),
+      now: () => NOW,
+      onEnded: () => Promise.resolve(),
+    })
     const tokens = tokenResponse()
     await auth.save(tokens)
 
@@ -45,7 +52,13 @@ describe('extension auth', () => {
   it('refuses to act without a connection', async () => {
     const vault = createVault(memoryStorage())
     const { api } = fakeApi(() => json(500))
-    const auth = createAuth({ vault, api, now: () => NOW, onEnded: () => Promise.resolve() })
+    const auth = createAuth({
+      vault,
+      api,
+      lifecycle: createLifecycle(),
+      now: () => NOW,
+      onEnded: () => Promise.resolve(),
+    })
 
     await expect(auth.accessToken()).rejects.toBeInstanceOf(NotConnectedError)
   })

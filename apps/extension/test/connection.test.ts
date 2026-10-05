@@ -6,6 +6,7 @@ import { createAuth } from '../src/background/auth'
 import { ATTEMPT_TTL_MS, createConnectionManager } from '../src/background/connection'
 import { CONNECT_PATH, type ExternalSender } from '../src/background/external'
 import { s256 } from '../src/background/pkce'
+import { createLifecycle } from '../src/background/lifecycle'
 import { createVault } from '../src/background/vault'
 import {
   dump,
@@ -32,12 +33,14 @@ function setup(
   const vault = createVault(storage)
   const { api, calls } = fakeApi(handler)
   const onChanged = vi.fn(() => Promise.resolve())
-  const auth = createAuth({ vault, api, now: () => clock, onEnded: onChanged })
+  const lifecycle = createLifecycle()
+  const auth = createAuth({ vault, api, lifecycle, now: () => clock, onEnded: onChanged })
   const openTab = vi.fn<(url: string) => Promise<number | undefined>>(() => Promise.resolve(TAB))
   const manager = createConnectionManager({
     vault,
     auth,
     api,
+    lifecycle,
     openTab,
     apiAccess: () => Promise.resolve(apiAccess),
     dashboardOrigin: DASHBOARD,
@@ -357,7 +360,13 @@ describe('connection manager', () => {
     const storage = memoryStorage(false)
     const vault = createVault(storage)
     const { api } = fakeApi(() => json(204))
-    const auth = createAuth({ vault, api, now: () => NOW, onEnded: () => Promise.resolve() })
+    const auth = createAuth({
+      vault,
+      api,
+      lifecycle: createLifecycle(),
+      now: () => NOW,
+      onEnded: () => Promise.resolve(),
+    })
     const tokens = tokenResponse()
 
     await auth.save(tokens)
