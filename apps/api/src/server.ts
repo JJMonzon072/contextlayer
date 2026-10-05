@@ -20,7 +20,7 @@ function loadConfigOrExit(): AppConfig {
 const config = loadConfigOrExit()
 const logger = createLogger(config)
 const database = createDatabase({ url: config.database.url, logger })
-const app = await buildApp({ database, logger })
+const app = await buildApp({ config, database, logger })
 
 // Drains in-flight requests and the database pool on SIGINT/SIGTERM, and on
 // uncaught errors, with a hard deadline so a stuck close never hangs a deploy.

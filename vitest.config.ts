@@ -6,6 +6,11 @@ import { defineConfig } from 'vitest/config'
  */
 export default defineConfig({
   test: {
-    projects: ['apps/*/vitest.config.ts', 'packages/*/vitest.config.ts'],
+    projects: [
+      'apps/*/vitest.config.ts',
+      'packages/*/vitest.config.ts',
+      // Needs PostgreSQL (docker compose up -d); see apps/api/test/integration.
+      'apps/api/vitest.integration.config.ts',
+    ],
   },
 })

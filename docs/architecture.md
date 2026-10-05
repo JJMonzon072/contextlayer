@@ -1,12 +1,12 @@
 # Architecture
 
-What Phase 1 (Foundation) built, the rules the code follows, and where planned features fit. Decisions live in the [ADRs](adr/README.md); risk IDs (R-NN) refer to [technical risks](technical-risks.md).
+What Phases 1 (Foundation) and 2 (Identity and workspaces) built, the rules the code follows, and where planned features fit. Decisions live in the [ADRs](adr/README.md); risk IDs (R-NN) refer to [technical risks](technical-risks.md).
 
-Status labels: **Implemented (Phase 1)** exists in the repository and is tested; **Planned (Phase N)** is scheduled in the [roadmap](roadmap.md); **Proposed** is a direction that may change after a spike.
+Status labels: **Implemented (Phase N)** exists in the repository and is tested; **Planned (Phase N)** is scheduled in the [roadmap](roadmap.md); **Proposed** is a direction that may change after a spike.
 
 ## 1. Overview and guiding principles
 
-ContextLayer has three deployables and one database: a Fastify API on PostgreSQL, a Vue dashboard that reaches the API through its own origin under `/api` (Vite proxy in development, reverse proxy in production), and a Chrome Manifest V3 extension that injects guides into third-party web apps. Phase 1 has no product features; a health check proves every communication path end to end.
+ContextLayer has three deployables and one database: a Fastify API on PostgreSQL, a Vue dashboard that reaches the API through its own origin under `/api` (Vite proxy in development, reverse proxy in production), and a Chrome Manifest V3 extension that injects guides into third-party web apps. Phase 1 proved every communication path with a health check; Phase 2 added accounts, server-side sessions and workspaces with roles. Guides arrive in Phase 3.
 
 | Principle               | In this codebase                                                                                                                                        | Why                                            | Trade-off                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------- |
@@ -21,15 +21,15 @@ ContextLayer has three deployables and one database: a Fastify API on PostgreSQL
 
 The full register, with likelihood, impact and verification, is in [technical risks](technical-risks.md). These risks shape the architecture most:
 
-| Risk                                   | Architectural answer                                                                                                                                                          | Section  |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| R-01 Service-worker termination        | Implemented: no state in globals, top-level listeners, 5 s timeouts. Planned: state in `chrome.storage`, an idempotent event queue (Phases 4, 7)                              | 7.2      |
-| R-03 Host permissions                  | Implemented: no `permissions`; host access pinned to the API and the two dashboard origins. Planned (Phase 4): customer origins granted per application at runtime            | 7.3      |
-| R-04 Fragile element targeting         | Proposed ([ADR 0014](adr/0014-element-targeting-strategy.md)): a versioned multi-signal `TargetDescriptor` and scored resolution with explicit outcomes, never a silent guess | 8.6, 9.1 |
-| R-11 Security of injected UI           | Implemented: closed shadow root in a plain `<div>` host, `textContent` only, no page message channel, sender classification in the service worker                             | 7.4, 10  |
-| R-12 Extension ↔ backend communication | Implemented: the service worker is the only API caller, with schema validation and timeouts. Planned (Phase 7): idempotent event ingestion                                    | 8.1, 10  |
-| R-13 Authentication and token storage  | Proposed ([ADR 0015](adr/0015-authentication-strategy.md)): cookie sessions for the dashboard; extension tokens from a code + PKCE handoff, kept in trusted contexts only     | 8.5, 10  |
-| R-17 Multi-tenant data isolation       | Planned (Phases 2–3): `workspace_id` on tenant tables, a required `workspaceId` in every repository, composite foreign keys, 404 for other tenants' ids                       | 5.2, 9.1 |
+| Risk                                   | Architectural answer                                                                                                                                                                | Section  |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| R-01 Service-worker termination        | Implemented: no state in globals, top-level listeners, 5 s timeouts. Planned: state in `chrome.storage`, an idempotent event queue (Phases 4, 7)                                    | 7.2      |
+| R-03 Host permissions                  | Implemented: no `permissions`; host access pinned to the API and the two dashboard origins. Planned (Phase 4): customer origins granted per application at runtime                  | 7.3      |
+| R-04 Fragile element targeting         | Proposed ([ADR 0014](adr/0014-element-targeting-strategy.md)): a versioned multi-signal `TargetDescriptor` and scored resolution with explicit outcomes, never a silent guess       | 8.6, 9.1 |
+| R-11 Security of injected UI           | Implemented: closed shadow root in a plain `<div>` host, `textContent` only, no page message channel, sender classification in the service worker                                   | 7.4, 10  |
+| R-12 Extension ↔ backend communication | Implemented: the service worker is the only API caller, with schema validation and timeouts. Planned (Phase 7): idempotent event ingestion                                          | 8.1, 10  |
+| R-13 Authentication and token storage  | Implemented (Phase 2, [ADR 0015](adr/0015-authentication-strategy.md)): dashboard cookie sessions and CSRF guard. Proposed (Phase 4): extension tokens from a code + PKCE handoff   | 8.5, 10  |
+| R-17 Multi-tenant data isolation       | Implemented (Phase 2): membership checks, 404 for other tenants' workspaces, a tested isolation matrix. Planned (Phase 3): `workspace_id` on content tables, composite foreign keys | 5.2, 9.1 |
 
 ## 2. System context
 
@@ -70,18 +70,18 @@ Dashed edges are planned. In Phase 1 the content script runs only on the local d
 
 ## 3. Components and responsibilities
 
-| Component         | Responsibility                                                       | Tech                                                 | Status                                    |
-| ----------------- | -------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------- |
-| `apps/api`        | HTTP API, business rules, persistence                                | Node 22, Fastify 5, zod type provider, pino, Drizzle | Implemented (Phase 1): `health` module    |
-| PostgreSQL        | System of record                                                     | PostgreSQL 18 in Docker Compose                      | Implemented (Phase 1): empty schema       |
-| `apps/dashboard`  | Workspaces, guides, analytics                                        | Vue 3.5, Vite 8, Tailwind CSS 4                      | Implemented (Phase 1): status page        |
-| Service worker    | Only API client, message router; later tokens, script registration   | MV3 module service worker                            | Implemented (Phase 1): `api.health.get`   |
-| Content script    | Everything on the host page; later picking, targeting, playback      | Classic IIFE, isolated world, closed Shadow DOM      | Implemented (Phase 1): `page.ping`, toast |
-| Popup             | Launcher and status view; sign-in and site-access requests (Phase 4) | Vue 3, Tailwind, `packages/ui`                       | Implemented (Phase 1)                     |
-| Side panel        | Guide authoring                                                      | Vue 3 extension page                                 | Planned (Phase 5)                         |
-| `packages/shared` | zod contracts and inferred types                                     | zod 4                                                | Implemented (Phase 1): health, `ApiError` |
-| `packages/ui`     | Vue components, theme tokens                                         | Vue SFCs, Tailwind v4                                | Implemented (Phase 1): `StatusBadge`      |
-| `packages/config` | tsconfig and ESLint presets                                          | TypeScript 6.0, ESLint 10                            | Implemented (Phase 1)                     |
+| Component         | Responsibility                                                       | Tech                                                 | Status                                            |
+| ----------------- | -------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------- |
+| `apps/api`        | HTTP API, business rules, persistence                                | Node 22, Fastify 5, zod type provider, pino, Drizzle | Implemented: `health`, `auth`, `workspaces`       |
+| PostgreSQL        | System of record                                                     | PostgreSQL 18 in Docker Compose                      | Implemented (Phase 2): identity tables            |
+| `apps/dashboard`  | Workspaces, guides, analytics                                        | Vue 3.5, vue-router 5, Vite 8, Tailwind CSS 4        | Implemented (Phase 2): auth, workspaces, members  |
+| Service worker    | Only API client, message router; later tokens, script registration   | MV3 module service worker                            | Implemented (Phase 1): `api.health.get`           |
+| Content script    | Everything on the host page; later picking, targeting, playback      | Classic IIFE, isolated world, closed Shadow DOM      | Implemented (Phase 1): `page.ping`, toast         |
+| Popup             | Launcher and status view; sign-in and site-access requests (Phase 4) | Vue 3, Tailwind, `packages/ui`                       | Implemented (Phase 1)                             |
+| Side panel        | Guide authoring                                                      | Vue 3 extension page                                 | Planned (Phase 5)                                 |
+| `packages/shared` | zod contracts and inferred types                                     | zod 4                                                | Implemented: health, `ApiError`, auth, workspaces |
+| `packages/ui`     | Vue components, theme tokens                                         | Vue SFCs, Tailwind v4                                | Implemented (Phase 1): `StatusBadge`              |
+| `packages/config` | tsconfig and ESLint presets                                          | TypeScript 6.0, ESLint 10                            | Implemented (Phase 1)                             |
 
 ## 4. Monorepo structure and dependency rules
 
@@ -111,9 +111,9 @@ flowchart LR
 ### 5.1 Process entry and composition root
 
 - `apps/api/src/server.ts` is the **process entry**: configuration, logger, database client, `buildApp`, graceful shutdown, `listen`. It is the only file that exits the process; environment access is centralized in `config/env.ts`.
-- `apps/api/src/app.ts` is the **composition root**: `buildApp({ database, logger })` configures Fastify, registers cross-cutting plugins and wires modules. It opens no connections.
+- `apps/api/src/app.ts` is the **composition root**: `buildApp({ config, database, logger, now })` configures Fastify, registers cross-cutting plugins (helmet, cookies, CSRF guard, rate limits) and wires modules. It opens no connections. `now` is an injectable clock, so session expiry is tested without waiting.
 
-Because infrastructure is injected, `apps/api/test/health.test.ts` runs the real HTTP stack through `app.inject()` with a fake database ([ADR 0003](adr/0003-fastify-http-framework.md) explains the choice of Fastify).
+Because infrastructure is injected, `apps/api/test/health.test.ts` runs the real HTTP stack through `app.inject()` with a fake database, and the integration tests run the same stack against a dedicated PostgreSQL test database ([ADR 0003](adr/0003-fastify-http-framework.md) explains the choice of Fastify).
 
 ### 5.2 Module anatomy and dependency direction
 
@@ -126,15 +126,16 @@ flowchart LR
 ```
 
 - **Implemented (Phase 1):** `modules/health/health.routes.ts` and `health.service.ts`. The service depends on a probe function, not Drizzle, so it has no repository.
-- **Planned (Phase 2 onward):** `auth`, `workspaces`, `applications`, `guides`, `extension`, `analytics`, each with routes, service, repository and schemas ([API](api.md)).
-- Dependencies point inward. A module never reads another module's tables; it calls that module's exported service, which keeps extraction possible (section 14).
-- Modules are Fastify plugins registered without `fastify-plugin`, so hooks stay encapsulated: `cache-control: no-store` applies to health routes only.
+- **Implemented (Phase 2):** `modules/auth/` (routes, service, users and sessions repositories, passwords, session tokens and cookie, the `requireSession` pre-handler) and `modules/workspaces/` (routes, service, repository). Each module owns its Drizzle table file.
+- **Planned (Phase 3 onward):** `applications`, `guides`, `extension`, `analytics` ([API](api.md)).
+- Dependencies point inward. A module never reads another module's tables; it uses an interface the composition root hands it, which keeps extraction possible (section 14). In Phase 2, `workspaces` gets user lookups and profiles through a `UserDirectory` implemented by the `auth` service, and `auth` lists a user's workspaces through a function backed by the `workspaces` service; `workspace_members.user_id` is the only cross-module reference, a foreign key.
+- Modules are Fastify plugins registered without `fastify-plugin`, so hooks stay encapsulated: business modules live in a `/v1` scope whose `onSend` hook sets `cache-control: no-store`.
 
 ### 5.3 Request lifecycle
 
 1. **Request id:** `genReqId` assigns a UUID, echoed as `x-request-id` and attached to the request's log lines.
 2. **Headers:** `@fastify/helmet` defaults.
-3. **Validation:** the zod `validatorCompiler` checks params, query and body (`400 VALIDATION_FAILED`). Phase 1 routes take no input, so this path is wired but unexercised.
+3. **CSRF guard and validation:** an `onRequest` hook rejects cross-site unsafe requests (`403`) before the body is read; then the zod `validatorCompiler` checks params, query and body (`400 VALIDATION_FAILED`). Authenticated routes run `requireSession` as a pre-handler (`401`), and the login rate limit runs after validation so its key can include the email.
 4. **Handler:** the route calls its service and picks the status.
 5. **Serialization:** the `serializerCompiler` validates the reply against the schema for that status, so contract drift becomes a logged 500, not an unchecked body. It encodes with zod, so shared schemas avoid one-way `.transform()` and dates travel as ISO strings.
 6. **Errors:** `apps/api/src/http/error-handler.ts` produces `{ error: { code, message, requestId } }`.
@@ -143,7 +144,7 @@ flowchart LR
 
 **Configuration.** `apps/api/src/config/env.ts` validates the environment once with zod into a typed `AppConfig`. Invalid input throws `ConfigError`; `server.ts` prints it and exits with code 1. Failing at boot beats failing at the first request that needs the value.
 
-**Logging.** `apps/api/src/logger.ts` creates one pino instance shared by Fastify, the pool and shutdown: pretty in development, JSON to stdout elsewhere, `authorization`, `cookie` and `set-cookie` redacted. Tests default to a silent logger.
+**Logging.** `apps/api/src/logger.ts` creates one pino instance shared by Fastify, the pool and shutdown: pretty in development, JSON to stdout elsewhere, `authorization`, `cookie` and `set-cookie` redacted. Its error serializer drops query parameters and PostgreSQL `detail` from database errors, because Drizzle and node-postgres embed bound values (an email, a password hash) in them; a test checks that no credential reaches the log. Tests default to a silent logger.
 
 **Errors.**
 
@@ -156,14 +157,14 @@ flowchart LR
 | Any other 5xx or unexpected    | 500    | `INTERNAL_ERROR`                         | generic                                          | error       |
 | Dependency down, `GET /health` | 503    | none: a `HealthReport`, not an error     | the report                                       | warn        |
 
-Arbitrary messages may contain internals, so they are replaced; Phase 2 adds an explicit client-safe error type for domain errors. Clients branch on `code` (an enum in `packages/shared/src/api-error.ts`), never on `message`.
+Arbitrary messages may contain internals, so they are replaced. Domain errors are results returned by services (for example `'last-owner'`) that each route maps to a status, code and client-safe message. Clients branch on `code` (an enum in `packages/shared/src/api-error.ts`), never on `message`.
 
 ### 5.5 Database access and migrations
 
 `apps/api/src/infrastructure/database/client.ts` wraps a `pg.Pool` (max 10, 5 s connect timeout, TCP keep-alive) in a small `Database` interface (`db`, `ping({ timeoutMs })`, `close()`). The ping uses node-postgres' per-query `query_timeout` (2 s), so a database that stops answering cannot exhaust the pool through repeated health checks; a pool `error` listener logs idle-client failures instead of crashing. Drizzle uses `casing: 'snake_case'` at runtime and in `apps/api/drizzle.config.ts` ([ADR 0004](adr/0004-postgresql-primary-database.md), [ADR 0005](adr/0005-drizzle-orm.md)).
 
-- **Implemented (Phase 1):** `schema.ts` is intentionally empty and the empty migration journal (`apps/api/drizzle/meta/_journal.json`) is committed; `pnpm db:generate` / `db:migrate` run drizzle-kit (verified against PostgreSQL 18).
-- **Planned (Phase 2):** first tables from the [data model](data-model.md); migrations are generated SQL, reviewed and committed, never applied at API startup.
+- **Implemented (Phase 2):** `drizzle/0000_identity.sql` creates the identity and tenancy tables; `schema.ts` re-exports each module's table file. Migrations are generated SQL, reviewed and committed, never applied at API startup. CI runs `db:migrate` and `drizzle-kit check`.
+- **Implemented (Phase 2):** integration tests use `TEST_DATABASE_URL`, refuse any database whose name does not end in `_test`, migrate it once per run and truncate between tests.
 - **Planned (Phase 8):** migrations run as a one-off job before rollout ([deployment](deployment.md)).
 
 ### 5.6 Graceful shutdown
@@ -172,10 +173,11 @@ Arbitrary messages may contain internals, so they are replaced; Phase 2 adds an 
 
 ## 6. Dashboard (`apps/dashboard`)
 
-- **Feature folders:** `src/features/<name>/` holds a feature's API calls, composables and components; Phase 1 has `system-status/`.
-- **HTTP client:** `src/lib/http.ts` is the only `fetch` wrapper. `getJson(path, schema, { acceptedStatuses, signal })` prefixes `/api`, accepts listed statuses only (health accepts 200 and 503, both carry a report), parses with the schema and throws a typed `HttpError` (`network`, `status`, `invalid-response`); a foreign 5xx body such as a proxy error page counts as `status`, not contract drift.
-- **State:** composables hold small state machines. `useApiHealth` exposes `loading | ready | error`, times out after 5 s and aborts the previous request on refresh, so a stale response never wins. vue-router arrives with auth (Planned, Phase 2); a global store is Proposed only if cross-feature state appears.
-- **Same-origin `/api`:** Vite dev (5173) and preview (4173) proxy `/api/*` to `DASHBOARD_API_PROXY_TARGET`, stripping the prefix; a reverse proxy does this in production (Planned, Phase 8). One origin means no CORS and a first-party session cookie later ([ADR 0015](adr/0015-authentication-strategy.md), Proposed). The proxy rewrites `Host`, so the planned CSRF guard checks `Origin` against a `DASHBOARD_ORIGIN` allow-list, never against `Host` ([Vite server.proxy](https://vite.dev/config/server-options#server-proxy)).
+- **Feature folders:** `src/features/<name>/` holds a feature's API calls, composables and components: `system-status/`, `auth/` (API calls, session store, sign-in and registration pages) and `workspaces/` (shell, switcher, overview, members, onboarding). Shared form controls live in `src/components/`.
+- **HTTP client:** `src/lib/http.ts` is the only `fetch` wrapper. `request(method, path, { schema, body, acceptedStatuses, signal })` (and its `getJson` shorthand) prefixes `/api`, sends JSON with `credentials: 'same-origin'`, reads the `ApiError` code, message and `retry-after` from error responses, accepts listed statuses only (health accepts 200 and 503, both carry a report), parses with the schema and throws a typed `HttpError` (`network`, `status`, `invalid-response`); a foreign 5xx body such as a proxy error page counts as `status`, not contract drift.
+- **State:** composables hold small state machines. `useApiHealth` exposes `loading | ready | error`, times out after 5 s and aborts the previous request on refresh, so a stale response never wins. The session store (`features/auth/session.ts`) is the only cross-feature state: `unknown | anonymous | authenticated { user, workspaces }`, loaded once from `GET /v1/auth/session` and shared by concurrent callers. It never holds the token, which lives only in the HttpOnly cookie. No Pinia: one store did not justify it.
+- **Routing (Implemented, Phase 2):** vue-router with one `beforeEach` guard. Routes are marked `requiresAuth` or `guestOnly`; signed-out users go to `/login?redirect=…` (only same-app paths are honoured, so the parameter cannot become an open redirect), and `/` resolves to the first workspace or to onboarding. `/status` stays public.
+- **Same-origin `/api`:** Vite dev (5173) and preview (4173) proxy `/api/*` to `DASHBOARD_API_PROXY_TARGET`, stripping the prefix; a reverse proxy does this in production (Planned, Phase 8). One origin means no CORS and a first-party session cookie ([ADR 0015](adr/0015-authentication-strategy.md)). The proxy rewrites `Host`, so the CSRF guard checks `Origin` against a `DASHBOARD_ORIGIN` allow-list, never against `Host` ([Vite server.proxy](https://vite.dev/config/server-options#server-proxy)).
 
 ## 7. Extension (`apps/extension`)
 
@@ -209,7 +211,7 @@ The service worker and the content script share one shape: `index.ts` registers 
 | Target pages             | Static content script on `http://localhost:5173/*` and `http://localhost:4173/*` (the local dashboard as stand-in)                                                                            | Phase 4: `optional_host_permissions`, `permissions.request` per application origin, `scripting.registerContentScripts` |
 | Web pages → extension    | none (no `externally_connectable`)                                                                                                                                                            | Phase 4: exact dashboard origin only                                                                                   |
 | Web-accessible resources | none, so pages cannot probe extension URLs                                                                                                                                                    | Only if needed, with `use_dynamic_url: true`                                                                           |
-| `minimum_chrome_version` | 120                                                                                                                                                                                           | At least 140 in Phase 4 (`storage.local.setAccessLevel`)                                                               |
+| `minimum_chrome_version` | 120                                                                                                                                                                                           | Raised only for a specific API, documented with it (`storage.local.setAccessLevel` does not need it: Chrome 102+)      |
 | Avoided                  | `tabs`, `webNavigation`, `<all_urls>`                                                                                                                                                         | Navigation API in the content script instead of the "Read your browsing history" warning                               |
 
 A pattern without a port matches every port ([match patterns](https://developer.chrome.com/docs/extensions/develop/concepts/match-patterns)), and content-script matches grant host access just like `host_permissions`, so both are pinned to exact origins: the effective grant is the API and the two dashboard origins. Enterprise force-install is the planned corporate path (R-03, R-19).
@@ -240,7 +242,7 @@ Both use `emptyOutDir: false` so one watch rebuild cannot delete the other's out
 
 | Channel                          | Transport                                                                       | Validation and trust                                                        | Status                                                                          |
 | -------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Dashboard → API                  | `fetch` to same-origin `/api/*`, proxied                                        | Shared schemas both sides; cookie session from Phase 2                      | Implemented (Phase 1): `GET /health`                                            |
+| Dashboard → API                  | `fetch` to same-origin `/api/*`, proxied                                        | Shared schemas both sides; HttpOnly session cookie, CSRF guard              | Implemented: health (Phase 1), auth and workspaces (Phase 2)                    |
 | Popup → service worker           | `chrome.runtime.sendMessage`                                                    | zod, `sender.id`, sender context                                            | Implemented (Phase 1): `api.health.get`                                         |
 | Content script → service worker  | `chrome.runtime.sendMessage`                                                    | Same, as untrusted input                                                    | Implemented: `api.health.get`. Planned: guides for `sender.origin`, events      |
 | Popup / SW → content script      | `chrome.tabs.sendMessage(tabId, message)`                                       | zod, `sender.id`; missing receiver is an expected state                     | Implemented: `page.ping`. Planned (Phase 6): `frameId` / `documentId` targeting |
@@ -376,24 +378,24 @@ sequenceDiagram
 
 **Implemented (Phase 1).** `packages/shared` defines the health reports, the `ApiError` envelope and its code enum. `healthReportSchema` is checked three times: as the API response schema, in the dashboard's `getJson`, and in the service worker after `fetch`. Extension messages use zod discriminated unions (`apps/extension/src/messaging/protocol.ts`) and return `{ ok: true, data } | { ok: false, error }`, because thrown errors do not cross message boundaries usefully. Next: [data model](data-model.md), [API](api.md).
 
-**Contract evolution rules** (Proposed, effective with the first `/v1` routes in Phase 2):
+**Contract evolution rules** (in effect since the first `/v1` routes in Phase 2):
 
 - **Additive within a version.** New optional fields and endpoints are safe: `z.object` strips unknown keys, so older clients ignore new fields. New enum values break clients that parse with `z.enum`, so they count as breaking unless the field is declared open.
 - **Breaking changes get a new route version** (`/v2` beside `/v1`); health stays unversioned.
 - **Extension version skew.** Chrome updates extensions lazily and enterprises can pin versions, so the API keeps serving the previous extension release. The dashboard ships with the API and has no skew.
 - **Versioned stored documents.** `TargetDescriptor` and rich-text step bodies carry a `version` checked by a discriminated union; unknown versions are rejected and readers for all stored versions are kept.
 
-### 9.1 PostgreSQL model (Proposed, first migration Phase 2)
+### 9.1 PostgreSQL model
 
-No table exists yet: `apps/api/src/infrastructure/database/schema.ts` is intentionally empty. The [data model](data-model.md) specifies every table; each arrives with the phase that needs it and belongs to one module, the only one that reads or writes it (section 5.2).
+The identity and tenancy tables exist since Phase 2; the rest of the [data model](data-model.md) is Proposed and arrives with the phase that needs it. Each table belongs to one module, the only one that reads or writes it (section 5.2).
 
-| Group          | Tables                                                                    | Owning module            | Phase             |
-| -------------- | ------------------------------------------------------------------------- | ------------------------ | ----------------- |
-| Identity       | `users`, `sessions`                                                       | `auth`                   | Planned (Phase 2) |
-| Tenancy        | `workspaces`, `workspace_members`                                         | `workspaces`             | Planned (Phase 2) |
-| Content        | `applications`, `guides`, `guide_steps`, `guide_versions`                 | `applications`, `guides` | Planned (Phase 3) |
-| Extension auth | `extension_grants`, `extension_refresh_tokens`, `extension_access_tokens` | `extension`              | Planned (Phase 4) |
-| Analytics      | `guide_runs`, `guide_events`                                              | `analytics`              | Planned (Phase 7) |
+| Group          | Tables                                                                    | Owning module            | Phase                 |
+| -------------- | ------------------------------------------------------------------------- | ------------------------ | --------------------- |
+| Identity       | `users`, `sessions`                                                       | `auth`                   | Implemented (Phase 2) |
+| Tenancy        | `workspaces`, `workspace_members`                                         | `workspaces`             | Implemented (Phase 2) |
+| Content        | `applications`, `guides`, `guide_steps`, `guide_versions`                 | `applications`, `guides` | Planned (Phase 3)     |
+| Extension auth | `extension_grants`, `extension_refresh_tokens`, `extension_access_tokens` | `extension`              | Planned (Phase 4)     |
+| Analytics      | `guide_runs`, `guide_events`                                              | `analytics`              | Planned (Phase 7)     |
 
 Keys default to PostgreSQL 18's built-in `uuidv7()` (time-ordered, so inserts stay at the right edge of the index), which makes PostgreSQL 18 the minimum server version; times are `timestamptz`. Target descriptors, step bodies and published snapshots are JSONB documents with a `version` field validated by zod in `packages/shared`. Authors edit mutable drafts (`guides`, `guide_steps`); publishing copies them into an immutable `guide_versions.snapshot`, which players read and runs reference. Tables queried by tenant carry `workspace_id`, repositories require a `workspaceId`, and composite foreign keys (for example `guides (workspace_id, application_id)` → `applications (workspace_id, id)`) make those cross-tenant references impossible in the database (`guide_runs` → `guide_versions` is the documented exception, enforced by the analytics service); row-level security is Proposed for later (R-17). Rationale and rejected alternatives: [data model](data-model.md#3-design-decisions-proposed).
 
@@ -420,7 +422,7 @@ flowchart LR
   cs -- "validated messages, no secrets back" --> sw
   ext --> sw
   sw -- "host permission, later bearer token" --> api
-  dash -- "same-origin, later session cookie" --> api
+  dash -- "same-origin, HttpOnly session cookie" --> api
   api --> db
 ```
 
@@ -429,34 +431,37 @@ flowchart LR
 - **No credentials in content scripts or pages.** None exist yet, and the worker fetches with `credentials: 'omit'`. Planned (Phase 4): access token in `chrome.storage.session`, refresh token in `chrome.storage.local` restricted to trusted contexts, no "get token" message.
 - **CSP and no remote code.** Extension pages run under the default MV3 CSP (`script-src 'self'`), so Vue templates are precompiled. Planned (Phase 5): `z.config({ jitless: true })` in extension entry points, because zod 4 otherwise probes `new Function`, which that CSP blocks and reports. The page's `style-src` does not govern constructable stylesheets and its Trusted Types do not apply to the isolated world; MAIN-world code would lose both (R-10).
 - **Guide content (Planned, Phases 3–6; R-11).** Step bodies are a restricted rich-text AST validated by zod, never HTML, rendered with `createElement` and `textContent`; links must be `https:` with `rel="noopener noreferrer"`. `innerHTML` and `v-html` are banned in injected UI because event-handler attributes created by a content script compile in the page's main world, turning author HTML into stored XSS inside the customer's app.
-- **API.** Helmet defaults; no CORS plugin (same-origin dashboard, host-permitted worker). Phase 2 adds an `Origin` / `Sec-Fetch-Site` guard on unsafe cookie requests and auth rate limits ([ADR 0015](adr/0015-authentication-strategy.md), Proposed).
+- **API.** Helmet defaults; no CORS plugin (same-origin dashboard, host-permitted worker); JSON bodies only. Implemented (Phase 2, [ADR 0015](adr/0015-authentication-strategy.md)): an `Origin` / `Sec-Fetch-Site` guard on unsafe requests, rate limits on login and registration, `no-store` on every `/v1` response.
+- **Sessions (Implemented, Phase 2).** Passwords are stored only as argon2id hashes. The session token is 32 random bytes in an `HttpOnly; Secure; SameSite=Strict; Path=/` cookie (`__Host-` prefixed in production); the database stores its SHA-256 hash. Sessions expire after 30 min idle or 8 h, are revoked on logout, and a login revokes the session the browser presented before. The dashboard never sees the token: no `localStorage`, no JavaScript-readable cookie, no JWT.
+- **Tenant isolation (Implemented, Phase 2).** Every workspace route checks membership first; a non-member gets the same 404 as for a missing workspace, a member with too low a role gets 403. Member changes lock the workspace row so concurrent requests cannot remove its last owner.
 - **Secrets.** `.env` is git-ignored and `.env.example` holds local-only defaults (`contextlayer`/`contextlayer`); credential headers are redacted; PostgreSQL binds to `127.0.0.1`. Anything baked into the extension is public: today only the API origin.
 
 ## 11. Cross-cutting concerns
 
-- **Configuration.** One root `.env`, validated by the API at startup; the extension bakes `EXTENSION_API_BASE_URL` in at build time, the dashboard bakes nothing. `NODE_ENV` is deliberately absent: Vite reads `.env`, and a `NODE_ENV` there would turn production builds into development builds. Planned (Phase 4): `DASHBOARD_ORIGIN`, `EXTENSION_ID`.
+- **Configuration.** One root `.env`, validated by the API at startup; the extension bakes `EXTENSION_API_BASE_URL` in at build time, the dashboard bakes nothing. `NODE_ENV` is deliberately absent: Vite reads `.env`, and a `NODE_ENV` there would turn production builds into development builds. Implemented (Phase 2): `DASHBOARD_ORIGIN` (CSRF allow-list, required in production), session lifetimes, auth rate limits, `TRUST_PROXY`, `TEST_DATABASE_URL`. Planned (Phase 4): `EXTENSION_ID`.
 - **Observability.** Implemented: request ids in API logs, `x-request-id` and every error body, so a user-visible error maps to a log line; extension contexts log to DevTools with a `[ContextLayer]` prefix. Planned (Phase 8): metrics and tracing.
 - **Performance budgets (R-15).** `content.js` is about 89 kB (26 kB gzip), mostly zod, and is injected into every matching page: recorded tech debt. Options: `zod/mini` or hand-written guards, and framework-free in-page UI unless a feature justifies Vue ([ADR 0006](adr/0006-vue-3-frontend-framework.md)). Proposed: a CI size check (Phase 8). Timeouts are short by design (2 s probe, 5 s fetch, 5 s pool connect).
-- **Accessibility.** Implemented: live regions and `role="alert"` on the status card, `role="status"` on the toast, decorative dots hidden from assistive technology, an axe audit with 0 violations. Planned (Phase 6, R-16): a non-modal player card with an announcer, no focus stealing, Esc to dismiss, reduced motion.
+- **Accessibility.** Implemented: live regions and `role="alert"` on the status card, `role="status"` on the toast, decorative dots hidden from assistive technology; labelled form fields with `aria-invalid` and `aria-describedby` errors, `role="alert"` for form errors and a polite live region for member changes (Phase 2); axe audits with 0 violations on the status, sign-in, registration, onboarding, overview and members screens. Planned (Phase 6, R-16): a non-modal player card with an announcer, no focus stealing, Esc to dismiss, reduced motion.
 - **Error handling.** One shape per boundary (`ApiError`, `HttpError`, `MessageResult`); expected states such as a tab without a content script are results, not exceptions.
 
 ## 12. Testing strategy
 
-| Layer                | Tool                                    | Covers today                                                                                                 | Tests |
-| -------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----- |
-| Unit: contracts      | Vitest (Node)                           | Shared schemas accept valid, reject invalid payloads                                                         | 6     |
-| Unit + HTTP: API     | Vitest, `app.inject()`, fakes           | Config, 200/503 health, liveness, `x-request-id`, error envelopes, stalled-database ping                     | 17    |
-| Component: UI kit    | Vitest, jsdom, Vue Test Utils           | `StatusBadge` label, tones, hidden dot                                                                       | 3     |
-| Component: dashboard | Vitest, jsdom                           | `getJson` statuses, drift, foreign 5xx, network errors; status card; timeout, stale results                  | 12    |
-| Unit: extension      | Vitest, jsdom                           | Sender classification, service-worker router, content handler, manifest and origin-pattern policy            | 18    |
-| E2E: dashboard       | Playwright, built preview + built API   | Real status, mocked 503, aborted request, re-check, axe audit                                                | 5     |
-| E2E: extension       | Playwright, unpacked `dist` in Chromium | Service worker, popup → SW → API, missing content script, content → SW → API, lazy closed host, hostile page | 6     |
+| Layer                | Tool                                    | Covers today                                                                                                                       | Tests |
+| -------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| Unit: contracts      | Vitest (Node)                           | Shared schemas accept valid, reject invalid payloads                                                                               | 6     |
+| Unit + HTTP: API     | Vitest, `app.inject()`, fakes           | Config, health, error envelopes, password hashing, session tokens and cookie flags, CSRF guard decisions, log redaction            | 48    |
+| Integration: API     | Vitest, real PostgreSQL (`_test` DB)    | Register, login, logout, idle and absolute expiry, revocation, CSRF, rate limits, repositories, roles, tenant matrix               | 51    |
+| Component: UI kit    | Vitest, jsdom, Vue Test Utils           | `StatusBadge` label, tones, hidden dot                                                                                             | 3     |
+| Component: dashboard | Vitest, jsdom, Vue Test Utils           | HTTP client and error messages, session store, route guards and safe redirects, sign-in and registration forms, workspace switcher | 49    |
+| Unit: extension      | Vitest, jsdom                           | Sender classification, service-worker router, content handler, manifest and origin-pattern policy                                  | 18    |
+| E2E: dashboard       | Playwright, built preview + built API   | Register → onboarding → dashboard → sign out → sign in, wrong credentials, form validation, status page; axe on every screen       | 8     |
+| E2E: extension       | Playwright, unpacked `dist` in Chromium | Service worker, popup → SW → API, missing content script, content → SW → API, lazy closed host, hostile page                       | 6     |
 
-`pnpm test` runs the unit and component tests (56 at commit `21fa0ae`; `pnpm test` is the source of truth) in one Vitest process without services; `pnpm test:e2e` builds first and needs PostgreSQL; on CI it always starts the built servers, while locally Playwright reuses any server already listening (for example `pnpm dev` on :3000, which runs the API from source). Branded Chrome ignores `--load-extension` since Chrome 137, hence Playwright's bundled Chromium ([docs](https://playwright.dev/docs/chrome-extensions)). Gaps: tests on real PostgreSQL and CI (Planned, Phase 2), API contract tests (Phase 3), extension fixtures for strict CSP, SPA navigation, shadow DOM, iframes and service-worker termination (Phases 4–6).
+`pnpm test` runs the unit, component and integration tests (175 at the end of Phase 2; `pnpm test` is the source of truth) in one Vitest run and needs PostgreSQL for the integration project; `pnpm test:e2e` builds first and needs a migrated database; on CI it always starts the built servers, while locally Playwright reuses any server already listening (for example `pnpm dev` on :3000, which runs the API from source). CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) runs every check on pull requests and pushes to `main`. Branded Chrome ignores `--load-extension` since Chrome 137, hence Playwright's bundled Chromium ([docs](https://playwright.dev/docs/chrome-extensions)). Gaps: API contract tests (Phase 3), cookie behaviour outside Chromium, extension fixtures for strict CSP, SPA navigation, shadow DOM, iframes and service-worker termination (Phases 4–6).
 
 ## 13. Local development
 
-Setup, commands, ports and troubleshooting are in the [README](../README.md): `cp .env.example .env`, `pnpm install`, `docker compose up -d`, `pnpm dev`, then load `apps/extension/dist` unpacked. Rationale: [ADR 0008](adr/0008-local-first-development.md).
+Setup, commands, ports and troubleshooting are in the [README](../README.md): `cp .env.example .env`, `pnpm install`, `docker compose up -d`, `pnpm db:migrate`, `pnpm dev`, then load `apps/extension/dist` unpacked. Rationale: [ADR 0008](adr/0008-local-first-development.md).
 
 ## 14. Future evolution
 

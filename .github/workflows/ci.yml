@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: contextlayer
+          POSTGRES_PASSWORD: contextlayer
+          POSTGRES_DB: contextlayer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contextlayer -d contextlayer"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Local, throwaway credentials of the service container above: no secrets needed.
+    env:
+      DATABASE_URL: postgres://contextlayer:contextlayer@localhost:5432/contextlayer
+      TEST_DATABASE_URL: postgres://contextlayer:contextlayer@localhost:5432/contextlayer_test
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # pnpm comes from the `packageManager` field, exactly as on a developer machine.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Vite reads the root .env too; the example holds the same local defaults.
+      - name: Create .env
+        run: cp .env.example .env
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Migrate the database
+        run: pnpm db:migrate
+
+      # Catches conflicting migration snapshots, e.g. two branches that both generated 0001.
+      - name: Check the migration history
+        run: pnpm --filter @contextlayer/api db:check
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @contextlayer/dashboard exec playwright install --with-deps chromium
+
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @contextlayer/dashboard exec playwright install-deps chromium
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - name: Upload Playwright reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-reports
+          path: apps/*/playwright-report/
+          retention-days: 7

@@ -59,7 +59,7 @@ Negative / trade-offs:
 
 Follow-ups:
 
-- **Planned (Phase 2):** first migration (`users`, `sessions`, `workspaces`, `workspace_members`) and a seed script.
+- **Implemented (Phase 2):** first migration (`users`, `sessions`, `workspaces`, `workspace_members`), verified from an empty volume on PostgreSQL 18.6. The seed script was dropped (see [roadmap](../roadmap.md)).
 - **Proposed:** row-level security as a second layer behind repository-level `workspace_id` filtering (R-17).
 - **Planned (Phase 8):** backups and a restore drill.
 

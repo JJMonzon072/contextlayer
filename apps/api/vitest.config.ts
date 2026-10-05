@@ -9,5 +9,7 @@ export default defineProject({
   test: {
     name: 'api',
     environment: 'node',
+    // Unit tests only; test/integration runs in its own project (vitest.integration.config.ts).
+    include: ['test/*.test.ts'],
   },
 })

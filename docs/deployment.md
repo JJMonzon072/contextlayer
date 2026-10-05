@@ -50,7 +50,7 @@ flowchart LR
 - **Dashboard origin.** The proxy serves the Vite build and forwards `/api/*` with the prefix stripped, like the Vite proxy in development, so session cookies stay first-party and the API needs no CORS ([ADR 0015](adr/0015-authentication-strategy.md), Proposed). With vue-router (Phase 2), unknown paths fall back to `index.html`.
 - **Extension API origin (Proposed).** The build accepts only a bare origin for `EXTENSION_API_BASE_URL` (`parseApiBaseUrl()` in `apps/extension/manifest.config.ts` rejects paths, queries and fragments) and the service worker requests root paths, so the API must answer at an origin root. A dedicated `api.example.com` keeps `host_permissions` off the dashboard, and the host-only `__Host-` cookie never reaches it. Alternative: path-prefix support to call `https://app.example.com/api`; one hostname fewer, but host access to the dashboard.
 - **Proxy (Proposed).** Caddy for automatic ACME certificates; Nginx or Traefik work equally.
-- **Scaling.** The Phase 2 rate-limit store is in-memory per process, so a second replica needs a shared store. `trustProxy` must name the proxy (Planned, Phase 2) and the API must be reachable only through it, or `X-Forwarded-For` can be spoofed.
+- **Scaling.** The Phase 2 rate-limit store is in-memory per process, so a second replica needs a shared store. `TRUST_PROXY` must name the proxy (Implemented, Phase 2) and the API must be reachable only through it, or `X-Forwarded-For` can be spoofed.
 
 ```caddyfile
 app.example.com {
@@ -91,16 +91,16 @@ The shell variable wins over `.env` (Vite's `loadEnv`). Forgetting it ships `htt
 
 ## Configuration and secrets per environment
 
-| Variable                 | Read by                                           | Local                                                     | Production                    | Status                     |
-| ------------------------ | ------------------------------------------------- | --------------------------------------------------------- | ----------------------------- | -------------------------- |
-| `NODE_ENV`, `LOG_LEVEL`  | API                                               | `development`, `info`                                     | `production`, `info`          | Implemented (Phase 1)      |
-| `API_HOST`, `API_PORT`   | API                                               | `localhost`, `3000`                                       | `0.0.0.0`, `3000`             | Implemented (Phase 1)      |
-| `DATABASE_URL`           | API, drizzle-kit                                  | Compose database                                          | secret, TLS                   | Implemented (Phase 1)      |
-| `EXTENSION_API_BASE_URL` | extension build                                   | `http://localhost:3000`                                   | `https://api.example.com`     | Implemented (Phase 1)      |
-| `DASHBOARD_ORIGIN`       | CSRF guard (allow-list); `externally_connectable` | `http://localhost:5173`, `http://localhost:4173`          | `https://app.example.com`     | Planned (Phase 2, Phase 4) |
-| Session cookie settings  | API                                               | `cl_session`, `Secure` (no `__Host-` prefix on localhost) | `__Host-cl_session`, `Secure` | Planned (Phase 2)          |
-| Trusted proxy            | API `trustProxy`                                  | off                                                       | proxy address or hops         | Planned (Phase 2)          |
-| `EXTENSION_ID`           | dashboard build, API                              | ID from the dev key                                       | per environment               | Planned (Phase 4)          |
+| Variable                 | Read by                                           | Local                                                     | Production                    | Status                                                                |
+| ------------------------ | ------------------------------------------------- | --------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------- |
+| `NODE_ENV`, `LOG_LEVEL`  | API                                               | `development`, `info`                                     | `production`, `info`          | Implemented (Phase 1)                                                 |
+| `API_HOST`, `API_PORT`   | API                                               | `localhost`, `3000`                                       | `0.0.0.0`, `3000`             | Implemented (Phase 1)                                                 |
+| `DATABASE_URL`           | API, drizzle-kit                                  | Compose database                                          | secret, TLS                   | Implemented (Phase 1)                                                 |
+| `EXTENSION_API_BASE_URL` | extension build                                   | `http://localhost:3000`                                   | `https://api.example.com`     | Implemented (Phase 1)                                                 |
+| `DASHBOARD_ORIGIN`       | CSRF guard (allow-list); `externally_connectable` | `http://localhost:5173`, `http://localhost:4173`          | `https://app.example.com`     | Implemented (Phase 2); Planned (Phase 4) for `externally_connectable` |
+| Session cookie settings  | API                                               | `cl_session`, `Secure` (no `__Host-` prefix on localhost) | `__Host-cl_session`, `Secure` | Implemented (Phase 2)                                                 |
+| `TRUST_PROXY`            | API `trustProxy`                                  | off                                                       | proxy addresses or CIDRs      | Implemented (Phase 2)                                                 |
+| `EXTENSION_ID`           | dashboard build, API                              | ID from the dev key                                       | per environment               | Planned (Phase 4)                                                     |
 
 `POSTGRES_*` and `DASHBOARD_API_PROXY_TARGET` are local-only; planned names are Proposed. The only runtime secret today is `DATABASE_URL` (Phase 2 sessions add none: tokens are random and stored only as hashes). The extension's private key (generated in Phase 4) is a release secret, not a runtime one: no server reads it, and it is needed only to sign self-hosted CRXs (Phase 8). Secrets live in the platform's store (see [Hosting options](#hosting-options)) or a root-only env file on a VM; the code only reads environment variables, so changing stores changes no code.
 

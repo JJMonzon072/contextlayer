@@ -52,7 +52,7 @@ Constraints: strict TypeScript everywhere, a team of one, components shared betw
 
 ### Follow-ups
 
-- **Planned (Phase 2):** `vue-router` and authentication screens in the dashboard. **Proposed:** add a global store such as Pinia only when feature composables are no longer enough.
+- **Implemented (Phase 2):** `vue-router` and authentication screens in the dashboard; the session is a small reactive store, without Pinia. **Proposed:** add a global store such as Pinia only when feature composables are no longer enough.
 - **Planned (Phase 5):** the guide builder as a Vue side-panel page that reuses `packages/ui`.
 - **Planned (Phase 6):** choose Vue or vanilla DOM for the player against a measured size budget. If Vue wins, add `vue()` to the content build (and `tailwindcss()` once a shadow-safe CSS pipeline exists).
 
