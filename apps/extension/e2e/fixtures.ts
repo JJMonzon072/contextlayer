@@ -27,7 +27,11 @@ import { E2E_OUT_DIR } from './environment'
  */
 export interface ExtensionBrowser {
   context: BrowserContext
-  /** Browser-level CDP connection to the same Chromium. */
+  /**
+   * A new browser-level CDP connection to the same Chromium. A connection only
+   * lists the extension popup if the popup existed when it connected, so each
+   * use connects again; all of them end with the browser.
+   */
   cdp: () => Promise<Browser>
   close: () => Promise<void>
 }
@@ -52,14 +56,20 @@ export async function launchBrowser(profile: string): Promise<ExtensionBrowser> 
       `--remote-debugging-port=${String(port)}`,
     ],
   })
-  let connection: Promise<Browser> | undefined
-  const cdp = () => (connection ??= chromium.connectOverCDP(`http://localhost:${String(port)}`))
+  const connections: Promise<Browser>[] = []
+  const cdp = () => {
+    const connection = chromium.connectOverCDP(`http://localhost:${String(port)}`)
+    connections.push(connection)
+    return connection
+  }
   return {
     context,
     cdp,
     close: async () => {
       await context.close()
-      if (connection) await (await connection).close().catch(() => undefined)
+      for (const connection of connections) {
+        await (await connection).close().catch(() => undefined)
+      }
     },
   }
 }
