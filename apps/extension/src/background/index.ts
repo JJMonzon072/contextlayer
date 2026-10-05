@@ -7,6 +7,8 @@
  * handler awaits the storage restriction before touching credentials. Dynamic
  * `import()` is not supported in extension service workers.
  */
+import '../lib/zod-jitless'
+
 import { originMatchPattern } from '@contextlayer/shared'
 
 import { API_BASE_URL, DASHBOARD_ORIGIN, EXTENSION_VERSION } from '../config'
@@ -15,6 +17,7 @@ import { CONNECTION_CHANGED, failure } from '../messaging/protocol'
 import { createApiClient, fetchApiHealth } from './api-client'
 import { createWorkerCore } from './core'
 import { handleBackgroundMessage } from './handle-message'
+import { CONTENT_SCRIPT_FILES } from '../content-files'
 import { createSiteAccess, type SiteChrome } from './site-access'
 import { chromeStorage } from './storage'
 
@@ -33,7 +36,7 @@ const siteChrome: SiteChrome = {
       scripts.map(({ id, pattern }) => ({
         id,
         matches: [pattern],
-        js: ['content.js'],
+        js: [...CONTENT_SCRIPT_FILES],
         runAt: 'document_idle',
         // Top frames only: guides are for the application, not for embedded widgets.
         allFrames: false,
@@ -46,7 +49,7 @@ const siteChrome: SiteChrome = {
       tab.id === undefined ? [] : [tab.id],
     ),
   inject: async (tabId) => {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] })
+    await chrome.scripting.executeScript({ target: { tabId }, files: [...CONTENT_SCRIPT_FILES] })
   },
   sendToTab: async (tabId, message, documentId) => {
     await chrome.tabs.sendMessage(tabId, message, { documentId })

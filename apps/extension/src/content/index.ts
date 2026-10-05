@@ -15,9 +15,9 @@
  *    fails, and removes itself.
  */
 import { EXTENSION_VERSION } from '../config'
-import { sendToBackground } from '../messaging/background-client'
-import { failure, helloResultSchema } from '../messaging/protocol'
+import { failure } from '../messaging/result'
 import { handleContentMessage } from './handle-message'
+import { askWorker, readHelloAnswer } from './messages'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
 
 type ContentState = 'starting' | 'active' | 'inactive' | 'stopped'
@@ -93,9 +93,9 @@ function start(instance: ContentInstance): void {
   document.addEventListener('visibilitychange', checkContext)
   window.addEventListener('pageshow', checkContext)
 
-  void sendToBackground({ type: 'page.hello' }, helloResultSchema).then((result) => {
+  void askWorker({ type: 'page.hello' }).then((answer) => {
     if (instance.state !== 'starting') return
-    if (result.ok && result.data.active) instance.state = 'active'
+    if (readHelloAnswer(answer) === true) instance.state = 'active'
     // Not authorized, or the worker is unreachable (orphaned copy): stay silent.
     else stop(contextAlive() ? 'inactive' : 'stopped')
   })

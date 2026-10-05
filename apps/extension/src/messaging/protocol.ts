@@ -12,13 +12,10 @@
 import { healthReportSchema, publishedGuideSummarySchema } from '@contextlayer/shared'
 import { z } from 'zod'
 
-export const MESSAGE_ERROR_CODES = [
-  'BAD_REQUEST',
-  'FORBIDDEN',
-  'API_UNREACHABLE',
-  'NOT_AVAILABLE',
-  'INTERNAL_ERROR',
-] as const
+import { MESSAGE_ERROR_CODES } from './result'
+
+export { failure, MESSAGE_ERROR_CODES, success } from './result'
+export type { MessageError, MessageResult } from './result'
 
 export const messageErrorSchema = z.object({
   code: z.enum(MESSAGE_ERROR_CODES),
@@ -34,17 +31,6 @@ export function messageResultSchema<T extends z.ZodType>(data: T) {
     z.object({ ok: z.literal(true), data }),
     z.object({ ok: z.literal(false), error: messageErrorSchema }),
   ])
-}
-
-export type MessageError = z.infer<typeof messageErrorSchema>
-export type MessageResult<T> = { ok: true; data: T } | { ok: false; error: MessageError }
-
-export function success<T>(data: T): MessageResult<T> {
-  return { ok: true, data }
-}
-
-export function failure(code: MessageError['code'], message: string): MessageResult<never> {
-  return { ok: false, error: { code, message } }
 }
 
 // --- Requests handled by the background service worker ----------------------

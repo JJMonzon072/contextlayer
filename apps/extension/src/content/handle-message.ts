@@ -1,10 +1,12 @@
-import {
-  contentRequestSchema,
-  failure,
-  success,
-  type MessageResult,
-  type PageInfo,
-} from '../messaging/protocol'
+import { failure, success, type MessageResult } from '../messaging/result'
+import { readContentRequest } from './messages'
+
+/** What a page ping answers (mirrors `pageInfoSchema` in the protocol). */
+export interface PageInfo {
+  url: string
+  title: string
+  extensionVersion: string
+}
 
 export interface ContentDeps {
   extensionVersion: string
@@ -24,12 +26,12 @@ export function handleContentMessage(
   message: unknown,
   deps: ContentDeps,
 ): MessageResult<PageInfo | null> {
-  const request = contentRequestSchema.safeParse(message)
-  if (!request.success) {
+  const request = readContentRequest(message)
+  if (!request) {
     return failure('BAD_REQUEST', 'Unsupported message.')
   }
 
-  switch (request.data.type) {
+  switch (request.type) {
     case 'page.deactivate':
       deps.stop()
       return success(null)

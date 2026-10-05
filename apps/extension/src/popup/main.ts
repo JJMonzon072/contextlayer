@@ -1,3 +1,5 @@
+import '../lib/zod-jitless'
+
 import { createApp } from 'vue'
 
 import App from './App.vue'
