@@ -164,7 +164,7 @@ Risks addressed: R-04 (versioned descriptor contract), R-11 (content validated o
 - [x] Stable extension id from a committed development public key; production builds pass `EXTENSION_PUBLIC_KEY` and `EXTENSION_ID` (checked against each other).
 - [x] Service worker: PKCE attempt in `storage.session` before the dashboard opens; the handoff is accepted only from the top frame of the dashboard tab it opened, on the exact dashboard origin, with the matching `state`, once; single-flight refresh, one retry, no loops; network errors keep the credentials; late refresh answers are dropped; refresh token in `storage.local` only after `setAccessLevel(TRUSTED_CONTEXTS)`.
 - [x] Dashboard `/extension/connect` (login keeps the link, explicit workspace choice, confirmation, success only after the extension confirms) and "Connected browsers" (list, revoke with confirmation, revocation reasons).
-- [x] Popup: disconnected, connecting, connected, API unreachable, API access withheld, connection ended; connect, switch workspace, cancel, disconnect (reports when the server could not confirm).
+- [x] Popup: disconnected, connecting, connected, API unreachable, API access withheld, connection ended; connect, switch workspace, cancel, disconnect (reports when the server could not confirm); the connection's applications with their origins, each On or Off in this browser.
 
 4d — Site access ([ADR 0017](adr/0017-per-application-site-access.md)):
 
@@ -182,13 +182,13 @@ Changed from the plan:
 - **Withheld API access is detected and explained** in the popup; the CORS fallback for the extension origin stays Proposed.
 - **End-to-end tests run on their own database** (`contextlayer_e2e`, created, migrated and emptied by `apps/api/scripts/e2e-server.ts`, API on :3100) with every server started by Playwright and no traces (they would record credentials). The extension suite uses an e2e build that pre-grants one stand-in customer site, because Chrome's permission prompt cannot be answered under automation; the prompt is a manual check ([ADR 0017](adr/0017-per-application-site-access.md)).
 
-Verification (at commit `19ca0a6`):
+Verification (at commit `bc3183a`):
 
 - `pnpm format:check`, `pnpm typecheck`, `pnpm lint` and `pnpm build` pass.
-- `pnpm test` runs 501 tests in 53 files:
+- `pnpm test` runs 503 tests in 53 files:
   - 73 shared contract tests;
   - 178 API integration tests on PostgreSQL 18, including code expiry and replay, PKCE mismatch, strict rotation with racing refreshes, revocation reasons, per-route authentication (a bearer never falls back to a cookie, a cookie route refuses any `Authorization`), and published guides isolated between two workspaces that register the same origin;
-  - 84 extension tests (handoff sender matrix, connection manager, refresh, site access with a fake Chrome) and 108 dashboard tests.
+  - 86 extension tests (handoff sender matrix, connection manager, refresh, site access with a fake Chrome) and 108 dashboard tests.
 - `pnpm test:e2e` passes dashboard 12/12 and extension 22/22 in Playwright's Chromium 153.0.8010.12, on the dedicated `contextlayer_e2e` database; the extension suite also passed `--repeat-each=3` (66/66). axe: 0 violations on the popup and the connect page.
 - Migrations `0000`–`0005` apply to an empty database (throwaway, dropped afterwards) and `drizzle-kit check` is clean.
 - Manual check of Chrome's own permission prompt: documented in [ADR 0017](adr/0017-per-application-site-access.md), not run by the suites.
