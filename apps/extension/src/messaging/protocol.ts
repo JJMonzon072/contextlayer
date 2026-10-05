@@ -35,6 +35,12 @@ export function messageResultSchema<T extends z.ZodType>(data: T) {
 
 // --- Requests handled by the background service worker ----------------------
 
+/** How long the page waits for a click once the side panel asked for a target. */
+export const PICKER_TTL_MS = 120_000
+
+/** One capture request, created by the worker; a content script answers only that one. */
+export const captureIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)
+
 export const backgroundRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('api.health.get') }),
   // Privileged: extension pages only (see ALLOWED_SENDERS in the worker).
@@ -161,6 +167,13 @@ export const contentRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('page.ping') }),
   // Sent by the worker when the site lost access: the script stops for good.
   z.strictObject({ type: z.literal('page.deactivate') }),
+  // Worker only: let the author pick an element, for this capture request.
+  z.strictObject({
+    type: z.literal('picker.start'),
+    captureId: captureIdSchema,
+    ttlMs: z.number().int().min(1_000).max(PICKER_TTL_MS),
+  }),
+  z.strictObject({ type: z.literal('picker.stop'), captureId: captureIdSchema }),
 ])
 
 export type ContentRequest = z.infer<typeof contentRequestSchema>

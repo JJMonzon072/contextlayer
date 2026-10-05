@@ -7,6 +7,8 @@ import { contentRequestSchema, helloResultSchema } from '../src/messaging/protoc
  * The content script reads messages without zod (content-script budget). These
  * cases keep its readers and the authoritative zod schemas in agreement.
  */
+const CAPTURE = 'Zk3_q-9xYt2LmN8pQ4rS'
+
 const requests: unknown[] = [
   { type: 'page.ping' },
   { type: 'page.deactivate' },
@@ -21,6 +23,22 @@ const requests: unknown[] = [
   'page.ping',
   42,
   Object.create(null) as unknown,
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: 120_000 },
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: 1_000 },
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: 999 },
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: 120_001 },
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: 1_500.5 },
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: '2000' },
+  { type: 'picker.start', captureId: CAPTURE },
+  { type: 'picker.start', captureId: CAPTURE, ttlMs: 2_000, extra: 1 },
+  { type: 'picker.start', captureId: 'short', ttlMs: 2_000 },
+  { type: 'picker.start', captureId: `${CAPTURE}!`, ttlMs: 2_000 },
+  { type: 'picker.start', captureId: 'x'.repeat(65), ttlMs: 2_000 },
+  { type: 'picker.stop', captureId: CAPTURE },
+  { type: 'picker.stop', captureId: CAPTURE, ttlMs: 2_000 },
+  { type: 'picker.stop' },
+  { type: 'picker.result', captureId: CAPTURE },
+  { type: 'page.ping', captureId: CAPTURE },
 ]
 
 const helloAnswers: unknown[] = [

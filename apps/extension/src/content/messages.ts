@@ -9,7 +9,15 @@
  */
 import { failure, type MessageResult } from '../messaging/result'
 
-export type ContentRequest = { type: 'page.ping' } | { type: 'page.deactivate' }
+export type ContentRequest =
+  | { type: 'page.ping' }
+  | { type: 'page.deactivate' }
+  | { type: 'picker.start'; captureId: string; ttlMs: number }
+  | { type: 'picker.stop'; captureId: string }
+
+/** Mirrors `PICKER_TTL_MS` and `captureIdSchema` in the protocol. */
+const PICKER_TTL_MS = 120_000
+const CAPTURE_ID = /^[A-Za-z0-9_-]{16,64}$/
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -20,8 +28,25 @@ const hasOnlyKeys = (value: Record<string, unknown>, keys: readonly string[]) =>
 
 /** A request from the extension to this content script, or undefined. */
 export function readContentRequest(value: unknown): ContentRequest | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['type'])) return undefined
-  if (value.type === 'page.ping' || value.type === 'page.deactivate') return { type: value.type }
+  if (!isRecord(value)) return undefined
+  const { type, captureId, ttlMs } = value
+  if (type === 'page.ping' || type === 'page.deactivate') {
+    return hasOnlyKeys(value, ['type']) ? { type } : undefined
+  }
+  if (typeof captureId !== 'string' || !CAPTURE_ID.test(captureId)) return undefined
+  if (type === 'picker.stop' && hasOnlyKeys(value, ['type', 'captureId'])) {
+    return { type, captureId }
+  }
+  if (
+    type === 'picker.start' &&
+    hasOnlyKeys(value, ['type', 'captureId', 'ttlMs']) &&
+    typeof ttlMs === 'number' &&
+    Number.isInteger(ttlMs) &&
+    ttlMs >= 1_000 &&
+    ttlMs <= PICKER_TTL_MS
+  ) {
+    return { type, captureId, ttlMs }
+  }
   return undefined
 }
 
