@@ -4,7 +4,7 @@ ContextLayer is a Digital Adoption Platform. A Chrome extension lets an organiza
 
 The goal is to cut training and onboarding time for business software by teaching people in context instead of in slide decks.
 
-> **Status: Phase 4 (Extension connection and site access) is complete.** The extension connects to one workspace through the dashboard (one-time code + PKCE, its own revocable tokens), and runs on a customer application only after the user turns that site on and Chrome grants it; the popup lists the site's published guides. Applications, guides and immutable published versions arrived in Phase 3; accounts, sessions, workspaces and roles in Phase 2. Picking elements in Edit Mode, the in-page player and analytics are planned in [docs/roadmap.md](docs/roadmap.md).
+> **Status: Phase 5 (Edit Mode, the guide builder) is complete.** On a registered application where ContextLayer is on, an editor opens Edit Mode from the popup: a side panel where they pick or create a guide, add steps, select the element each step points at by clicking it on the page (the page does not react to that click), review what will be stored, preview a step and save the draft; publishing stays in the dashboard. The extension connection and per-site access arrived in Phase 4, applications, guides and immutable published versions in Phase 3, accounts, workspaces and roles in Phase 2. Playing guides in the page (Phase 6) and analytics (Phase 7) are planned in [docs/roadmap.md](docs/roadmap.md).
 
 ## How it fits together
 
@@ -36,7 +36,8 @@ Within the extension, only the service worker talks to the API and holds the ext
 apps/
   api/          Fastify 5 API (modular monolith), Drizzle ORM, PostgreSQL
   dashboard/    Vue 3 + Vite + Tailwind CSS admin dashboard
-  extension/    Chrome Manifest V3 extension (service worker, content script, popup)
+  extension/    Chrome Manifest V3 extension (service worker, content script, popup, side panel)
+                demo/ holds the Edit Mode demo page (pnpm demo:site)
 packages/
   shared/       zod contracts shared by every app (types + runtime validation)
   ui/           shared Vue components and Tailwind theme tokens
@@ -100,7 +101,24 @@ Then:
 2. Register the web application you want guides on (dashboard → **Applications**, with its exact origin, for example `http://localhost:8080`) and publish a guide for it.
 3. Open that application, open the popup and click **Turn on for this site**. Chrome asks to allow access to that one site; after **Allow**, the popup lists the site's published guides (playing them arrives in Phase 6). **Turn off for this site** stops ContextLayer there and gives the access back.
 
-ContextLayer only runs on sites that are registered in the connected workspace, turned on in this browser and granted by Chrome; there are no install-time grants besides the API. After changing extension code, click the reload icon on the extension card (Developer mode must stay on, or Chrome disables an unpacked extension on reload); enabled sites are re-injected into open tabs automatically.
+ContextLayer only runs on sites that are registered in the connected workspace, turned on in this browser and granted by Chrome; there are no install-time grants besides the API.
+
+### Build a guide with Edit Mode
+
+Edit Mode needs an owner, admin or editor of the workspace (members cannot read drafts). To try it on a fictitious application instead of a real one:
+
+1. Run `pnpm demo:site`. It serves `apps/extension/demo/` only, on **http://127.0.0.1:4400** (loopback; `--port <n>` for another port), and never stops other processes; `/strict/` is the same page under a strict Content Security Policy with Trusted Types.
+2. In the dashboard, register an application with the origin `http://127.0.0.1:4400`. Open the demo page, open the popup and click **Turn on for this site**.
+3. Click **Edit Mode** in the popup. A side panel opens for that tab. Choose a guide or create one, then **Add step**, write its title and instructions, and click **Select element**: hover the page, click the element (the page's "Clicks the page received" counter must not change), review what will be saved, and click **Use this element**. **Preview** shows the step on the element; **Save draft** saves it with the revision it started from.
+4. Publish the guide from the dashboard (**open this guide there** in the panel).
+
+What to expect:
+
+- Edit Mode works on pages of the top document whose elements are in the regular DOM. Elements inside iframes or another component's shadow DOM are refused with an explanation (planned for Phase 6), as are pages ContextLayer does not run on (browser pages, files, the Chrome Web Store, sites that are not registered or turned on).
+- Text is typed in the side panel only, never in the page. The panel lists every value a target stores; personal data in visible text is redacted heuristically (emails, long numbers), not guaranteed: review it before saving.
+- Unsaved changes are kept in the browser session until you save, and offered back when you reopen the guide; they are lost when the browser closes. A guide changed elsewhere is never overwritten: Edit Mode explains the conflict and offers to load the latest version.
+- A preview needs the element selected on the current page; steps loaded from the server are not looked up on the page until the player exists (Phase 6).
+- Reloading the page pauses selection until you click **Continue on this page**. After changing extension code, click the reload icon on the extension card (Developer mode must stay on, or Chrome disables an unpacked extension on reload); enabled sites are re-injected into open tabs automatically.
 
 ## Scripts
 
@@ -116,10 +134,11 @@ ContextLayer only runs on sites that are registered in the connected workspace, 
 | `pnpm format`           | Formats the repository with Prettier (`format:check` to verify only)   |
 | `pnpm db:generate`      | Generates a SQL migration from the Drizzle schema                      |
 | `pnpm db:migrate`       | Applies pending migrations to the database in `DATABASE_URL`           |
+| `pnpm demo:site`        | Serves the Edit Mode demo page on http://127.0.0.1:4400                |
 
 ## Testing
 
-- **Unit and component tests** (Vitest): contracts, configuration, password hashing and session tokens, the CSRF guard, the dashboard HTTP client, session store, route guards, forms and workspace switcher, the extension connect page; in the extension, message routing and the sender matrix, the PKCE handoff checks, token refresh (single flight, no loops, late answers), storage placement, site access with a fake Chrome, and manifest policy. They need no running services.
+- **Unit and component tests** (Vitest): contracts, configuration, password hashing and session tokens, the CSRF guard, the dashboard HTTP client, session store, route guards, forms and workspace switcher, the extension connect page; in the extension, message routing and the sender matrix, the PKCE handoff checks, token refresh (single flight, no loops, late answers), storage placement, site access with a fake Chrome, manifest policy, and Edit Mode: target capture on jsdom pages (generated ids, hashed classes, labels and names, duplicates, special characters, privacy), the picker, the session in the worker (unsolicited, repeated, expired and other-document captures, late answers after Disconnect or a guide switch, worker restart) and the side panel's draft, save, conflict and lost-answer logic, all with controlled promises. They need no running services.
 - **API integration tests** (Vitest, `apps/api/test/integration`) run the real API against PostgreSQL:
   - Registration, login, logout, idle and absolute session expiry, revocation, CSRF and rate limits.
   - The workspace role rules; applications, guides and ordered steps, including a forced failure halfway through a step replacement that must leave the previous order intact.
@@ -133,7 +152,7 @@ ContextLayer only runs on sites that are registered in the connected workspace, 
     - The system status page: real API, a simulated 503, an unreachable API.
     - The extension connect page without the extension installed.
     - An axe audit of every screen.
-  - Extension: loads an e2e build (`dist-e2e`, pointing at the e2e servers) in Chromium and checks the stable id; the full connection through the real dashboard (login, workspace choice, approval); refused handoffs from other tabs, subframes, customer sites and with guessed or replayed state; worker restart, extension reload and browser restart; refresh rotation; a lost refresh answer ending the connection; disconnect, revocation from the dashboard and workspace switch; turning a site on from the real toolbar popup, injection into open tabs (top frames only, no duplicates), teardown when access ends, withdrawal through `chrome://extensions`, orphaned scripts after a reload; and that a content script can neither run privileged commands nor read `chrome.storage`. The e2e build pre-grants one stand-in site because Chrome's permission prompt cannot be answered under automation; the prompt itself is a manual check ([ADR 0017](docs/adr/0017-per-application-site-access.md)).
+  - Extension: loads an e2e build (`dist-e2e`, pointing at the e2e servers) in Chromium and checks the stable id; the full connection through the real dashboard (login, workspace choice, approval); refused handoffs from other tabs, subframes, customer sites and with guessed or replayed state; worker restart, extension reload and browser restart; refresh rotation; a lost refresh answer ending the connection; disconnect, revocation from the dashboard and workspace switch; turning a site on from the real toolbar popup, injection into open tabs (top frames only, no duplicates), teardown when access ends, withdrawal through `chrome://extensions`, orphaned scripts after a reload; and that a content script can neither run privileged commands nor read `chrome.storage`; Edit Mode in the real side panel opened from the real popup: three elements captured with real clicks the page never sees, reorder, save, the three v1 descriptors read back from the API, reload and reopen, preview, a positional-only warning, Escape, a strict CSP with Trusted Types without violations, a page forging messages and events, a worker stop and Disconnect during a selection, and an axe audit of the panel. The e2e build pre-grants one stand-in site because Chrome's permission prompt cannot be answered under automation; the prompt itself is a manual check ([ADR 0017](docs/adr/0017-per-application-site-access.md)).
 - **CI**: [GitHub Actions](.github/workflows/ci.yml) runs all of the above (format, typecheck, lint, migrations, unit + integration tests, build, e2e) on every pull request and on pushes to `main`, with PostgreSQL as a service container. It needs no secrets.
 
 ## Configuration

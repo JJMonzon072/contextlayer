@@ -33,10 +33,18 @@ The content script draws UI inside applications ContextLayer does not control: a
 
 Verified by the extension e2e suite (`apps/extension/e2e/site.spec.ts`, on an enabled customer site since Phase 4): the root is closed, the host's only attribute is `data-contextlayer-root`, the host disappears after the toast, and the UI still mounts on a fixture page that overrides `Element.prototype.attachShadow` and predefines `contextlayer-root`. The isolated world has its own prototypes, so the page's patch does not apply.
 
+**Implemented (Phase 5): the Edit Mode picker and preview** use the same host and root. The overlay adds a highlight box, a short label (tag and role only, never page text), a banner ("Click an element to select it…") and a preview callout with the step's title, its instructions as lines of text and a **Close preview** button, each a `popover="manual"` element in the top layer:
+
+- Everything drawn has `pointer-events: none` (the callout's button area excepted) and the picker's hit test skips the host, so the element under the pointer is always the page's.
+- Positions are set through the CSSOM (`element.style.left`), which a CSP without `'unsafe-inline'` allows; no `style` attribute and no `<style>` element.
+- The host exists only while something is shown and is removed when the picker stops, the preview closes, the session ends or the page loses access.
+- Verified in Chromium 153 (`apps/extension/e2e/edit-mode.spec.ts`) on a demo page served with `default-src 'none'; script-src 'self'; style-src 'self'; require-trusted-types-for 'script'; trusted-types 'none'`: the box is drawn with its 2 px border from the adopted sheet and the page records no `securitypolicyviolation` (a deliberate inline `<style>` added afterwards is recorded, as a control). The closed root is inspected only through CDP, which page scripts cannot use.
+
 **What isolation does not provide.** A closed shadow root isolates styles and hides the tree from casual scripts. It is not a security boundary. UI events are composed and reach page listeners retargeted to the host, page capture listeners run first, and the page can remove, cover or imitate our UI. So:
 
 - No secrets are ever rendered in the shadow root.
-- **Planned (Phase 5):** text entry for guide authoring moves to the side panel, an extension page the host cannot observe.
+- **Implemented (Phase 5):** text entry for guide authoring lives in the side panel, an extension page the host cannot observe ([ADR 0018](0018-side-panel-edit-mode.md)); the page only gets the highlight and a text-only preview.
+- **Implemented (Phase 5):** the picker ignores events with `isTrusted === false`, and blocks pointer, click, submit and key events from the page while selecting.
 - **Planned (Phase 6):** player controls check `event.isTrusted`.
 
 **Styling the larger UI.** Phase 1 uses plain CSS. Tailwind v4 utilities that rely on `@property` (shadows, rings, transforms) compute to `none` inside a shadow root (measured in Chromium 153; tailwindcss#15005). **Planned (Phase 6):** evaluate a build-time transform that turns each `@property` initial value into a declaration on `:host, *, ::before, ::after, ::backdrop` and converts rem to px. The alternative, hoisting `@property` into the page, writes to the host page's global registry and can collide with its own Tailwind.
@@ -57,7 +65,7 @@ Verified by the extension e2e suite (`apps/extension/e2e/site.spec.ts`, on an en
 
 ### Positive
 
-- The toast works on a normal and a hostile fixture page, with no permissions and no web-accessible resources. A strict-CSP fixture is Planned for Phase 5 (picker) and reused by the Phase 6 player.
+- The toast, the picker and the preview work on a normal, a hostile and a strict-CSP fixture page, with no web-accessible resources. The strict-CSP demo page is reused by the Phase 6 player.
 - The pattern (host, closed root, adopted sheet, top-layer popover) scales to the picker and the player.
 
 ### Negative and trade-offs

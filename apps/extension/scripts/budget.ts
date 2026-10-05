@@ -6,11 +6,13 @@
  *
  * Limit: 64 KiB minified. Measured at the start of Phase 5, `content.js` was
  * 105 472 bytes, about 86 % of it zod and 10 % shared schemas pulled in by the
- * message protocol; after replacing them with hand-written readers it holds
- * only ContextLayer's own code. The limit leaves room for the Phase 6 player
- * (resolution and popover) while staying well under the 100 KiB target, and it
- * is far below what zod alone would take, so reintroducing a schema library in
- * the content script fails the build.
+ * message protocol; after replacing them with hand-written readers it held
+ * only ContextLayer's own code (3 086 bytes). With the Phase 5 capture, picker
+ * and preview it is 26 267 bytes (10 098 gzip). The limit leaves room for the
+ * Phase 6 player (resolution and popover, likely of the same order as capture)
+ * while staying well under the 100 KiB target, and it is far below what zod
+ * alone would take, so reintroducing a schema library in the content script
+ * fails the build.
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'

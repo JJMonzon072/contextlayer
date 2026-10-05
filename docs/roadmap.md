@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-05: **Phases 1–4 are done; Phases 5–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-05: **Phases 1–5 are done; Phases 6–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -15,7 +15,7 @@ Status on 2026-10-05: **Phases 1–4 are done; Phases 5–8 are Planned.** A pha
 | 2     | Identity and workspaces   | Done    | 2a API + CI, 2b dashboard                       |
 | 3     | Guides API and management | Done    | 3a API, 3b dashboard                            |
 | 4     | Extension connection      | Done    | 4a spike, 4b API, 4c connection, 4d site access |
-| 5     | Edit Mode (guide builder) | Planned | none                                            |
+| 5     | Edit Mode (guide builder) | Done    | none                                            |
 | 6     | Guide player              | Planned | 6a playback, 6b dynamic pages, 6c shadow/frames |
 | 7     | Analytics                 | Planned | none                                            |
 | 8     | Hardening and delivery    | Planned | 8a packaging, 8b security/ops, 8c distribution  |
@@ -205,24 +205,39 @@ Risks addressed: R-01 (state in storage, worker restarts tested), R-02 (open tab
 
 ## Phase 5 — Edit Mode (guide builder)
 
-**Planned (Phase 5).** Depends on Phases 3 and 4. Goal: an admin picks elements on a granted application and saves a draft whose targets carry enough signals to be found again.
+**Done (Implemented, Phase 5).** Goal: an editor picks elements on a granted application and saves a draft whose targets carry enough signals to be found again.
 
-- [ ] Side panel for step list, titles and instructions, so the host page cannot observe typing.
-- [ ] Picker in the content script: hover highlight, click capture, Esc to cancel, promotion to the interactive ancestor.
-- [ ] Descriptor capture per ADR 0014 (test attributes, filtered ids, role + accessible name, labels, text, structural path, match counts) with a "weak target" warning.
-- [ ] Single-step preview; save through the service worker, which accepts privileged commands only from extension pages.
-- [ ] Content-script size budget enforced by a build test (`zod/mini` or hand-written guards); zod `jitless` mode, since the MV3 CSP blocks its `new Function` probe.
+- [x] Side panel for the guide, its steps, titles and instructions, so the host page cannot observe typing ([ADR 0018](adr/0018-side-panel-edit-mode.md)): opened from the popup's **Edit Mode** button on an active site, bound to its tab; application choice when several share the origin; open or create a guide; add, edit, reorder and delete steps; select, reselect and remove a target; inline confirmations; Exit.
+- [x] Picker in the content script: hover highlight with a tag/role label, click capture without executing the element, Escape and a 2-minute limit to cancel, Tab and Enter from the keyboard, promotion to the interactive ancestor, page-dispatched events ignored, our own UI skipped, full cleanup.
+- [x] Descriptor capture per [ADR 0014](adr/0014-element-targeting-strategy.md) (test attributes, filtered ids and classes, own bounded role and accessible name, labels, text, stable classes, anchors, container, anchored CSS path, counted locators, capture metadata), with privacy filters and stable / found-by-name / weak categories and their reasons, reviewed before use.
+- [x] Single-step preview on the element selected on the page (text only, close button, marked as a draft); saves through the service worker with the revision the edits started from, which accepts Edit Mode requests only from the side panel and captures only under its own request ids.
+- [x] Recoverable copy of unsaved steps in `storage.session`, conflict handling, and checking a save whose answer was lost.
+- [x] Content-script size budget enforced by the build (hand-written guards instead of zod in the content script); zod `jitless` in every extension page and the worker.
+- [x] `pnpm demo:site`: a fictitious application on 127.0.0.1:4400 (and under a strict CSP) to try Edit Mode.
+- [x] Authoring endpoints for the extension, bearer only ([API 3.5](api.md#35-phase-5-guide-authoring-from-the-extension)).
 
-Out of scope: picking inside shadow roots and iframes (6c), full playback, hand-edited selectors.
+Changed from the plan:
 
-Exit criteria:
+- **A small authoring API for the extension** (`/v1/extension/authoring/…`) instead of letting the extension call workspace routes: workspace routes never accept a bearer token, and the facade reuses the guides service, so revisions and isolation are the dashboard's.
+- **Shadow DOM and iframes are refused, not captured.** The plan left them out of scope; the picker now says so for the element instead of storing a wrong target. `framePath` and `shadowPath` are always empty.
+- **No XPath locators.** In the light DOM they would repeat the CSS path; the schema still accepts them ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- **Generated ids** are kept only as flagged hints (`generated: true`), and record-like ids (UUIDs, 4+ digits) are not stored at all.
+- **A captured target waits for review** ("Use this element") instead of being applied at once.
+- **No forced reload on `runtime.onUpdateAvailable`**, which would lose the author's work; unsaved steps are kept in the browser session instead ([R-02](technical-risks.md)).
 
-- Capture unit tests: generated ids (React `useId`, CSS Modules, CSS-in-JS hashes) are never used.
-- Playwright: pick three elements, save, reload → the API returns three steps with v1 descriptors; a positional-only fixture shows the warning.
-- A strict-CSP fixture (`style-src 'self'`) renders the picker; a forged `window.postMessage` has no effect.
-- The build fails when `content.js` exceeds the budget.
+Verification (on the final Phase 5 code, branch `JJ`):
 
-Risks: R-04, R-09, R-10, R-11, R-15. ADRs: capture part of 0014 → Accepted; revisit [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) (shadow-safe Tailwind vs plain CSS) and [ADR 0006](adr/0006-vue-3-frontend-framework.md); new ADR: side panel as authoring surface.
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint` and `pnpm build` pass; the build reports `content.js` at 26 267 bytes minified (10 098 gzip) of a 65 536-byte budget.
+- `pnpm test` runs 691 tests in 63 files: 73 shared, 3 ui, 55 API unit, 189 API integration on PostgreSQL 18 (11 new for the authoring endpoints: editor loop as the dashboard sees it, reorder keeps ids, stale revision 409, member and demoted editor 403 on every route, no cookie fallback, other tenant and other application 404, foreign step 404, archived 409, invalid descriptor 400, rollback on a failure halfway, published version unchanged), 108 dashboard and 263 extension (capture on jsdom pages, picker, the worker session with controlled promises, the side panel's draft, save, conflict and lost-answer logic).
+- `pnpm test:e2e` passes dashboard 12/12 and extension 36/36 in Playwright's Chromium 153, on the dedicated `contextlayer_e2e` database; the 10 Edit Mode scenarios also passed `--repeat-each=3` (30/30). axe: 0 violations on the side panel with a target under review.
+- `drizzle-kit check` is clean; Phase 5 adds no migration.
+- Found by the e2e suite and fixed: the demo page first used a random id suffix that is sometimes made only of letters, which the generated-id heuristic cannot tell from a word (now documented in ADR 0014); the demo uses a React-style `:r…:` id.
+
+Not covered by automation (manual checks for JJ): Edit Mode in Google Chrome with the regular build on `pnpm demo:site`; opening the panel with the toolbar icon click (the e2e opens the popup with `chrome.action.openPopup`); closing the panel with Chrome's own close button in Chrome 142+ and older (`sidePanel.onClosed` versus `pagehide`); Chrome 120; a real customer application.
+
+Out of scope (unchanged): picking inside shadow roots and iframes (6c), playback and the resolver (6), hand-edited selectors, Previous/Next/Finish, analytics, screenshots.
+
+Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (strict CSP verified, `jitless`), R-11 (authoring in the side panel, bound captures), R-15 (budget). ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) capture Accepted (resolution still Proposed); [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the picker and preview; new [ADR 0018](adr/0018-side-panel-edit-mode.md); [ADR 0006](adr/0006-vue-3-frontend-framework.md): the side panel uses Vue, the in-page UI stays framework-free.
 
 ## Phase 6 — Guide player
 

@@ -252,6 +252,22 @@ Contracts: `packages/shared/src/extension.ts`. Code: `apps/api/src/modules/exten
 - **Connections.** `status` is `active`, `expired` or `revoked`; `revokedReason` is `disconnected`, `dashboard`, `replaced`, `refresh-reuse` or `code-replay`. `label` is a short browser name chosen by the dashboard ("Chrome on macOS").
 - **Published guides.** By exact origin (normalized like application origins): only guides of applications of the grant's workspace that list that origin, only the latest published version, never archived guides; title, description and step count come from the immutable snapshot, never from the draft. The detail returns the snapshot. Any member may read them. Two workspaces registering the same origin never see each other's guides.
 
+### 3.5 Phase 5: guide authoring from the extension
+
+Contracts: `packages/shared/src/extension.ts` (paths, `authoringCreateGuideRequestSchema`) and `guides.ts` (`guideSchema`, `replaceStepsRequestSchema`). Code: `apps/api/src/modules/extension/authoring.routes.ts`, a thin facade over the guides service, so revisions, transactions and tenant isolation are the dashboard's own. Paths are under `/v1/extension/authoring/applications/:applicationId/guides`. Only the extension's service worker calls them, for its Edit Mode side panel ([ADR 0018](adr/0018-side-panel-edit-mode.md)).
+
+| Endpoint              | Request                                    | Success                                                     | Errors (besides 401)                                                                               |
+| --------------------- | ------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `GET /`               | `?limit&cursor`                            | 200 `GuideList` of the application (archived guides hidden) | 400 cursor, 403 role, 404 application                                                              |
+| `POST /`              | `{ title }`                                | 201 `Guide` (an empty draft)                                | 400, 403 role, 404 application                                                                     |
+| `GET /:guideId`       |                                            | 200 `Guide` (the draft, with its steps)                     | 403 role, 404 (unknown, other tenant, other application), 409 archived                             |
+| `PUT /:guideId/steps` | `{ expectedRevision, steps: StepInput[] }` | 200 `Guide` with the new revision                           | 400 (descriptor, title, limits), 403 role, 404 (guide or a foreign step id), 409 revision/archived |
+
+- **Bearer only.** The access check runs on `onRequest`, before the body is parsed; a request without a valid extension token is refused with 401 and never falls back to the dashboard cookie.
+- **Workspace and role.** The workspace is the grant's, never a value from the client. The caller's current role is checked on every request: owner, admin and editor may read and write drafts; a member gets 403 on every route, reads included (members consume published versions only). A role lowered after the connection was made applies at once.
+- **Consistency.** The application must belong to the grant's workspace and the guide to that application; anything else answers 404, exactly like an id that does not exist, so another tenant's ids are indistinguishable from unknown ones.
+- **Step replacement** is the dashboard's: the array order is the position, steps keep their ids across reorders, a step without an id is new, a step id from another guide is 404, and `expectedRevision` must be the current revision (409 otherwise; the server never bumps it for the client). The body limit is 2 MiB. Published versions and their snapshots are never touched; publishing stays in the dashboard.
+
 #### Unknown routes
 
 All of these return **404** with `{ "error": { "code": "NOT_FOUND", "message": "Route not found", "requestId": "…" } }`:
@@ -262,7 +278,7 @@ All of these return **404** with `{ "error": { "code": "NOT_FOUND", "message": "
 
 ## 4. Modules and planned endpoints
 
-API paths are listed as the API sees them; the dashboard adds the `/api` prefix. Roles (Implemented, Phase 2): `owner` > `admin` > `editor` > `member`, where "editor+" means `editor` or above. "Session" is the dashboard cookie and "bearer" is the extension token. The Phase 2, 3 and 4 endpoints are in sections [3.2](#32-phase-2-auth-and-workspaces), [3.3](#33-phase-3-applications-guides-and-publishing) and [3.4](#34-phase-4-extension-connection-and-published-guides); workspace routes never accept a bearer token.
+API paths are listed as the API sees them; the dashboard adds the `/api` prefix. Roles (Implemented, Phase 2): `owner` > `admin` > `editor` > `member`, where "editor+" means `editor` or above. "Session" is the dashboard cookie and "bearer" is the extension token. The Phase 2, 3, 4 and 5 endpoints are in sections [3.2](#32-phase-2-auth-and-workspaces), [3.3](#33-phase-3-applications-guides-and-publishing), [3.4](#34-phase-4-extension-connection-and-published-guides) and [3.5](#35-phase-5-guide-authoring-from-the-extension); workspace routes never accept a bearer token.
 
 | Module         | Owns                                         | Phase                 |
 | -------------- | -------------------------------------------- | --------------------- |
@@ -279,7 +295,7 @@ API paths are listed as the API sees them; the dashboard adds the `/api` prefix.
 | `POST /v1/analytics/events`                                 | batched, idempotent ingestion                   | bearer           | 7     |
 | `GET /v1/workspaces/:workspaceId/analytics/guides/:guideId` | runs, completion, per-step drop-off per version | editor+; session | 7     |
 
-Members (learners) never read drafts: they consume published versions through `GET /v1/extension/guides`. Whether members may see aggregates is open ([product](product.md)).
+Members (learners) never read drafts, from the dashboard or from Edit Mode: they consume published versions through `GET /v1/extension/guides`. Whether members may see aggregates is open ([product](product.md)).
 
 `GET /v1/extension/guides` takes `?origin=`, not `?url=` (Implemented, Phase 4): query strings are logged, and full customer URLs can contain record ids. The server only needs the origin to match `applications.origins`; the extension evaluates a guide's URL patterns itself (Phase 6).
 

@@ -47,7 +47,7 @@ Constraints: strict TypeScript everywhere, a team of one, components shared betw
 
 ### Negative and trade-offs
 
-- **Size cost if Vue goes in-page.** Every matched page would load the Vue runtime. In the research spike, Vue plus one SFC plus zod came to 139.6 kB minified (46 kB gzip). Today's framework-free `content.js` is about 89 kB (26 kB gzip). Tailwind (preflight plus about 10 utilities) adds roughly 21 kB more, and its `@property`-based utilities (shadow, ring, transforms) compute to `none` inside a shadow root.
+- **Size cost if Vue goes in-page.** Every matched page would load the Vue runtime. In the research spike, Vue plus one SFC plus zod came to 139.6 kB minified (46 kB gzip). The framework-free `content.js` was about 89 kB (26 kB gzip) in Phase 1, mostly zod; without zod it is 26 kB (10 kB gzip) with the Phase 5 picker, under a 64 KiB budget the build enforces. Tailwind (preflight plus about 10 utilities) adds roughly 21 kB more, and its `@property`-based utilities (shadow, ring, transforms) compute to `none` inside a shadow root.
 - **No `vue()` in the content build yet.** Importing a `.vue` file or `@contextlayer/ui` there fails until the plugin is added ([ADR 0009](0009-extension-build-tooling.md)).
 
 ### Follow-ups
