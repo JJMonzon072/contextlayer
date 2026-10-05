@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { EXTENSION_ID_PATTERN } from './extension-identity.js'
 import { pageQuerySchema, pageSchema } from './pagination.js'
-import { guideSnapshotSchema } from './guides.js'
+import { guideSnapshotSchema, guideTitleSchema } from './guides.js'
 
 /**
  * Extension connection (ADR 0015): the dashboard issues a one-time code bound to
@@ -27,6 +27,23 @@ export const EXTENSION_PATHS = {
 export const extensionConnectionPath = (connectionId: string) =>
   `${EXTENSION_PATHS.connections}/${connectionId}`
 export const extensionGuidePath = (guideId: string) => `${EXTENSION_PATHS.guides}/${guideId}`
+
+/**
+ * Guide authoring from the extension's side panel (Phase 5, bearer only):
+ * the editable guides of one application of the grant's workspace, their
+ * drafts and the replacement of their steps. Editors and above; members get
+ * 403. Responses reuse the dashboard's guide contracts.
+ */
+export const EXTENSION_AUTHORING_PATH = '/v1/extension/authoring'
+export const extensionAuthoringGuidesPath = (applicationId: string) =>
+  `${EXTENSION_AUTHORING_PATH}/applications/${applicationId}/guides`
+export const extensionAuthoringGuidePath = (applicationId: string, guideId: string) =>
+  `${extensionAuthoringGuidesPath(applicationId)}/${guideId}`
+export const extensionAuthoringStepsPath = (applicationId: string, guideId: string) =>
+  `${extensionAuthoringGuidePath(applicationId, guideId)}/steps`
+
+/** A guide created from the side panel: a title; the rest is edited in the dashboard. */
+export const authoringCreateGuideRequestSchema = z.strictObject({ title: guideTitleSchema })
 
 /** Opaque credentials: a type prefix and 256 random bits in base64url. */
 export const CREDENTIAL_PREFIXES = { code: 'clc_', access: 'cla_', refresh: 'clr_' } as const
@@ -225,3 +242,4 @@ export type PublishedGuide = z.infer<typeof publishedGuideSchema>
 export type ExtensionExternalMessage = z.infer<typeof extensionExternalMessageSchema>
 export type ExtensionExternalResponse = z.infer<typeof extensionExternalResponseSchema>
 export type ExternalErrorCode = (typeof EXTERNAL_ERROR_CODES)[number]
+export type AuthoringCreateGuideRequest = z.infer<typeof authoringCreateGuideRequestSchema>
