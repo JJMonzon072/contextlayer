@@ -20,6 +20,7 @@ import { createAuthService } from './modules/auth/auth.service.js'
 import { createRequireSession } from './modules/auth/require-session.js'
 import { healthRoutes } from './modules/health/health.routes.js'
 import { createHealthService } from './modules/health/health.service.js'
+import { workspaceRoutes } from './modules/workspaces/workspaces.routes.js'
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.js'
 import { readApiVersion } from './version.js'
 
@@ -90,13 +91,14 @@ export async function buildApp({
   })
   await app.register(healthRoutes, { healthService })
 
-  const workspaces = createWorkspacesService({ db: database.db })
+  // Modules depend on each other only through these service interfaces.
   const auth = createAuthService({
     db: database.db,
     session: config.session,
     now,
     listWorkspaces: (userId) => workspaces.listForUser(userId),
   })
+  const workspaces = createWorkspacesService({ db: database.db, users: auth })
   const requireSession = createRequireSession(auth, config.session.cookieName)
 
   // Versioned product API: authenticated data must never sit in a cache.
@@ -110,6 +112,7 @@ export async function buildApp({
       rateLimits: config.rateLimits,
       requireSession,
     })
+    await v1.register(workspaceRoutes, { workspaces, requireSession })
   })
 
   return app

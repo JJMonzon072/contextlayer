@@ -2,7 +2,6 @@ import type { WorkspaceRole } from '@contextlayer/shared'
 import { and, asc, count, eq } from 'drizzle-orm'
 
 import { isUniqueViolation, type DbExecutor } from '../../infrastructure/database/client.js'
-import { users } from '../auth/auth.schema.js'
 import { workspaceMembers, workspaces } from './workspaces.schema.js'
 
 /**
@@ -79,19 +78,17 @@ export async function lockWorkspace(db: DbExecutor, workspaceId: string): Promis
     .for('update')
 }
 
+/** Membership rows only; names and emails come from the auth module (no cross-module join). */
 export async function listMembers(db: DbExecutor, workspaceId: string) {
   return db
     .select({
-      userId: users.id,
-      email: users.email,
-      displayName: users.displayName,
+      userId: workspaceMembers.userId,
       role: workspaceMembers.role,
       joinedAt: workspaceMembers.createdAt,
     })
     .from(workspaceMembers)
-    .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(eq(workspaceMembers.workspaceId, workspaceId))
-    .orderBy(asc(workspaceMembers.createdAt), asc(users.id))
+    .orderBy(asc(workspaceMembers.createdAt), asc(workspaceMembers.userId))
 }
 
 export type InsertMemberResult = { ok: true } | { ok: false; reason: 'already-member' }
