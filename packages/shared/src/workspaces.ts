@@ -64,3 +64,10 @@ export type MemberList = z.infer<typeof memberListSchema>
 export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>
 export type AddMemberRequest = z.infer<typeof addMemberRequestSchema>
 export type UpdateMemberRoleRequest = z.infer<typeof updateMemberRoleRequestSchema>
+
+const ROLE_RANK: Record<WorkspaceRole, number> = { owner: 3, admin: 2, editor: 1, member: 0 }
+
+/** `owner` > `admin` > `editor` > `member`; the API enforces, the dashboard mirrors. */
+export function roleAtLeast(role: WorkspaceRole, minimum: WorkspaceRole): boolean {
+  return ROLE_RANK[role] >= ROLE_RANK[minimum]
+}
