@@ -140,3 +140,7 @@ All configuration comes from environment variables, read from a single `.env` at
 - **Dashboard shows "Degraded"**: the API is up but PostgreSQL is not. Run `docker compose up -d` and check `docker compose ps`.
 - **Extension changes are not visible**: reload the extension in `chrome://extensions`, then reload the page.
 - **E2E tests fail before running**: run `pnpm test:e2e:install` once, and make sure PostgreSQL is up.
+
+## License
+
+[MIT](LICENSE)
