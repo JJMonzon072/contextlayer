@@ -129,9 +129,9 @@ export const guideSteps = pgTable(
 )
 
 /**
- * Immutable published snapshots (ADR 0016). A trigger in the custom migration
- * rejects every UPDATE; RESTRICT keeps a guide from being deleted while it has
- * versions.
+ * Immutable published snapshots (ADR 0016). Triggers in the custom migrations
+ * reject every DELETE (0003) and every UPDATE except clearing `published_by`
+ * (0002); RESTRICT keeps a guide from being deleted while it has versions.
  */
 export const guideVersions = pgTable(
   'guide_versions',

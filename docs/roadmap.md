@@ -97,7 +97,7 @@ Risks addressed: R-13 (dashboard half), R-17 (workspace membership), R-18 (CI ga
   - Origins are checked by a database CHECK.
   - The composite foreign key `guides (workspace_id, application_id)` stops a guide from using another workspace's application.
   - Step positions are unique per guide, `DEFERRABLE INITIALLY DEFERRED`.
-  - A trigger makes versions immutable.
+  - Triggers make versions immutable: no update except clearing the publisher when their account is deleted, and no delete (`0003_protect_published_versions`, added after the Phase 3 review).
   - RESTRICT protects history.
 - [x] `applications` module: list, create, read, update and delete (409 while guides exist). Origins must be exact (scheme, host, port) and are stored normalized.
 - [x] `guides` module:

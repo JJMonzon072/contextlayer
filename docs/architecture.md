@@ -165,7 +165,9 @@ Arbitrary messages may contain internals, so they are replaced. Domain errors ar
 `apps/api/src/infrastructure/database/client.ts` wraps a `pg.Pool` (max 10, 5 s connect timeout, TCP keep-alive) in a small `Database` interface (`db`, `ping({ timeoutMs })`, `close()`). The ping uses node-postgres' per-query `query_timeout` (2 s), so a database that stops answering cannot exhaust the pool through repeated health checks; a pool `error` listener logs idle-client failures instead of crashing. Drizzle uses `casing: 'snake_case'` at runtime and in `apps/api/drizzle.config.ts` ([ADR 0004](adr/0004-postgresql-primary-database.md), [ADR 0005](adr/0005-drizzle-orm.md)).
 
 - **Implemented (Phase 2):** `drizzle/0000_identity.sql` creates the identity and tenancy tables; `schema.ts` re-exports each module's table file. Migrations are generated SQL, reviewed and committed, never applied at API startup. CI runs `db:migrate` and `drizzle-kit check`.
-- **Implemented (Phase 3):** `0001_content.sql` (generated) and `0002_content_constraints.sql` (custom SQL drizzle-kit cannot express: a deferrable unique constraint and the trigger that makes published versions immutable, [ADR 0016](adr/0016-immutable-published-guide-versions.md)).
+- **Implemented (Phase 3):** `0001_content.sql` (generated), plus two custom migrations with SQL drizzle-kit cannot express ([ADR 0016](adr/0016-immutable-published-guide-versions.md)):
+  - `0002_content_constraints.sql`: a deferrable unique constraint, and a trigger that rejects updates of published versions except clearing `published_by`.
+  - `0003_protect_published_versions.sql`: a trigger that rejects deleting them.
 - **Implemented (Phase 2):** integration tests use `TEST_DATABASE_URL`, refuse any database whose name does not end in `_test`, migrate it once per run and truncate between tests.
 - **Planned (Phase 8):** migrations run as a one-off job before rollout ([deployment](deployment.md)).
 
