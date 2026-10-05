@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import cookie from '@fastify/cookie'
 import helmet from '@fastify/helmet'
 import Fastify, { type FastifyBaseLogger } from 'fastify'
 import {
@@ -9,27 +10,40 @@ import {
 } from 'fastify-type-provider-zod'
 import { pino } from 'pino'
 
+import type { AppConfig } from './config/env.js'
 import { registerErrorHandling } from './http/error-handler.js'
 import type { Database } from './infrastructure/database/client.js'
+import { authRoutes } from './modules/auth/auth.routes.js'
+import { createAuthService } from './modules/auth/auth.service.js'
+import { createRequireSession } from './modules/auth/require-session.js'
 import { healthRoutes } from './modules/health/health.routes.js'
 import { createHealthService } from './modules/health/health.service.js'
+import { createWorkspacesService } from './modules/workspaces/workspaces.service.js'
 import { readApiVersion } from './version.js'
 
 /** Upper bound for each dependency probe of `GET /health`. */
 const HEALTH_PROBE_TIMEOUT_MS = 2_000
 
 export interface AppDependencies {
-  database: Pick<Database, 'ping' | 'close'>
+  config: AppConfig
+  database: Database
   /** Defaults to a silent logger, which keeps tests quiet. */
   logger?: FastifyBaseLogger
+  /** Injectable clock: session expiry is tested without waiting. */
+  now?: () => Date
 }
 
 /**
  * Composition root of the HTTP application. Infrastructure is created by the
- * caller (server.ts in production, fakes in tests) and injected here, so every
- * module can be exercised with `app.inject()` without a network or a database.
+ * caller (server.ts in production, the test database or fakes in tests) and
+ * injected here; modules are wired to each other only in this function.
  */
-export async function buildApp({ database, logger = pino({ level: 'silent' }) }: AppDependencies) {
+export async function buildApp({
+  config,
+  database,
+  logger = pino({ level: 'silent' }),
+  now = () => new Date(),
+}: AppDependencies) {
   const fastify = Fastify({
     loggerInstance: logger,
     genReqId: () => randomUUID(),
@@ -41,6 +55,7 @@ export async function buildApp({ database, logger = pino({ level: 'silent' }) }:
 
   const app = fastify.withTypeProvider<ZodTypeProvider>()
 
+  app.decorateRequest('auth', null)
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id)
   })
@@ -49,6 +64,7 @@ export async function buildApp({ database, logger = pino({ level: 'silent' }) }:
   })
 
   await app.register(helmet)
+  await app.register(cookie)
 
   const healthService = createHealthService({
     probes: { database: () => database.ping({ timeoutMs: HEALTH_PROBE_TIMEOUT_MS }) },
@@ -57,6 +73,23 @@ export async function buildApp({ database, logger = pino({ level: 'silent' }) }:
     timeoutMs: HEALTH_PROBE_TIMEOUT_MS,
   })
   await app.register(healthRoutes, { healthService })
+
+  const workspaces = createWorkspacesService({ db: database.db })
+  const auth = createAuthService({
+    db: database.db,
+    session: config.session,
+    now,
+    listWorkspaces: (userId) => workspaces.listForUser(userId),
+  })
+  const requireSession = createRequireSession(auth, config.session.cookieName)
+
+  // Versioned product API: authenticated data must never sit in a cache.
+  await app.register(async (v1) => {
+    v1.addHook('onSend', async (_request, reply) => {
+      void reply.header('cache-control', 'no-store')
+    })
+    await v1.register(authRoutes, { auth, session: config.session, requireSession })
+  })
 
   return app
 }

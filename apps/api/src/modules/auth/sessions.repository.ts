@@ -10,6 +10,8 @@ export async function insertSession(
   input: {
     userId: string
     tokenHash: Buffer
+    createdAt: Date
+    lastSeenAt: Date
     expiresAt: Date
     userAgent: string | null
     ip: string | null

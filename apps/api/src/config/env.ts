@@ -13,6 +13,19 @@ const envSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+  // Session lifetimes (ADR 0015): idle timeout and absolute lifetime.
+  SESSION_IDLE_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 60)
+    .default(30),
+  SESSION_ABSOLUTE_HOURS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(30 * 24)
+    .default(8),
 })
 
 export interface AppConfig {
@@ -20,6 +33,24 @@ export interface AppConfig {
   server: { host: string; port: number }
   logLevel: (typeof LOG_LEVELS)[number]
   database: { url: string }
+  session: SessionConfig
+}
+
+export interface SessionConfig {
+  cookieName: string
+  idleTimeoutMs: number
+  absoluteTimeoutMs: number
+}
+
+/**
+ * Production uses the `__Host-` prefix: the browser then only accepts the cookie
+ * when it is Secure, has `Path=/` and no `Domain`, so a sibling subdomain cannot
+ * overwrite it. On http://localhost the prefix is not relied on (Chrome has
+ * historically rejected prefixed cookies there), so development uses a plain name.
+ * Every other flag is identical in both environments (see session-cookie.ts).
+ */
+export function sessionCookieName(env: AppConfig['env']): string {
+  return env === 'production' ? '__Host-cl_session' : 'cl_session'
 }
 
 export class ConfigError extends Error {
@@ -39,5 +70,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     server: { host: values.API_HOST, port: values.API_PORT },
     logLevel: values.LOG_LEVEL,
     database: { url: values.DATABASE_URL },
+    session: {
+      cookieName: sessionCookieName(values.NODE_ENV),
+      idleTimeoutMs: values.SESSION_IDLE_MINUTES * 60_000,
+      absoluteTimeoutMs: values.SESSION_ABSOLUTE_HOURS * 3_600_000,
+    },
   }
 }
