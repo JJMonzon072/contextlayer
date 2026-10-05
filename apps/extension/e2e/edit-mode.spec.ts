@@ -490,3 +490,46 @@ test('Disconnect during a selection ends Edit Mode and leaves nothing on the pag
     ),
   ).toEqual([])
 })
+
+test('switching tabs keeps Edit Mode bound to the tab it was opened on', async ({
+  context,
+  extensionBrowser,
+}) => {
+  await acme(context)
+  const page = await demoPage(context, extensionBrowser)
+  const panel = await openEditMode(extensionBrowser, page)
+  await createGuide(panel, 'Two tabs')
+  const step = await addStep(panel, 'Start a new customer')
+
+  const other = await context.newPage()
+  await other.goto(DEMO)
+  await other.bringToFront()
+  await step.getByRole('button', { name: 'Select element for step 1' }).click()
+  await expect(step.getByTestId('target-capturing')).toBeVisible()
+
+  // The selection runs in the bound tab only.
+  await expect.poll(async () => (await overlayParts(page)).parts.banner?.display).toBe('block')
+  expect((await overlayParts(other)).hosts).toBe(0)
+  await other.getByTestId('new-customer').click()
+  await expect(other.getByTestId('page-clicks')).toHaveText('1')
+  await expect(step.getByTestId('target-capturing')).toBeVisible()
+
+  // The panel is enabled for its own tab only.
+  const worker = await extensionWorker(context)
+  const enabled = await worker.evaluate(
+    async ({ first, second }) => {
+      const tabs = await chrome.tabs.query({})
+      const id = (url: string, index: number) => tabs.filter((tab) => tab.url === url)[index]?.id
+      const options = async (tabId: number | undefined) =>
+        (await chrome.sidePanel.getOptions({ tabId })).enabled
+      return [await options(id(first, 0)), await options(id(second, 1))]
+    },
+    { first: page.url(), second: other.url() },
+  )
+  expect(enabled).toEqual([true, false])
+
+  await page.bringToFront()
+  await page.getByTestId('new-customer').click()
+  await expect(step.getByRole('button', { name: 'Use this element' })).toBeVisible()
+  await expectPageUntouched(page)
+})
