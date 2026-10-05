@@ -79,6 +79,10 @@ jobs:
       - name: Migrate the database
         run: pnpm db:migrate
 
+      # Catches conflicting migration snapshots, e.g. two branches that both generated 0001.
+      - name: Check the migration history
+        run: pnpm --filter @contextlayer/api db:check
+
       - name: Unit and integration tests
         run: pnpm test
 
