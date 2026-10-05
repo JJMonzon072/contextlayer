@@ -58,6 +58,12 @@ export interface AuthoringClient {
   detach(panelId: string): void
 }
 
+/**
+ * A plain JSON copy of what the panel edits: its state is made of Vue proxies,
+ * which extension messaging should not be trusted to serialize.
+ */
+const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+
 export const chromeAuthoringClient: AuthoringClient = {
   attach: (tabId) =>
     sendToBackground({ type: 'authoring.attach', tabId }, authoringAttachResultSchema),
@@ -94,11 +100,21 @@ export const chromeAuthoringClient: AuthoringClient = {
     ),
   save: (panelId, operationId, applicationId, guideId, request) =>
     sendToBackground(
-      { type: 'authoring.save', panelId, operationId, applicationId, guideId, request },
+      {
+        type: 'authoring.save',
+        panelId,
+        operationId,
+        applicationId,
+        guideId,
+        request: plain(request),
+      },
       authoringSaveResultSchema,
     ),
   writeLocal: (panelId, draft) =>
-    sendToBackground({ type: 'authoring.local.write', panelId, draft }, authoringLocalResultSchema),
+    sendToBackground(
+      { type: 'authoring.local.write', panelId, draft: plain(draft) },
+      authoringLocalResultSchema,
+    ),
   clearLocal: (panelId, guideId) =>
     sendToBackground(
       { type: 'authoring.local.clear', panelId, guideId },

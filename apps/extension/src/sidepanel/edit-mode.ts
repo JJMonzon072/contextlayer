@@ -1,14 +1,22 @@
-import type { Guide, GuideSummary, TargetDescriptor } from '@contextlayer/shared'
+import type { Guide, GuideSummary, StepInput, TargetDescriptor } from '@contextlayer/shared'
 import { computed, reactive } from 'vue'
 
-import type { AuthoringAttachData, AuthoringStateData, MessageError } from '../messaging/protocol'
+import type {
+  AuthoringAttachData,
+  AuthoringStateData,
+  LocalDraft,
+  MessageError,
+} from '../messaging/protocol'
 import type { AuthoringClient } from './client'
 import {
   assignSavedIds,
   fromGuide,
+  fromLocal,
   move,
   newStep,
+  sameSteps,
   stepProblems,
+  toDraft,
   toStepInputs,
   withInstructions,
   type EditorStep,
@@ -20,10 +28,13 @@ import {
  * (`App.vue`) only renders this and calls its actions.
  *
  * Three kinds of state are kept apart: what is only in this panel's memory
- * (`dirty`), what the server confirmed (`guide`, `lastSavedAt`) and, later,
- * the copy kept in the browser session. A captured element is never applied
- * by itself: it waits in `review` until the author uses it, and nothing
- * reaches the server until the author saves.
+ * (`dirty`), the copy the worker keeps in the browser session (`local`, lost
+ * when the browser closes, offered back as `recovery`), and what the server
+ * confirmed (`guide`, `lastSavedAt`). A captured element is never applied by
+ * itself: it waits in `review` until the author uses it, and nothing reaches
+ * the server until the author saves. A save whose answer was lost is checked
+ * against the server before anything is claimed, and never retried by
+ * itself; the revision is never bumped to get past a conflict.
  */
 
 export type EndReason = Extract<AuthoringStateData, { state: 'ended' }>['reason']
@@ -35,6 +46,8 @@ export interface EditModeDeps {
   now?: () => number
   /** Ids for save operations; replaced in tests. */
   operationId?: () => string
+  /** Quiet time after an edit before the local copy is written (default 600 ms). */
+  localDelayMs?: number
 }
 
 export interface EditModeState {
@@ -66,6 +79,12 @@ export interface EditModeState {
   capture: { stepKey: string; captureId: string } | null
   review: { stepKey: string; captureId: string; descriptor: TargetDescriptor } | null
   captureNote: { stepKey: string; text: string } | null
+  /** The copy in the browser session: kept, or why not. */
+  local: 'none' | 'kept' | 'too-large' | 'quota' | 'failed'
+  /** A copy found when the guide was opened, offered back to the author. */
+  recovery: LocalDraft | null
+  /** A save was sent, its answer was lost, and the server could not be checked yet. */
+  unknownSave: boolean
 }
 
 export function createEditMode(deps: EditModeDeps) {
@@ -97,6 +116,9 @@ export function createEditMode(deps: EditModeDeps) {
     capture: null,
     review: null,
     captureNote: null,
+    local: 'none',
+    recovery: null,
+    unknownSave: false,
   })
 
   let panelId: string | undefined
@@ -109,8 +131,53 @@ export function createEditMode(deps: EditModeDeps) {
   const dirty = computed(() => state.editVersion !== state.savedVersion)
   const problems = computed(() => stepProblems(state.steps))
 
+  // The local copy: one write or clear at a time, in order, coalesced.
+  let localTimer: ReturnType<typeof setTimeout> | undefined
+  let localChain: Promise<void> = Promise.resolve()
+  /** A save whose answer was lost, to check against the server. */
+  let pendingCheck:
+    | { guideId: string; base: number; version: number; sent: EditorStep[]; inputs: StepInput[] }
+    | undefined
+
+  function queueLocal(task: () => Promise<void>): Promise<void> {
+    localChain = localChain.then(task, task)
+    return localChain
+  }
+
+  function writeLocalNow(): Promise<void> {
+    clearTimeout(localTimer)
+    localTimer = undefined
+    const guide = state.guide
+    const applicationId = state.applicationId
+    const baseRevision = state.baseRevision
+    const id = panelId
+    if (!id || !guide || !applicationId || baseRevision === null) return Promise.resolve()
+    const draft = { applicationId, guideId: guide.id, baseRevision, steps: toDraft(state.steps) }
+    return queueLocal(async () => {
+      const result = await client.writeLocal(id, draft)
+      if (state.guide?.id !== guide.id) return
+      if (!result.ok) state.local = 'failed'
+      else state.local = result.data.stored ? 'kept' : (result.data.reason ?? 'failed')
+    })
+  }
+
+  function clearLocalNow(guideId: string): Promise<void> {
+    clearTimeout(localTimer)
+    localTimer = undefined
+    const id = panelId
+    if (!id) return Promise.resolve()
+    return queueLocal(async () => {
+      await client.clearLocal(id, guideId)
+      if (state.guide?.id === guideId && !dirty.value) state.local = 'none'
+    })
+  }
+
   function touch() {
     state.editVersion += 1
+    clearTimeout(localTimer)
+    localTimer = setTimeout(() => {
+      void writeLocalNow()
+    }, deps.localDelayMs ?? 600)
   }
 
   function fail(error: MessageError) {
@@ -118,7 +185,13 @@ export function createEditMode(deps: EditModeDeps) {
     if (error.code === 'STALE') void refresh()
   }
 
-  function applyGuide(guide: Guide) {
+  function applyGuide(guide: Guide, local: LocalDraft | null = null) {
+    clearTimeout(localTimer)
+    localTimer = undefined
+    pendingCheck = undefined
+    state.unknownSave = false
+    state.local = 'none'
+    state.recovery = local
     state.guide = guide
     state.baseRevision = guide.revision
     state.steps = fromGuide(guide)
@@ -157,8 +230,57 @@ export function createEditMode(deps: EditModeDeps) {
       return
     }
     if (state.capture) await cancelCapture()
-    applyGuide(result.data.guide)
+    applyGuide(result.data.guide, result.data.local)
     state.status = `Editing “${result.data.guide.title}”.`
+  }
+
+  /** The server confirmed a save that included the edits up to `version`. */
+  function applySaved(guide: Guide, sent: readonly EditorStep[], version: number) {
+    state.guide = guide
+    state.baseRevision = guide.revision
+    state.steps = assignSavedIds(state.steps, sent, guide)
+    state.savedVersion = version
+    state.lastSavedAt = now()
+    state.conflict = false
+    state.error = null
+    // Edits made while saving are still only here: keep their copy, on the new revision.
+    void (dirty.value ? writeLocalNow() : clearLocalNow(guide.id))
+  }
+
+  /**
+   * A save's answer was lost: read the guide again and decide from what the
+   * server has, never from a guess. Exactly what was sent, one revision
+   * later: saved. The revision it was based on: not applied (yet). Anything
+   * else: someone else changed it, so it is a conflict.
+   */
+  async function checkSave() {
+    const check = pendingCheck
+    if (!check || !panelId || !state.applicationId) return
+    state.status = 'Checking whether your save reached ContextLayer…'
+    const result = await client.open(panelId, state.applicationId, check.guideId)
+    if (state.guide?.id !== check.guideId) return
+    if (!result.ok) {
+      state.unknownSave = true
+      state.error = `The answer to your save was lost and the guide could not be checked: ${result.error.message} Your changes are still here; check again before saving.`
+      return
+    }
+    pendingCheck = undefined
+    state.unknownSave = false
+    const server = result.data.guide
+    if (server.revision === check.base + 1 && sameSteps(server.steps, check.inputs)) {
+      applySaved(server, check.sent, check.version)
+      state.status = 'Your save reached ContextLayer.'
+      return
+    }
+    state.error = null
+    if (server.revision === check.base) {
+      state.status =
+        'ContextLayer still has the version from before your save. Your changes are still here; save again when ready.'
+      return
+    }
+    state.conflict = true
+    state.status =
+      'The guide changed on ContextLayer, and not exactly as your save would have changed it. Your changes are still here.'
   }
 
   function step(key: string): EditorStep | undefined {
@@ -286,6 +408,14 @@ export function createEditMode(deps: EditModeDeps) {
     async closeGuide() {
       loadToken += 1
       if (state.capture) await cancelCapture()
+      // Leaving the guide discards its unsaved changes, including their copy.
+      if (state.guide && dirty.value) await clearLocalNow(state.guide.id)
+      clearTimeout(localTimer)
+      localTimer = undefined
+      pendingCheck = undefined
+      state.unknownSave = false
+      state.recovery = null
+      state.local = 'none'
       state.guide = null
       state.baseRevision = null
       state.steps = []
@@ -386,35 +516,85 @@ export function createEditMode(deps: EditModeDeps) {
         state.status = 'Fix the highlighted steps before saving.'
         return
       }
+      if (state.unknownSave) {
+        state.status = 'Check whether your last save reached ContextLayer first.'
+        return
+      }
       const sent = [...state.steps]
       const sentVersion = state.editVersion
+      const base = state.baseRevision
+      const inputs = toStepInputs(sent)
       const id = operationId()
       state.saving = true
       state.error = null
       state.status = 'Saving…'
       const result = await client.save(panelId, id, state.applicationId, guide.id, {
-        expectedRevision: state.baseRevision,
-        steps: toStepInputs(sent),
+        expectedRevision: base,
+        steps: inputs,
       })
       state.saving = false
       // Another guide was opened while saving: this answer is not for the screen.
       if (state.guide?.id !== guide.id) return
       if (result.ok) {
         if (result.data.operationId !== id) return
-        state.guide = result.data.guide
-        state.baseRevision = result.data.guide.revision
-        state.steps = assignSavedIds(state.steps, sent, result.data.guide)
-        state.savedVersion = sentVersion
-        state.lastSavedAt = now()
+        applySaved(result.data.guide, sent, sentVersion)
         state.status =
           state.editVersion === sentVersion
             ? 'Saved to ContextLayer.'
             : 'Saved. Changes made while saving are not saved yet.'
         return
       }
+      if (result.error.code === 'OUTCOME_UNKNOWN') {
+        pendingCheck = { guideId: guide.id, base, version: sentVersion, sent, inputs }
+        await checkSave()
+        return
+      }
       if (result.error.code === 'CONFLICT') state.conflict = true
-      state.status = 'Not saved.'
+      state.status = 'Not saved. Your changes are still here.'
       fail(result.error)
+      // A conflict or a refusal keeps the edits: make sure their copy is current.
+      void writeLocalNow()
+    },
+
+    checkSave,
+
+    /** Puts back the steps kept in the browser session, on the revision they started from. */
+    restoreLocal() {
+      const local = state.recovery
+      const guide = state.guide
+      if (!local || local.guideId !== guide?.id) return
+      state.recovery = null
+      state.steps = fromLocal(local)
+      state.baseRevision = local.baseRevision
+      state.savedVersion = state.editVersion
+      state.editVersion += 1
+      state.local = 'kept'
+      // Saved elsewhere since: saving will be refused until the author decides.
+      state.conflict = local.baseRevision !== guide.revision
+      state.status = state.conflict
+        ? 'Unsaved changes restored. The guide was changed elsewhere since; review before saving.'
+        : 'Unsaved changes restored.'
+    },
+
+    async discardLocal() {
+      const local = state.recovery
+      state.recovery = null
+      if (local) await clearLocalNow(local.guideId)
+      state.status = 'Kept changes discarded.'
+    },
+
+    /** Replaces the unsaved edits with the server's version (the view asks first). */
+    async loadLatest() {
+      const guide = state.guide
+      if (!guide) return
+      await clearLocalNow(guide.id)
+      await load((id, applicationId) => client.open(id, applicationId, guide.id))
+      state.recovery = null
+    },
+
+    /** From `pagehide`: write a pending copy now, without waiting. */
+    flushLocal() {
+      if (localTimer !== undefined) void writeLocalNow()
     },
 
     async exit() {

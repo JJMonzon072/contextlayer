@@ -20,7 +20,9 @@ const { state, dirty, problems } = editMode
 
 const newTitle = shallowRef('')
 /** An action waiting for the author's confirmation, shown inline. */
-const confirming = shallowRef<'change-guide' | 'exit' | { removeStep: string } | null>(null)
+const confirming = shallowRef<
+  'change-guide' | 'exit' | 'load-latest' | { removeStep: string } | null
+>(null)
 
 const ENDED: Record<EndReason, string> = {
   disconnected: 'ContextLayer was disconnected, so Edit Mode ended.',
@@ -41,9 +43,17 @@ const dashboardLink = computed(() =>
     : undefined,
 )
 const busy = computed(() => state.loading || state.saving)
+const LOCAL: Record<typeof state.local, string> = {
+  none: 'Unsaved changes in this panel.',
+  kept: 'Unsaved changes are kept in this browser session until you save. They are lost when the browser closes.',
+  'too-large': 'Unsaved changes are too large to keep in this browser session. Save to keep them.',
+  quota: 'Unsaved changes could not be kept in this browser session. Save to keep them.',
+  failed: 'Unsaved changes could not be kept in this browser session. Save to keep them.',
+}
+
 const saveLine = computed(() => {
   if (state.saving) return 'Saving…'
-  if (dirty.value) return 'Unsaved changes in this panel.'
+  if (dirty.value) return LOCAL[state.local]
   if (state.lastSavedAt !== null && state.guide) {
     const time = new Date(state.lastSavedAt).toLocaleTimeString([], {
       hour: '2-digit',
@@ -89,7 +99,16 @@ function onMessage(message: unknown, sender: chrome.runtime.MessageSender) {
 }
 
 function onPageHide() {
+  editMode.flushLocal()
   editMode.detach()
+}
+
+const time = (at: number) =>
+  new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+async function loadLatest() {
+  confirming.value = null
+  await editMode.loadLatest()
 }
 
 onMounted(() => {
@@ -283,6 +302,28 @@ onBeforeUnmount(() => {
               <button type="button" class="btn-secondary" @click="confirming = null">Keep</button>
             </div>
           </div>
+          <div
+            v-if="state.recovery"
+            class="mt-2 rounded-lg bg-sky-50 p-2 text-sky-950"
+            data-testid="recovery"
+          >
+            <p>
+              Unsaved changes from {{ time(state.recovery.savedAt) }} were kept in this browser
+              session.
+              <template v-if="state.recovery.baseRevision !== state.guide.revision">
+                The guide was saved elsewhere since then, so restoring them leads to a conflict you
+                will have to resolve.
+              </template>
+            </p>
+            <div class="mt-2 flex gap-2">
+              <button type="button" class="btn" @click="editMode.restoreLocal()">
+                Restore them
+              </button>
+              <button type="button" class="btn-secondary" @click="editMode.discardLocal()">
+                Discard them
+              </button>
+            </div>
+          </div>
           <p v-if="dashboardLink" class="mt-2 text-xs text-slate-600">
             Publishing happens in the dashboard:
             <a :href="dashboardLink" target="_blank" rel="noopener" class="text-brand-700 underline"
@@ -432,14 +473,46 @@ onBeforeUnmount(() => {
         >
           <h2 id="save-heading" class="sr-only">Save</h2>
           <p class="text-slate-700" data-testid="save-state">{{ saveLine }}</p>
-          <p v-if="state.conflict" class="mt-1 text-amber-900" data-testid="conflict">
-            This guide was changed somewhere else since you opened it. Your changes are still here,
-            not saved.
-          </p>
+          <div v-if="state.conflict" class="mt-1 text-amber-900" data-testid="conflict">
+            <p>
+              This guide was changed somewhere else since your changes started. They are still here,
+              not saved. Saving them would overwrite the other changes, so it is refused.
+            </p>
+            <button
+              v-if="confirming !== 'load-latest'"
+              type="button"
+              class="btn-secondary mt-2"
+              @click="confirming = 'load-latest'"
+            >
+              Load the latest version
+            </button>
+            <div
+              v-else
+              class="mt-2 rounded-lg bg-amber-50 p-2"
+              role="alertdialog"
+              aria-labelledby="latest-question"
+            >
+              <p id="latest-question">
+                Replace your unsaved changes with the latest version from ContextLayer?
+              </p>
+              <div class="mt-2 flex gap-2">
+                <button type="button" class="btn-danger" @click="loadLatest">Replace</button>
+                <button type="button" class="btn-secondary" @click="confirming = null">
+                  Keep my changes
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-if="state.unknownSave" class="mt-1 text-amber-900" data-testid="unknown-save">
+            <p>It is not known yet whether your last save reached ContextLayer.</p>
+            <button type="button" class="btn-secondary mt-2" @click="editMode.checkSave()">
+              Check again
+            </button>
+          </div>
           <button
             type="button"
             class="btn mt-2 w-full"
-            :disabled="busy || !dirty"
+            :disabled="busy || !dirty || state.conflict || state.unknownSave"
             data-testid="save"
             @click="editMode.save()"
           >

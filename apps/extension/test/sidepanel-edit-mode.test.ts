@@ -17,8 +17,10 @@ const STEP_A = '01a10a2e-864b-75bc-8800-aa3f01a05340'
 const STEP_B = '01a10a2e-864b-75bc-8800-aa3f01a05341'
 
 const ok = <T>(data: T): MessageResult<T> => ({ ok: true, data })
-const no = (code: 'CONFLICT' | 'STALE' | 'NOT_AVAILABLE', message: string) =>
-  ({ ok: false, error: { code, message } }) as const
+const no = (
+  code: 'CONFLICT' | 'STALE' | 'NOT_AVAILABLE' | 'OUTCOME_UNKNOWN' | 'API_UNREACHABLE',
+  message: string,
+) => ({ ok: false, error: { code, message } }) as const
 
 function guide(id: string, revision = 1, titles: string[] = []): Guide {
   return {
@@ -117,6 +119,7 @@ async function opened(client = fakeClient()) {
   const editMode = createEditMode({
     client,
     tabId: 4,
+    localDelayMs: 0,
     now: () => Date.parse('2026-10-05T12:30:00.000Z'),
     operationId: () => `op-${String(++operation).padStart(6, '0')}`,
   })
@@ -327,5 +330,197 @@ describe('Edit Mode in the side panel', () => {
     await editMode.removeStep(key)
     expect(state.steps.map((step) => step.title)).toEqual(['Open the form'])
     expect(editMode.dirty.value).toBe(true)
+  })
+})
+
+describe('unsaved changes and lost answers', () => {
+  const local = (baseRevision: number) => ({
+    applicationId: APP,
+    guideId: GUIDE_A,
+    baseRevision,
+    savedAt: Date.parse('2026-10-05T12:10:00.000Z'),
+    steps: [
+      {
+        id: STEP_A,
+        title: 'Open the form (kept)',
+        body: { version: 1 as const, blocks: [] },
+        target: null,
+        urlPattern: null,
+        placement: 'auto' as const,
+      },
+    ],
+  })
+
+  it('keeps a copy of the edits in the browser session, bound to the guide and its revision', async () => {
+    const { editMode, client, state } = await opened()
+    const [first] = state.steps
+    if (!first) throw new Error('no step')
+
+    editMode.setTitle(first.key, 'Open the customer form')
+
+    await vi.waitFor(() => {
+      expect(client.writeLocal).toHaveBeenCalledWith(PANEL, {
+        applicationId: APP,
+        guideId: GUIDE_A,
+        baseRevision: 1,
+        steps: [expect.objectContaining({ id: STEP_A, title: 'Open the customer form' })],
+      })
+    })
+    await vi.waitFor(() => {
+      expect(state.local).toBe('kept')
+    })
+  })
+
+  it('says when the copy could not be kept', async () => {
+    const { editMode, client, state } = await opened()
+    client.writeLocal.mockResolvedValue(ok({ stored: false, reason: 'too-large' as const }))
+    editMode.addStep()
+
+    await vi.waitFor(() => {
+      expect(state.local).toBe('too-large')
+    })
+  })
+
+  it('drops the copy once a save confirmed every edit', async () => {
+    const { editMode, client } = await opened()
+    const key = editMode.addStep()
+    editMode.setTitle(key, 'Save')
+
+    await editMode.save()
+
+    await vi.waitFor(() => {
+      expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A)
+    })
+  })
+
+  it('offers a kept copy back and restores it on the revision it started from', async () => {
+    const client = fakeClient()
+    client.open.mockResolvedValueOnce(
+      ok({ guide: guide(GUIDE_A, 1, ['Open the form']), local: local(1) }),
+    )
+    const { editMode, state } = await opened(client)
+
+    expect(state.recovery?.savedAt).toBe(Date.parse('2026-10-05T12:10:00.000Z'))
+    expect(state.steps[0]?.title).toBe('Open the form')
+    editMode.restoreLocal()
+
+    expect(state.steps[0]?.title).toBe('Open the form (kept)')
+    expect(editMode.dirty.value).toBe(true)
+    expect(state.conflict).toBe(false)
+    expect(state.recovery).toBeNull()
+  })
+
+  it('restores an outdated copy as a conflict, never on the newer revision', async () => {
+    const client = fakeClient()
+    client.open.mockResolvedValueOnce(
+      ok({ guide: guide(GUIDE_A, 3, ['Open the form']), local: local(1) }),
+    )
+    const { editMode, state } = await opened(client)
+
+    editMode.restoreLocal()
+
+    expect(state.baseRevision).toBe(1)
+    expect(state.conflict).toBe(true)
+  })
+
+  it('discards a kept copy when asked', async () => {
+    const client = fakeClient()
+    client.open.mockResolvedValueOnce(
+      ok({ guide: guide(GUIDE_A, 1, ['Open the form']), local: local(1) }),
+    )
+    const { editMode, state } = await opened(client)
+
+    await editMode.discardLocal()
+
+    expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A)
+    expect(state.recovery).toBeNull()
+    expect(state.steps[0]?.title).toBe('Open the form')
+  })
+
+  it('replaces the edits with the latest version only when asked, after a conflict', async () => {
+    const { editMode, client, state } = await opened()
+    client.save.mockResolvedValueOnce(no('CONFLICT', 'Changed elsewhere.'))
+    const [first] = state.steps
+    if (!first) throw new Error('no step')
+    editMode.setTitle(first.key, 'Mine')
+    await editMode.save()
+    expect(state.conflict).toBe(true)
+    client.open.mockResolvedValueOnce(ok({ guide: guide(GUIDE_A, 4, ['Theirs']), local: null }))
+
+    await editMode.loadLatest()
+
+    expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A)
+    expect(state.steps[0]?.title).toBe('Theirs')
+    expect(state.baseRevision).toBe(4)
+    expect(state.conflict).toBe(false)
+    expect(editMode.dirty.value).toBe(false)
+  })
+
+  describe('when a save answer is lost', () => {
+    async function lost() {
+      const context = await opened()
+      context.client.save.mockResolvedValueOnce(no('OUTCOME_UNKNOWN', 'The answer was lost.'))
+      const key = context.editMode.addStep()
+      context.editMode.setTitle(key, 'Save')
+      return context
+    }
+
+    it('reports it saved when the server has exactly what was sent, one revision later', async () => {
+      const { editMode, client, state } = await lost()
+      client.open.mockResolvedValueOnce(
+        ok({ guide: guide(GUIDE_A, 2, ['Open the form', 'Save']), local: null }),
+      )
+
+      await editMode.save()
+
+      expect(editMode.dirty.value).toBe(false)
+      expect(state.steps.map((step) => step.id)).toEqual([STEP_A, STEP_B])
+      expect(state.status).toBe('Your save reached ContextLayer.')
+    })
+
+    it('never claims more than the server shows, and never retries by itself', async () => {
+      const { editMode, client, state } = await lost()
+      client.open.mockResolvedValueOnce(
+        ok({ guide: guide(GUIDE_A, 1, ['Open the form']), local: null }),
+      )
+
+      await editMode.save()
+
+      expect(client.save).toHaveBeenCalledOnce()
+      expect(editMode.dirty.value).toBe(true)
+      expect(state.baseRevision).toBe(1)
+      expect(state.status).toBe(
+        'ContextLayer still has the version from before your save. Your changes are still here; save again when ready.',
+      )
+    })
+
+    it('treats different content on the server as a conflict', async () => {
+      const { editMode, client, state } = await lost()
+      client.open.mockResolvedValueOnce(
+        ok({ guide: guide(GUIDE_A, 2, ['Something else']), local: null }),
+      )
+
+      await editMode.save()
+
+      expect(state.conflict).toBe(true)
+      expect(editMode.dirty.value).toBe(true)
+    })
+
+    it('blocks saving until the server could be checked', async () => {
+      const { editMode, client, state } = await lost()
+      client.open.mockResolvedValueOnce(no('API_UNREACHABLE', 'The API could not be reached.'))
+
+      await editMode.save()
+      expect(state.unknownSave).toBe(true)
+      await editMode.save()
+      expect(client.save).toHaveBeenCalledOnce()
+
+      client.open.mockResolvedValueOnce(
+        ok({ guide: guide(GUIDE_A, 2, ['Open the form', 'Save']), local: null }),
+      )
+      await editMode.checkSave()
+      expect(state.unknownSave).toBe(false)
+      expect(editMode.dirty.value).toBe(false)
+    })
   })
 })
