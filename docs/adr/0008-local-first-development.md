@@ -66,7 +66,7 @@ Any platform that runs a container and can reach PostgreSQL will do: a VM with C
 
 ### Follow-ups
 
-- **Planned (Phase 2):** a seed script, and CI running the same pnpm commands (so the CI provider is replaceable).
+- **Implemented (Phase 2):** CI running the same pnpm commands (so the CI provider is replaceable), with PostgreSQL as a service container and no secrets. The planned seed script was dropped: registering in the dashboard is faster than maintaining demo credentials.
 - **Planned (Phase 8):** Dockerfiles, reverse-proxy configuration, backups and observability.
 
 ## References

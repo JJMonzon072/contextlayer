@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-04: **Phase 1 is done; Phases 2–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-04: **Phases 1 and 2 are done; Phases 3–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -12,7 +12,7 @@ Status on 2026-10-04: **Phase 1 is done; Phases 2–8 are Planned.** A phase clo
 | Phase | Name                      | Status  | Milestones                                      |
 | ----- | ------------------------- | ------- | ----------------------------------------------- |
 | 1     | Foundation                | Done    | none                                            |
-| 2     | Identity and workspaces   | Planned | 2a API + CI, 2b dashboard                       |
+| 2     | Identity and workspaces   | Done    | 2a API + CI, 2b dashboard                       |
 | 3     | Guides API and management | Planned | 3a API, 3b dashboard                            |
 | 4     | Extension connection      | Planned | 4a auth handoff, 4b site access                 |
 | 5     | Edit Mode (guide builder) | Planned | none                                            |
@@ -57,30 +57,35 @@ Risks addressed (mitigation started): every risk whose [register](technical-risk
 
 ## Phase 2 — Identity and workspaces
 
-**Planned (Phase 2).** Depends on Phase 1. Goal: a person registers, signs in, creates a workspace and adds members, behind sessions and CSRF protection later phases can trust.
+**Done (Implemented, Phase 2).** Goal: a person registers, signs in, creates a workspace and adds members, behind sessions and CSRF protection later phases can trust.
 
 2a — API and CI:
 
-- [ ] First migration: `users`, `sessions`, `workspaces`, `workspace_members` (`uuidv7()` keys, roles as text + check) and a seed script.
-- [ ] `auth` module: `POST /v1/auth/register`, `/login`, `/logout`, `GET /v1/auth/session`; argon2id (`@node-rs/argon2`); opaque session token stored only as a SHA-256 hash; HttpOnly + Secure + SameSite=Strict cookie.
-- [ ] CSRF guard on unsafe methods against the `DASHBOARD_ORIGIN` allow-list (dev: `http://localhost:5173` and `http://localhost:4173`, the preview server Playwright uses; never compared with Host, because the Vite proxy rewrites Host but not Origin); `@fastify/rate-limit` on auth routes.
-- [ ] `workspaces` module with roles `owner | admin | editor | member`; every query filtered by `workspace_id`.
-- [ ] Repository tests against real PostgreSQL; GitHub Actions running install, typecheck, lint, test, build and e2e.
+- [x] First migration `0000_identity`: `users`, `sessions`, `workspaces`, `workspace_members` (`uuidv7()` keys, roles as text + check, explicit constraint names).
+- [x] `auth` module: `POST /v1/auth/register`, `/login`, `/logout`, `GET /v1/auth/session`; argon2id (`@node-rs/argon2`); opaque session token stored only as a SHA-256 hash; 30 min idle and 8 h absolute expiry; revocation on logout and on a new login; HttpOnly + Secure + SameSite=Strict cookie (`__Host-cl_session` in production).
+- [x] CSRF guard on unsafe methods against the `DASHBOARD_ORIGIN` allow-list (dev: `http://localhost:5173` and `http://localhost:4173`; never compared with Host); `text/plain` bodies refused; `@fastify/rate-limit` on login (IP + email) and register (IP).
+- [x] `workspaces` module with roles `owner | admin | editor | member`, member management and last-owner protection; non-members get 404.
+- [x] Integration tests against a separate PostgreSQL database (`contextlayer_test`), including a tenant-isolation matrix; GitHub Actions running install, format, typecheck, lint, migrations, `drizzle-kit check`, unit + integration tests, build and both e2e suites.
 
 2b — Dashboard:
 
-- [ ] vue-router with an auth guard, sign-up/sign-in screens, workspace switcher, member list.
+- [x] vue-router with session guards and safe post-login redirects; sign-in and registration screens; first-workspace onboarding; workspace switcher; overview and member management pages; `/status` for the system status.
+- [x] Component and unit tests for the forms, session state, route guards, API errors and workspace switching; Playwright flow with axe on every screen.
 
-Out of scope: email delivery (verification, reset), invitations, SSO, custom roles, extension auth.
+Changed from the plan:
 
-Exit criteria:
+- **No seed script.** Registering takes seconds and the e2e test creates its own account; a seeded demo password would be one more credential to keep out of production.
+- **Registration creates no workspace.** The dashboard asks for the first workspace's name (onboarding) instead of inventing one.
+- **No `workspaces.slug` or `users.email_verified_at`.** Nothing in this phase uses them ([data model 8](data-model.md#8-the-phase-2-first-migration)).
+- **No global rate limit.** Only the public auth routes are limited; every other route requires a session.
 
-- After `docker compose down -v && docker compose up -d --wait`, `pnpm db:migrate` and the seed succeed and `drizzle-kit check` is clean.
-- Integration tests: cookie flags are HttpOnly and SameSite=Strict; only hashes are stored; a foreign `Origin` gets 403; repeated failed logins get 429; a non-member gets 404.
-- Playwright: register → create workspace → sign out → sign in, with 0 axe violations.
-- CI is green on a pull request to `main`.
+Verification (at commit `e2e4816`): `pnpm format:check`, `pnpm typecheck` and `pnpm lint` pass; `pnpm test` runs 175 tests in 23 files, 51 of them API integration tests on PostgreSQL 18.6; `pnpm test:e2e` passes dashboard 8/8 (axe: 0 violations on the status, sign-in, registration, onboarding, overview and members screens) and extension 6/6; the migration applies to an empty database and `drizzle-kit check` is clean. A smoke run of the built API confirmed the cookie flags, 403 for a foreign `Origin`, 415 for `text/plain`, 401 after logout and after revoking the session in the database, argon2id hashes and 32-byte token hashes in the tables, 429 with `retry-after` after 10 login attempts, and no password or cookie value in the logs. CI runs the same checks on the pull request to `main`.
 
-Risks: R-13, R-17, R-18. ADRs: first run ADR 0015's dashboard spike (items 2–3: request headers through the Vite proxy against the guard; `Secure` and `__Host-` cookies on localhost), then implement the dashboard half of [ADR 0015](adr/0015-authentication-strategy.md) with its Proposed lifetimes (30 min idle, 8 h absolute) and mark it Accepted for that half; revisit [ADR 0005](adr/0005-drizzle-orm.md) with the first real migration.
+Out of scope (unchanged): email delivery (verification, reset), invitations, SSO, custom roles, extension auth, "log out everywhere" UI.
+
+Carried forward: rate-limit store in memory (one API process; shared store in Phase 8); [ADR 0015](adr/0015-authentication-strategy.md) cookie behaviour verified in Chromium only (Firefox and Safari untested); expired and revoked session rows are never deleted (cleanup job, [data model open question 6](data-model.md#9-open-questions)); `content.js` size unchanged (Phase 5 budget).
+
+Risks addressed: R-13 (dashboard half), R-17 (workspace membership), R-18 (CI gate). ADRs: [ADR 0015](adr/0015-authentication-strategy.md) Accepted for the dashboard after its spike items 2–3; [ADR 0005](adr/0005-drizzle-orm.md) held up with the first real migration (a `customType` for `bytea`, `uuidv7()` defaults, explicit constraint names).
 
 ## Phase 3 — Guides API and management
 

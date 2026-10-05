@@ -51,8 +51,7 @@ Negative / trade-offs:
 
 Follow-ups:
 
-- **Planned (Phase 2):** first tables, migration and seed; commit each generated SQL file with its `meta/` snapshot (the empty `meta/_journal.json` is already committed, so `db:migrate` works on a fresh clone); one repository per module ([ADR 0002](0002-modular-monolith-backend.md)).
-- **Proposed:** run `drizzle-kit check` in the Phase 2 CI pipeline to catch conflicting migration histories.
+- **Implemented (Phase 2):** first tables and migration, committed with its `meta/` snapshot; table files live with their modules, one repository per module ([ADR 0002](0002-modular-monolith-backend.md)). drizzle-orm 0.45 has no `bytea` column type, so `infrastructure/database/columns.ts` adds a `customType`; constraint names are set explicitly because the API matches unique violations by name. `drizzle-kit check` runs in CI. No seed script.
 - **Proposed:** evaluate Drizzle 1.0 once it becomes `latest`.
 
 ## References

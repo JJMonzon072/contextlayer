@@ -58,7 +58,7 @@ Negative / trade-offs:
 
 Follow-ups:
 
-- **Planned (Phase 2):** every tenant-owned repository query filters by `workspace_id` (risk R-17, [technical risks](../technical-risks.md)).
+- **Implemented (Phase 2):** `auth` and `workspaces` modules; they reach each other only through interfaces wired in `app.ts`, and every workspace query is scoped by workspace and membership. **Planned (Phase 3):** every tenant-owned content query filters by `workspace_id` (risk R-17, [technical risks](../technical-risks.md)).
 - **Proposed:** enforce boundaries once a second module exists (ESLint `no-restricted-imports` patterns or dependency-cruiser), so importing another module's repository fails the lint.
 - **Planned (Phase 7):** analytics as the first extraction candidate: its own tables (`guide_runs`, `guide_events`), append-only writes and a batched, idempotent `POST /v1/analytics/events`.
 - **Proposed:** if ingestion load affects the API, run it as a second entry point of the same codebase before considering a separate service.
