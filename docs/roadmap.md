@@ -191,13 +191,13 @@ Verification (at commit `bc3183a`):
   - 86 extension tests (handoff sender matrix, connection manager, refresh, site access with a fake Chrome) and 108 dashboard tests.
 - `pnpm test:e2e` passes dashboard 12/12 and extension 22/22 in Playwright's Chromium 153.0.8010.12, on the dedicated `contextlayer_e2e` database; the extension suite also passed `--repeat-each=3` (66/66). axe: 0 violations on the popup and the connect page.
 - Migrations `0000`–`0005` apply to an empty database (throwaway, dropped afterwards) and `drizzle-kit check` is clean.
-- Manual check of Chrome's own permission prompt: documented in [ADR 0017](adr/0017-per-application-site-access.md), not run by the suites (still pending after the review fixes below).
+- Manual check of Chrome's own permission prompt: run by JJ in Google Chrome 153.0.8010.52 on macOS with the regular build, after the review fixes below (Allow on `http://localhost:8081`: the site was On with its guide after the popup closed; Deny on `http://127.0.0.1:8082`: the site stayed Off). Details and limits in [ADR 0017](adr/0017-per-application-site-access.md); the automated suites do not cover Chrome's prompt.
 
 Review fixes (after `5ed6613`, PR #3 review):
 
 - **Late connection answers.** A code exchange still in flight could install its connection after Disconnect or Cancel, a newer attempt could be overwritten by an older exchange, two simultaneous messages could exchange one code twice, an older connection's late 401 could clear a newer one, and Disconnect waited for a refresh before clearing anything. Fixed with an explicit life cycle (two generations, transitions that never wait for the network; [ADR 0015](adr/0015-authentication-strategy.md)); an exchange that loses is never installed and its grant is revoked, best effort.
 - **"Turn on" outlived by the popup.** The popup waited for Chrome's answer before telling the worker, so closing it during the prompt could leave the origin granted but off. The worker now holds a pending request (connection, exact origin, tab, 3 minutes) and completes it when Chrome grants the origin, including on `permissions.onAdded`; a grant without a request turns nothing on ([ADR 0017](adr/0017-per-application-site-access.md)).
-- Verification: `pnpm test` 524 tests in 54 files (extension 107, ten of the new life-cycle tests failed before the fix); `pnpm test:e2e` dashboard 12/12 and extension 25/25 (`--repeat-each=3`: 75/75). The manual check of Chrome's own prompt is described in ADR 0017 and is **still pending**.
+- Verification: `pnpm test` 524 tests in 54 files (extension 107, ten of the new life-cycle tests failed before the fix); `pnpm test:e2e` dashboard 12/12 and extension 25/25 (`--repeat-each=3`: 75/75). JJ then ran the manual check of Chrome's own prompt (Allow and Deny, see above).
 
 Out of scope: Edit Mode (Phase 5), playback (Phase 6), `launchWebAuthFlow`, other browsers, "log out everywhere".
 
