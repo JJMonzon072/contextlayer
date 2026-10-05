@@ -240,7 +240,7 @@ Contracts: `packages/shared/src/{applications,guides,origins,rich-text,target-de
   - Omitted optional fields take their defaults (`target: null`, `urlPattern: null`, `placement: "auto"`).
   - Ids of other guides are refused with 404 and nothing changes.
   - At most 50 steps; the route accepts bodies up to 2 MiB, since a list at its limits is about 1.6 MB.
-- **Publishing.** Freezes the draft into the next version under the guide's row lock. Versions cannot be changed or deleted through the API, and the database rejects updates ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
+- **Publishing.** Freezes the draft into the next version under the guide's row lock. Versions cannot be changed or deleted through the API, and the database rejects deleting them and any update other than clearing the publisher (`published_by = NULL`, used when an account is deleted) ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
 - **Content.** `body` is the restricted rich-text v1 document: at most 20 blocks, 2000 characters and 200 text runs; links only `https:`. Unknown versions and unknown keys get 400, for bodies and descriptors alike.
 
 #### Unknown routes

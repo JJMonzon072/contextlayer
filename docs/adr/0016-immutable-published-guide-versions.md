@@ -19,7 +19,12 @@ PostgreSQL 18 with Drizzle is the store ([ADR 0004](0004-postgresql-primary-data
 **Implemented (Phase 3).** A guide has one mutable draft (`guides` and the ordered `guide_steps`) and any number of immutable published versions (`guide_versions`). Publishing copies the draft into a JSON snapshot; players and runs only ever use snapshots.
 
 - **Snapshot.** `guide_versions.snapshot` holds `{ version: 1, guide: { id, applicationId, title, description, startUrlPattern }, steps: [...] }`, validated by `guideSnapshotSchema` (`packages/shared/src/guides.ts`) before it is written. It never references `guide_steps` rows, so nothing done to the draft afterwards can reach it.
-- **Immutability is enforced by PostgreSQL**, not only by the absence of routes: a `BEFORE UPDATE` trigger (`drizzle/0002_content_constraints.sql`) rejects every update except the `ON DELETE SET NULL` that anonymizes `published_by` when an account is deleted. `guide_versions → guides` is `ON DELETE RESTRICT`, and the API has no route that changes or deletes a version.
+- **Immutability is enforced by PostgreSQL**, not only by the absence of routes. The guarantee is precisely:
+  - **Content and identity never change.** A `BEFORE UPDATE` trigger (`drizzle/0002_content_constraints.sql`) rejects any update that touches `id`, `guide_id`, `version`, `guide_revision`, `snapshot` or `published_at`.
+  - **Only the publisher can be anonymized.** The one update the trigger lets through sets `published_by` to `NULL` and changes nothing else. That is how `ON DELETE SET NULL` anonymizes the publisher when their account is deleted. The trigger cannot tell that from a manual `UPDATE … SET published_by = NULL`, so such an update is also accepted; it removes attribution only, never content.
+  - **Versions are never deleted.** A `BEFORE DELETE` trigger (`drizzle/0003_protect_published_versions.sql`, added after the Phase 3 review) rejects every delete, including direct SQL. Both triggers use SQLSTATE `23000`.
+  - **Not covered:** `TRUNCATE` does not fire row triggers; it remains an owner-level maintenance operation (the test suite uses it to reset its database).
+  - **Defense in depth:** `guide_versions → guides` is `ON DELETE RESTRICT`, and the API has no route that changes or deletes a version.
 - **One writer at a time per guide.** Every draft change (`PATCH`), step replacement (`PUT …/steps`), archive and publish runs in a transaction that first takes `SELECT … FOR UPDATE` on the guide row. A snapshot therefore never mixes two drafts, and version numbers are assigned in order; `unique (guide_id, version)` backs this up.
 - **Draft revision.** `guides.revision` increases on every draft change, and each version records the revision it froze (`guide_revision`). This gives three things with one integer:
   - "Unpublished changes" is `revision ≠ latest version's revision`.
@@ -39,12 +44,12 @@ PostgreSQL 18 with Drizzle is the store ([ADR 0004](0004-postgresql-primary-data
 
 ## Consequences
 
-- **Positive:** learners and analytics see frozen content; published history cannot be rewritten even by a bug or a manual `UPDATE`; concurrent authors cannot silently overwrite each other; publishing is safe to retry.
+- **Positive:** learners and analytics see frozen content; published history cannot be rewritten or deleted even by a bug or a manual `UPDATE` or `DELETE` (only the publisher attribution can be cleared); concurrent authors cannot silently overwrite each other; publishing is safe to retry.
 - **Negative:** each version duplicates its content (bounded: at most 50 steps, each with a descriptor of up to 16 KB and 2000 characters of instructions); ids inside the snapshot are not foreign-key checked; saving content without changing it still counts as a new revision.
 - **Follow-ups:**
   - **Planned (Phase 4):** the extension fetches the latest version of non-archived guides for an origin.
   - **Planned (Phase 7):** runs reference `guide_versions.id`.
-  - **Proposed:** pinning an older version as live (rollback), [data model open question 4](../data-model.md#9-open-questions); a purge job for archived guides that deletes in dependency order.
+  - **Proposed:** pinning an older version as live (rollback), [data model open question 4](../data-model.md#9-open-questions); a purge job for archived guides that deletes in dependency order (it would have to disable the delete trigger deliberately, as the table owner, with `ALTER TABLE guide_versions DISABLE TRIGGER`).
 
 ## References
 

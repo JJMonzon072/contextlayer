@@ -198,6 +198,29 @@ describe('guide versions', () => {
     ).toBe('23000')
   })
 
+  it('cannot be deleted, not even by direct SQL, while new versions can still be added', async () => {
+    const { guide, snapshot } = await publishedGuide()
+    const versionsOfGuide = () =>
+      db
+        .select({ version: guideVersions.version, snapshot: guideVersions.snapshot })
+        .from(guideVersions)
+        .where(eq(guideVersions.guideId, guide.id))
+        .orderBy(guideVersions.version)
+
+    expect(
+      await sqlState(db.delete(guideVersions).where(eq(guideVersions.guideId, guide.id))),
+    ).toBe('23000')
+    expect(
+      await sqlState(db.execute(sql`delete from guide_versions where guide_id = ${guide.id}`)),
+    ).toBe('23000')
+    expect(await versionsOfGuide()).toEqual([{ version: 1, snapshot }])
+
+    await db
+      .insert(guideVersions)
+      .values({ guideId: guide.id, version: 2, guideRevision: 2, snapshot })
+    expect((await versionsOfGuide()).map((row) => row.version)).toEqual([1, 2])
+  })
+
   it('never repeats a version number for a guide', async () => {
     const { guide, snapshot } = await publishedGuide()
 

@@ -6,7 +6,7 @@ import { guideVersions, guides } from './guides.schema.js'
 
 /**
  * Published versions are insert-only: this module has no update or delete
- * function, and a trigger rejects UPDATE in the database (ADR 0016). Reads
+ * function, and triggers reject DELETE and UPDATE in the database (ADR 0016). Reads
  * reach a version only through a guide of the caller's workspace.
  */
 
