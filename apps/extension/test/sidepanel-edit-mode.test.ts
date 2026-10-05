@@ -361,12 +361,16 @@ describe('unsaved changes and lost answers', () => {
     editMode.setTitle(first.key, 'Open the customer form')
 
     await vi.waitFor(() => {
-      expect(client.writeLocal).toHaveBeenCalledWith(PANEL, {
-        applicationId: APP,
-        guideId: GUIDE_A,
-        baseRevision: 1,
-        steps: [expect.objectContaining({ id: STEP_A, title: 'Open the customer form' })],
-      })
+      expect(client.writeLocal).toHaveBeenCalledWith(
+        PANEL,
+        {
+          applicationId: APP,
+          guideId: GUIDE_A,
+          baseRevision: 1,
+          steps: [expect.objectContaining({ id: STEP_A, title: 'Open the customer form' })],
+        },
+        editMode.state.editVersion,
+      )
     })
     await vi.waitFor(() => {
       expect(state.local).toBe('kept')
@@ -391,7 +395,7 @@ describe('unsaved changes and lost answers', () => {
     await editMode.save()
 
     await vi.waitFor(() => {
-      expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A)
+      expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A, expect.any(Number))
     })
   })
 
@@ -434,7 +438,7 @@ describe('unsaved changes and lost answers', () => {
 
     await editMode.discardLocal()
 
-    expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A)
+    expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A, expect.any(Number))
     expect(state.recovery).toBeNull()
     expect(state.steps[0]?.title).toBe('Open the form')
   })
@@ -451,7 +455,7 @@ describe('unsaved changes and lost answers', () => {
 
     await editMode.loadLatest()
 
-    expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A)
+    expect(client.clearLocal).toHaveBeenCalledWith(PANEL, GUIDE_A, expect.any(Number))
     expect(state.steps[0]?.title).toBe('Theirs')
     expect(state.baseRevision).toBe(4)
     expect(state.conflict).toBe(false)
@@ -588,5 +592,88 @@ describe('previewing a step', () => {
     expect(state.previewNote?.text).toBe(
       'Select the element again on this page to preview this step.',
     )
+  })
+})
+
+describe('what the panel says about the local copy', () => {
+  const stored = ok({ stored: true, reason: null })
+
+  it('says pending, not kept, for an edit made after the last confirmed copy', async () => {
+    const { editMode, client, state } = await opened()
+    const [first] = state.steps
+    if (!first) throw new Error('no step')
+    editMode.setTitle(first.key, 'Version A')
+    await vi.waitFor(() => {
+      expect(state.local).toBe('kept')
+    })
+    const slow = deferred<Awaited<ReturnType<AuthoringClient['writeLocal']>>>()
+    client.writeLocal.mockImplementationOnce(() => slow.promise)
+
+    editMode.setTitle(first.key, 'Version B')
+
+    expect(state.local).toBe('pending')
+    slow.resolve(stored)
+    await vi.waitFor(() => {
+      expect(state.local).toBe('kept')
+    })
+  })
+
+  it('never lets an old acknowledgement mark a newer edit as kept', async () => {
+    const { editMode, client, state } = await opened()
+    const [first] = state.steps
+    if (!first) throw new Error('no step')
+    const answers = [
+      deferred<Awaited<ReturnType<AuthoringClient['writeLocal']>>>(),
+      deferred<Awaited<ReturnType<AuthoringClient['writeLocal']>>>(),
+    ]
+    client.writeLocal
+      .mockImplementationOnce(() => answers[0]?.promise ?? Promise.resolve(stored))
+      .mockImplementationOnce(() => answers[1]?.promise ?? Promise.resolve(stored))
+
+    editMode.setTitle(first.key, 'Version B')
+    await vi.waitFor(() => {
+      expect(client.writeLocal).toHaveBeenCalledTimes(1)
+    })
+    editMode.setTitle(first.key, 'Version C')
+    answers[0]?.resolve(stored)
+    await vi.waitFor(() => {
+      expect(client.writeLocal).toHaveBeenCalledTimes(2)
+    })
+
+    // Version B was confirmed, but the panel shows Version C.
+    expect(state.local).toBe('pending')
+    answers[1]?.resolve(stored)
+    await vi.waitFor(() => {
+      expect(state.local).toBe('kept')
+    })
+  })
+
+  it('keeps edits made during a save on the new revision', async () => {
+    const { editMode, client, state } = await opened()
+    const [first] = state.steps
+    if (!first) throw new Error('no step')
+    editMode.setTitle(first.key, 'Sent with the save')
+    const saving = deferred<Awaited<ReturnType<AuthoringClient['save']>>>()
+    client.save.mockImplementationOnce(() => saving.promise)
+
+    const done = editMode.save()
+    editMode.setTitle(first.key, 'Typed during the save')
+    await vi.waitFor(() => {
+      expect(state.local).toBe('kept')
+    })
+    saving.resolve(
+      ok({ operationId: 'op-000001', guide: guide(GUIDE_A, 2, ['Sent with the save']) }),
+    )
+    await done
+
+    await vi.waitFor(() => {
+      expect(client.writeLocal.mock.lastCall?.[1]).toMatchObject({
+        baseRevision: 2,
+        steps: [expect.objectContaining({ title: 'Typed during the save' })],
+      })
+    })
+    await vi.waitFor(() => {
+      expect(state.local).toBe('kept')
+    })
   })
 })

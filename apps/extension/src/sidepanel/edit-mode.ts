@@ -4,6 +4,7 @@ import { computed, reactive } from 'vue'
 import type {
   AuthoringAttachData,
   AuthoringStateData,
+  FinalCopy,
   LocalDraft,
   MessageError,
 } from '../messaging/protocol'
@@ -29,9 +30,12 @@ import {
  * (`App.vue`) only renders this and calls its actions.
  *
  * Three kinds of state are kept apart: what is only in this panel's memory
- * (`dirty`), the copy the worker keeps in the browser session (`local`, lost
- * when the browser closes, offered back as `recovery`), and what the server
- * confirmed (`guide`, `lastSavedAt`). A captured element is never applied by
+ * (`dirty`), the copy the worker keeps in the browser session (`local`:
+ * `kept` only once the worker confirmed the very edit on screen, lost when
+ * the browser closes or the extension is updated, offered back as
+ * `recovery`), and what the server confirmed (`guide`, `lastSavedAt`).
+ * Edits are numbered (`editVersion`) for the panel's whole life, so an
+ * older acknowledgement never marks a newer edit as kept. A captured element is never applied by
  * itself: it waits in `review` until the author uses it, and nothing reaches
  * the server until the author saves. A save whose answer was lost is checked
  * against the server before anything is claimed, and never retried by
@@ -66,7 +70,10 @@ export interface EditModeState {
   /** The revision the edits are based on, sent back as `expectedRevision`. */
   baseRevision: number | null
   steps: EditorStep[]
-  /** Bumped on every edit; `savedVersion` is the edit a confirmed save included. */
+  /**
+   * Bumped on every edit and never reset while the panel lives; `savedVersion`
+   * is the edit a confirmed save (or the last load) included.
+   */
   editVersion: number
   savedVersion: number
   loading: boolean
@@ -80,8 +87,11 @@ export interface EditModeState {
   capture: { stepKey: string; captureId: string } | null
   review: { stepKey: string; captureId: string; descriptor: TargetDescriptor } | null
   captureNote: { stepKey: string; text: string } | null
-  /** The copy in the browser session: kept, or why not. */
-  local: 'none' | 'kept' | 'too-large' | 'quota' | 'failed'
+  /**
+   * The copy in the browser session of the edit on screen: `pending` until
+   * the worker confirms this very version, `kept` once it did, or why not.
+   */
+  local: 'none' | 'pending' | 'kept' | 'too-large' | 'quota' | 'failed'
   /** A copy found when the guide was opened, offered back to the author. */
   recovery: LocalDraft | null
   /** A save was sent, its answer was lost, and the server could not be checked yet. */
@@ -140,6 +150,8 @@ export function createEditMode(deps: EditModeDeps) {
   // The local copy: one write or clear at a time, in order, coalesced.
   let localTimer: ReturnType<typeof setTimeout> | undefined
   let localChain: Promise<void> = Promise.resolve()
+  /** The newest edit version of the open guide the worker confirmed it keeps. */
+  let keptVersion: number | null = null
   /** A save whose answer was lost, to check against the server. */
   let pendingCheck:
     | { guideId: string; base: number; version: number; sent: EditorStep[]; inputs: StepInput[] }
@@ -150,36 +162,73 @@ export function createEditMode(deps: EditModeDeps) {
     return localChain
   }
 
-  function writeLocalNow(): Promise<void> {
-    clearTimeout(localTimer)
-    localTimer = undefined
+  /** The steps on screen as a copy for the worker, if a guide is open. */
+  function snapshot(): FinalCopy | undefined {
     const guide = state.guide
     const applicationId = state.applicationId
     const baseRevision = state.baseRevision
+    if (!guide || !applicationId || baseRevision === null) return undefined
+    return {
+      draft: { applicationId, guideId: guide.id, baseRevision, steps: toDraft(state.steps) },
+      version: state.editVersion,
+    }
+  }
+
+  /** The copy of the edit on screen, unless the worker already confirmed it. */
+  function unconfirmedCopy(): FinalCopy | undefined {
+    if (!dirty.value || keptVersion === state.editVersion) return undefined
+    return snapshot()
+  }
+
+  /** What an answer about copy `version` means for the edit on screen. */
+  function acknowledge(
+    version: number,
+    result: Awaited<ReturnType<AuthoringClient['writeLocal']>>,
+  ) {
+    if (result.ok && result.data.stored) {
+      keptVersion = Math.max(keptVersion ?? version, version)
+    } else if (version === state.editVersion) {
+      const reason = result.ok ? result.data.reason : 'failed'
+      // `outdated`: a newer copy of this panel is already kept.
+      if (reason !== 'outdated') state.local = reason ?? 'failed'
+      return
+    }
+    if (dirty.value) state.local = keptVersion === state.editVersion ? 'kept' : 'pending'
+  }
+
+  function writeLocalNow(): Promise<void> {
+    clearTimeout(localTimer)
+    localTimer = undefined
+    const copy = snapshot()
     const id = panelId
-    if (!id || !guide || !applicationId || baseRevision === null) return Promise.resolve()
-    const draft = { applicationId, guideId: guide.id, baseRevision, steps: toDraft(state.steps) }
+    if (!id || !copy) return Promise.resolve()
+    const guideId = copy.draft.guideId
+    /** Read through a call: another guide may be opened while the copy is on its way. */
+    const stillOpen = () => state.guide?.id === guideId
     return queueLocal(async () => {
-      const result = await client.writeLocal(id, draft)
-      if (state.guide?.id !== guide.id) return
-      if (!result.ok) state.local = 'failed'
-      else state.local = result.data.stored ? 'kept' : (result.data.reason ?? 'failed')
+      // Already kept, or a newer copy was confirmed meanwhile.
+      if (!stillOpen() || (keptVersion ?? -1) >= copy.version) return
+      const result = await client.writeLocal(id, copy.draft, copy.version)
+      if (stillOpen()) acknowledge(copy.version, result)
     })
   }
 
-  function clearLocalNow(guideId: string): Promise<void> {
+  /** Drops the guide's copy up to `version` (a newer copy of this panel stays). */
+  function clearLocalNow(guideId: string, version: number): Promise<void> {
     clearTimeout(localTimer)
     localTimer = undefined
     const id = panelId
     if (!id) return Promise.resolve()
     return queueLocal(async () => {
-      await client.clearLocal(id, guideId)
+      await client.clearLocal(id, guideId, version)
       if (state.guide?.id === guideId && !dirty.value) state.local = 'none'
     })
   }
 
   function touch() {
     state.editVersion += 1
+    // Nothing confirmed this edit yet.
+    state.local = 'pending'
     clearTimeout(localTimer)
     localTimer = setTimeout(() => {
       void writeLocalNow()
@@ -195,14 +244,14 @@ export function createEditMode(deps: EditModeDeps) {
     clearTimeout(localTimer)
     localTimer = undefined
     pendingCheck = undefined
+    keptVersion = null
     state.unknownSave = false
     state.local = 'none'
     state.recovery = local
     state.guide = guide
     state.baseRevision = guide.revision
     state.steps = fromGuide(guide)
-    state.editVersion = 0
-    state.savedVersion = 0
+    state.savedVersion = state.editVersion
     state.conflict = false
     state.review = null
     state.captureNote = null
@@ -249,8 +298,15 @@ export function createEditMode(deps: EditModeDeps) {
     state.lastSavedAt = now()
     state.conflict = false
     state.error = null
-    // Edits made while saving are still only here: keep their copy, on the new revision.
-    void (dirty.value ? writeLocalNow() : clearLocalNow(guide.id))
+    if (dirty.value) {
+      // Edits made while saving are still only here. Their copy is now based on
+      // the new revision: a new version, so it is written again, not skipped.
+      state.editVersion += 1
+      state.local = 'pending'
+      void writeLocalNow()
+    } else {
+      void clearLocalNow(guide.id, version)
+    }
   }
 
   /**
@@ -415,18 +471,18 @@ export function createEditMode(deps: EditModeDeps) {
       loadToken += 1
       if (state.capture) await cancelCapture()
       // Leaving the guide discards its unsaved changes, including their copy.
-      if (state.guide && dirty.value) await clearLocalNow(state.guide.id)
+      if (state.guide && dirty.value) await clearLocalNow(state.guide.id, state.editVersion)
       clearTimeout(localTimer)
       localTimer = undefined
       pendingCheck = undefined
+      keptVersion = null
       state.unknownSave = false
       state.recovery = null
       state.local = 'none'
       state.guide = null
       state.baseRevision = null
       state.steps = []
-      state.editVersion = 0
-      state.savedVersion = 0
+      state.savedVersion = state.editVersion
       state.review = null
       state.conflict = false
       state.error = null
@@ -623,6 +679,8 @@ export function createEditMode(deps: EditModeDeps) {
       state.baseRevision = local.baseRevision
       state.savedVersion = state.editVersion
       state.editVersion += 1
+      // The restored steps are the copy the worker holds.
+      keptVersion = state.editVersion
       state.local = 'kept'
       // Saved elsewhere since: saving will be refused until the author decides.
       state.conflict = local.baseRevision !== guide.revision
@@ -634,7 +692,7 @@ export function createEditMode(deps: EditModeDeps) {
     async discardLocal() {
       const local = state.recovery
       state.recovery = null
-      if (local) await clearLocalNow(local.guideId)
+      if (local) await clearLocalNow(local.guideId, state.editVersion)
       state.status = 'Kept changes discarded.'
     },
 
@@ -642,28 +700,33 @@ export function createEditMode(deps: EditModeDeps) {
     async loadLatest() {
       const guide = state.guide
       if (!guide) return
-      await clearLocalNow(guide.id)
+      await clearLocalNow(guide.id, state.editVersion)
       await load((id, applicationId) => client.open(id, applicationId, guide.id))
       state.recovery = null
-    },
-
-    /** From `pagehide`: write a pending copy now, without waiting. */
-    flushLocal() {
-      if (localTimer !== undefined) void writeLocalNow()
     },
 
     async exit() {
       if (!panelId) return
       if (state.capture) await cancelCapture()
-      await client.exit(panelId)
+      clearTimeout(localTimer)
+      localTimer = undefined
+      // The last copy leaves with the exit itself, in the same transition.
+      await client.exit(panelId, unconfirmedCopy())
       // Chrome closes the panel; if it did not, say so.
       state.phase = 'ended'
       state.endedReason = 'exited'
     },
 
-    /** From `pagehide`: the panel is closing. */
-    detach() {
-      if (panelId) client.detach(panelId)
+    /**
+     * What `App.vue` runs on `pagehide`: one message, sent at once, carrying
+     * the copy of the edit on screen if the worker has not confirmed it. The
+     * worker keeps it and ends the session in one transition, so nothing has
+     * to follow the close (a closing page cannot send anything later).
+     */
+    close() {
+      clearTimeout(localTimer)
+      localTimer = undefined
+      if (panelId) client.detach(panelId, unconfirmedCopy())
     },
   }
 }

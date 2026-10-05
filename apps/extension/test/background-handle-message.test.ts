@@ -114,8 +114,9 @@ const AUTHORING = [
     type: 'authoring.local.write',
     panelId: PANEL,
     draft: { applicationId: APP, guideId: GUIDE, baseRevision: 3, steps: [] },
+    version: 4,
   },
-  { type: 'authoring.local.clear', panelId: PANEL, guideId: GUIDE },
+  { type: 'authoring.local.clear', panelId: PANEL, guideId: GUIDE, version: 4 },
   {
     type: 'authoring.preview.show',
     panelId: PANEL,
@@ -126,6 +127,14 @@ const AUTHORING = [
   { type: 'authoring.preview.hide', panelId: PANEL },
   { type: 'authoring.exit', panelId: PANEL },
   { type: 'authoring.detach', panelId: PANEL },
+  {
+    type: 'authoring.detach',
+    panelId: PANEL,
+    final: {
+      draft: { applicationId: APP, guideId: GUIDE, baseRevision: 3, steps: [] },
+      version: 5,
+    },
+  },
 ] as const
 
 const siteStatus = { state: 'unsupported' } as const

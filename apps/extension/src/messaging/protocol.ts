@@ -91,6 +91,21 @@ export const localDraftInputSchema = z.strictObject({
 
 export type LocalDraftInput = z.infer<typeof localDraftInputSchema>
 
+/**
+ * The panel's edit counter, never reset while the panel lives: the worker
+ * keeps a newer copy of a panel over an older one, and the panel only says
+ * an edit is kept once the worker confirmed that very version.
+ */
+const copyVersionSchema = z.number().int().nonnegative()
+
+/** The last copy, sent with the panel's own close so nothing has to follow it. */
+export const finalCopySchema = z.strictObject({
+  draft: localDraftInputSchema,
+  version: copyVersionSchema,
+})
+
+export type FinalCopy = z.infer<typeof finalCopySchema>
+
 const panel = { panelId: panelIdSchema }
 
 export const backgroundRequestSchema = z.discriminatedUnion('type', [
@@ -145,8 +160,15 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
     type: z.literal('authoring.local.write'),
     ...panel,
     draft: localDraftInputSchema,
+    version: copyVersionSchema,
   }),
-  z.strictObject({ type: z.literal('authoring.local.clear'), ...panel, guideId: z.uuid() }),
+  // Clears the guide's copy unless this panel wrote a newer one since `version`.
+  z.strictObject({
+    type: z.literal('authoring.local.clear'),
+    ...panel,
+    guideId: z.uuid(),
+    version: copyVersionSchema,
+  }),
   z.strictObject({
     type: z.literal('authoring.preview.show'),
     ...panel,
@@ -154,9 +176,17 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
     ...previewTextSchema,
   }),
   z.strictObject({ type: z.literal('authoring.preview.hide'), ...panel }),
-  z.strictObject({ type: z.literal('authoring.exit'), ...panel }),
-  // Best effort from the panel's pagehide: the panel is closing.
-  z.strictObject({ type: z.literal('authoring.detach'), ...panel }),
+  z.strictObject({
+    type: z.literal('authoring.exit'),
+    ...panel,
+    final: finalCopySchema.optional(),
+  }),
+  // Sent from the panel's pagehide, with its last unconfirmed copy: the panel is closing.
+  z.strictObject({
+    type: z.literal('authoring.detach'),
+    ...panel,
+    final: finalCopySchema.optional(),
+  }),
   // What a content script may send: "may I run on this page?", and the answer
   // to the capture the worker asked it for (checked against the session).
   z.strictObject({ type: z.literal('page.hello') }),
@@ -341,8 +371,11 @@ export const authoringCaptureResultSchema = messageResultSchema(authoringCapture
 export const authoringSaveResultSchema = messageResultSchema(
   z.object({ operationId: operationIdSchema, guide: guideSchema }),
 )
+/** `outdated`: the worker already holds a newer copy from this panel. */
+export const LOCAL_COPY_REFUSALS = ['too-large', 'quota', 'outdated'] as const
+
 export const authoringLocalResultSchema = messageResultSchema(
-  z.object({ stored: z.boolean(), reason: z.enum(['too-large', 'quota']).nullable() }),
+  z.object({ stored: z.boolean(), reason: z.enum(LOCAL_COPY_REFUSALS).nullable() }),
 )
 export const authoringDoneResultSchema = messageResultSchema(z.object({ done: z.boolean() }))
 /** `shown: false`: this page no longer holds that element (reloaded, removed, never selected here). */

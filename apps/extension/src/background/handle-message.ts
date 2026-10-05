@@ -193,9 +193,17 @@ export async function handleBackgroundMessage(
         request.data.request,
       )
     case 'authoring.local.write':
-      return deps.authoring.writeLocal(request.data.panelId, request.data.draft)
+      return deps.authoring.writeLocal(
+        request.data.panelId,
+        request.data.draft,
+        request.data.version,
+      )
     case 'authoring.local.clear':
-      return deps.authoring.clearLocal(request.data.panelId, request.data.guideId)
+      return deps.authoring.clearLocal(
+        request.data.panelId,
+        request.data.guideId,
+        request.data.version,
+      )
     case 'authoring.preview.show':
       return deps.authoring.showPreview(
         request.data.panelId,
@@ -206,9 +214,9 @@ export async function handleBackgroundMessage(
     case 'authoring.preview.hide':
       return deps.authoring.hidePreview(request.data.panelId)
     case 'authoring.exit':
-      return deps.authoring.exit(request.data.panelId)
+      return deps.authoring.exit(request.data.panelId, request.data.final)
     case 'authoring.detach':
-      return deps.authoring.detach(request.data.panelId)
+      return deps.authoring.detach(request.data.panelId, request.data.final)
     case 'picker.result':
       return success(
         await deps.authoring.pickerResult(sender, request.data.captureId, request.data.outcome),

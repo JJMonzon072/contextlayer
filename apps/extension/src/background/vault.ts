@@ -116,10 +116,22 @@ export const authoringSessionSchema = z.object({
 const authoringEndedSchema = z.object({
   panelId: z.string(),
   reason: z.enum(AUTHORING_END_REASONS),
+  /** What the session was bound to, for the copy its panel sends while closing. */
+  grantId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  guide: z.object({ applicationId: z.string(), guideId: z.string() }).nullable().optional(),
 })
 
-/** Unsaved steps, bound to the connection and workspace they were written in. */
-const storedDraftSchema = localDraftSchema.extend({ grantId: z.string(), workspaceId: z.string() })
+/**
+ * Unsaved steps, bound to the connection and workspace they were written in,
+ * and to the panel and edit version that wrote them.
+ */
+const storedDraftSchema = localDraftSchema.extend({
+  grantId: z.string(),
+  workspaceId: z.string(),
+  panelId: z.string(),
+  version: z.number().int().nonnegative(),
+})
 
 /** Why the last connection ended without the user disconnecting. */
 const endedSchema = z.object({ reason: z.enum(['ended']), at: z.number() })

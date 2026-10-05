@@ -206,7 +206,7 @@ async function editing(options: { route?: Route; maxLocalDraftChars?: number } =
   return { ...context, panelId }
 }
 
-async function capturing(options: { route?: Route } = {}) {
+async function capturing(options: { route?: Route; maxLocalDraftChars?: number } = {}) {
   const context = await editing(options)
   const started = await context.authoring.startCapture(context.panelId)
   if (!started.ok) throw new Error(started.error.message)
@@ -719,7 +719,7 @@ describe('the local copy of unsaved steps', () => {
   it('is offered back for the same connection and guide', async () => {
     const { authoring, panelId } = await editing()
 
-    expect(await authoring.writeLocal(panelId, draft())).toEqual({
+    expect(await authoring.writeLocal(panelId, draft(), 1)).toEqual({
       ok: true,
       data: { stored: true, reason: null },
     })
@@ -737,7 +737,7 @@ describe('the local copy of unsaved steps', () => {
 
   it('never reaches another connection, and Disconnect deletes it', async () => {
     const context = await editing()
-    await context.authoring.writeLocal(context.panelId, draft())
+    await context.authoring.writeLocal(context.panelId, draft(), 1)
 
     // Another account connects without a Disconnect in between.
     await context.auth.save(tokenResponse({ grantId: GRANT_B }))
@@ -750,7 +750,7 @@ describe('the local copy of unsaved steps', () => {
       data: { local: null },
     })
 
-    await context.authoring.writeLocal(attached.data.panelId, draft())
+    await context.authoring.writeLocal(attached.data.panelId, draft(), 1)
     await context.disconnect()
     expect(await context.vault.readDraft()).toBeUndefined()
     expect(await context.vault.readAuthoring()).toBeUndefined()
@@ -760,7 +760,7 @@ describe('the local copy of unsaved steps', () => {
     const { authoring, panelId, vault } = await editing({ maxLocalDraftChars: 500 })
     const target = descriptor()
 
-    expect(await authoring.writeLocal(panelId, draft([step({ target })]))).toEqual({
+    expect(await authoring.writeLocal(panelId, draft([step({ target })]), 1)).toEqual({
       ok: true,
       data: { stored: false, reason: 'too-large' },
     })
@@ -839,5 +839,156 @@ describe('previewing a step', () => {
     await authoring.detach(panelId)
 
     expect(sent.some((entry) => entry.message.type === 'preview.hide')).toBe(true)
+  })
+})
+
+/**
+ * The local copy against the life cycle: every write and clear is one
+ * transition with the ownership check, so Disconnect, a newer session or a
+ * newer write always wins, and the panel's last copy travels with its close.
+ */
+describe('local copies and the end of a session', () => {
+  const draft = (title: string, guideId = GUIDE_A) => ({
+    applicationId: APP,
+    guideId,
+    baseRevision: 1,
+    steps: [step({ title })],
+  })
+  const storedTitle = async (vault: { readDraft: () => Promise<unknown> }) =>
+    ((await vault.readDraft()) as { steps: { title: string }[] } | undefined)?.steps[0]?.title
+
+  it('never brings a copy back after Disconnect, even one that was being written', async () => {
+    const { authoring, panelId, storage, disconnect, vault } = await editing()
+    const held = storage.session.holdNextSet('cl.authoringDraft')
+
+    const writing = authoring.writeLocal(panelId, draft('Private edit'), 1)
+    await held.reached
+    const disconnecting = disconnect()
+    // Disconnect runs as far as it can while the write is stopped halfway.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    held.release()
+    await writing
+    await disconnecting
+
+    expect(await vault.readDraft()).toBeUndefined()
+    expect(JSON.stringify([...storage.session.data])).not.toContain('Private edit')
+  })
+
+  it('never lets an old clear delete the copy of a later session', async () => {
+    const { authoring, panelId, storage, vault } = await editing()
+    await authoring.writeLocal(panelId, draft('First panel'), 1)
+    const held = storage.session.holdNextGet('cl.authoringDraft')
+
+    const clearing = authoring.clearLocal(panelId, GUIDE_A, 1)
+    await held.reached
+    const later = (async () => {
+      const attached = await authoring.attach(TAB)
+      if (!attached.ok) throw new Error('attach')
+      await authoring.open(attached.data.panelId, APP, GUIDE_A)
+      await authoring.writeLocal(attached.data.panelId, draft('Second panel'), 1)
+    })()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    held.release()
+    await clearing
+    await later
+
+    expect(await storedTitle(vault)).toBe('Second panel')
+  })
+
+  it('never lets an older write of the same panel replace a newer copy', async () => {
+    const { authoring, panelId, vault } = await editing()
+
+    await authoring.writeLocal(panelId, draft('Newer'), 5)
+    const older = await authoring.writeLocal(panelId, draft('Older'), 4)
+
+    expect(older).toEqual({ ok: true, data: { stored: false, reason: 'outdated' } })
+    expect(await storedTitle(vault)).toBe('Newer')
+  })
+
+  it('keeps the copy sent with the close, whichever close arrives first', async () => {
+    for (const nativeFirst of [true, false]) {
+      const { authoring, panelId, vault } = await editing()
+      await authoring.writeLocal(panelId, draft('Confirmed earlier'), 1)
+      const final = { draft: draft('Last edit'), version: 2 }
+
+      if (nativeFirst) {
+        await authoring.panelClosed(TAB)
+        await authoring.detach(panelId, final)
+      } else {
+        await authoring.detach(panelId, final)
+        await authoring.panelClosed(TAB)
+      }
+
+      expect(await storedTitle(vault), `native close first: ${String(nativeFirst)}`).toBe(
+        'Last edit',
+      )
+      expect(await authoring.state(panelId)).toEqual({ state: 'ended', reason: 'closed' })
+    }
+  })
+
+  it('never keeps a closing copy for another guide, another connection or a newer panel', async () => {
+    const other = await editing()
+    await other.authoring.detach(other.panelId, {
+      draft: draft('Wrong guide', GUIDE_B),
+      version: 1,
+    })
+    expect(await other.vault.readDraft()).toBeUndefined()
+
+    const replaced = await editing()
+    await replaced.authoring.panelClosed(TAB)
+    await replaced.auth.save(tokenResponse({ grantId: GRANT_B }))
+    await replaced.authoring.detach(replaced.panelId, { draft: draft('Old account'), version: 1 })
+    expect(await replaced.vault.readDraft()).toBeUndefined()
+
+    const disconnected = await editing()
+    await disconnected.authoring.panelClosed(TAB)
+    await disconnected.disconnect()
+    await disconnected.authoring.detach(disconnected.panelId, {
+      draft: draft('After Disconnect'),
+      version: 1,
+    })
+    expect(await disconnected.vault.readDraft()).toBeUndefined()
+
+    const moved = await editing()
+    const newer = await moved.authoring.attach(TAB)
+    if (!newer.ok) throw new Error('attach')
+    await moved.authoring.open(newer.data.panelId, APP, GUIDE_A)
+    await moved.authoring.writeLocal(newer.data.panelId, draft('Newer panel'), 1)
+    await moved.authoring.detach(moved.panelId, { draft: draft('Older panel'), version: 9 })
+    expect(await storedTitle(moved.vault)).toBe('Newer panel')
+  })
+
+  it('removes the picker when the panel closes, even if its last copy cannot be kept', async () => {
+    const { authoring, panelId, captureId, sent, vault } = await capturing({
+      maxLocalDraftChars: 500,
+    })
+
+    await authoring.detach(panelId, { draft: draft('x'.repeat(600)), version: 1 })
+
+    expect(
+      sent.some(
+        (entry) => entry.message.type === 'picker.stop' && entry.message.captureId === captureId,
+      ),
+    ).toBe(true)
+    expect(await vault.readDraft()).toBeUndefined()
+    expect(await authoring.state(panelId)).toEqual({ state: 'ended', reason: 'closed' })
+  })
+
+  it('never holds up the session for a page that does not answer', async () => {
+    const { authoring, panelId, answerWith } = await capturing()
+    answerWith(() => new Promise(() => undefined))
+
+    const closing = authoring.detach(panelId)
+    const reopened = await Promise.race([
+      authoring.attach(TAB),
+      new Promise((resolve) => {
+        setTimeout(() => {
+          resolve('blocked')
+        }, 200)
+      }),
+    ])
+
+    expect(reopened).toMatchObject({ ok: true })
+    void closing
   })
 })

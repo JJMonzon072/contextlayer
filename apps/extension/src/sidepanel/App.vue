@@ -45,6 +45,7 @@ const dashboardLink = computed(() =>
 const busy = computed(() => state.loading || state.saving)
 const LOCAL: Record<typeof state.local, string> = {
   none: 'Unsaved changes in this panel.',
+  pending: 'Unsaved changes in this panel. Keeping a copy in this browser session…',
   kept: 'Unsaved changes are kept in this browser session until you save. They are lost when the browser closes or ContextLayer is updated.',
   'too-large': 'Unsaved changes are too large to keep in this browser session. Save to keep them.',
   quota: 'Unsaved changes could not be kept in this browser session. Save to keep them.',
@@ -99,8 +100,7 @@ function onMessage(message: unknown, sender: chrome.runtime.MessageSender) {
 }
 
 function onPageHide() {
-  editMode.flushLocal()
-  editMode.detach()
+  editMode.close()
 }
 
 const time = (at: number) =>
@@ -149,7 +149,10 @@ onBeforeUnmount(() => {
         role="alertdialog"
         aria-labelledby="exit-question"
       >
-        <p id="exit-question">Leave Edit Mode? Your unsaved changes are not saved.</p>
+        <p id="exit-question">
+          Leave Edit Mode? Your changes are not saved to ContextLayer. A copy stays in this browser
+          session, if it can be kept, until the browser closes or ContextLayer is updated.
+        </p>
         <div class="mt-2 flex gap-2">
           <button type="button" class="btn-danger" @click="editMode.exit()">Leave</button>
           <button type="button" class="btn-secondary" @click="confirming = null">Stay</button>

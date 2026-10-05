@@ -18,6 +18,7 @@ import {
   type AuthoringAttachData,
   type AuthoringCaptureData,
   type AuthoringStateData,
+  type FinalCopy,
   type LocalDraft,
   type LocalDraftInput,
   type MessageResult,
@@ -81,6 +82,15 @@ export const MAX_LOCAL_DRAFT_CHARS = 2 * 1024 * 1024
 
 type Reason = Extract<AuthoringStateData, { state: 'ended' }>['reason']
 
+/** The answer to a copy: kept, or why not (`outdated`: a newer copy of this panel is kept). */
+type CopyResult = MessageResult<{
+  stored: boolean
+  reason: 'too-large' | 'quota' | 'outdated' | null
+}>
+
+/** Endings the panel or its tab caused: the copy it sends while closing is still the author's. */
+const OWN_ENDINGS: readonly Reason[] = ['closed', 'tab-closed', 'exited']
+
 const isOk = (value: unknown) =>
   typeof value === 'object' && value !== null && (value as { ok?: unknown }).ok === true
 
@@ -109,15 +119,33 @@ export function createAuthoring(deps: AuthoringDeps) {
   /** One save at a time per session (in memory: a stopped worker has no save in flight). */
   let saving: string | undefined
 
-  /** Ends the session, telling its panel why and removing any picker or preview from the page. */
-  async function end(session: AuthoringSession, reason: Reason): Promise<void> {
+  /**
+   * Ends the session in storage and records why, and what it was bound to,
+   * for its panel. Storage only: call it inside a transition, then `cleanUp`.
+   */
+  async function endSession(session: AuthoringSession, reason: Reason): Promise<AuthoringSession> {
     await vault.clearAuthoring()
-    await vault.writeAuthoringEnded({ panelId: session.panelId, reason })
-    await chrome
+    await vault.writeAuthoringEnded({
+      panelId: session.panelId,
+      reason,
+      grantId: session.grantId,
+      workspaceId: session.workspaceId,
+      guide: session.guide,
+    })
+    return session
+  }
+
+  /**
+   * Removes any preview or picker an ended session left on its page. Sent at
+   * once, never awaited inside a transition: a page that does not answer
+   * holds up nothing, and the clean-up never waits for the network.
+   */
+  function cleanUp(session: AuthoringSession): void {
+    chrome
       .sendToTab(session.tabId, { type: 'preview.hide' }, session.documentId)
       .catch(() => undefined)
     if (session.capture?.state === 'pending') {
-      await chrome
+      chrome
         .sendToTab(
           session.tabId,
           { type: 'picker.stop', captureId: session.capture.id },
@@ -125,6 +153,16 @@ export function createAuthoring(deps: AuthoringDeps) {
         )
         .catch(() => undefined)
     }
+  }
+
+  /** Ends `session` if it is still the stored one, then cleans its page up. */
+  async function end(session: AuthoringSession, reason: Reason): Promise<boolean> {
+    const ended = await lifecycle.exclusive(async () => {
+      const current = await vault.readAuthoring()
+      return current?.id === session.id ? endSession(current, reason) : undefined
+    })
+    if (ended) cleanUp(ended)
+    return ended !== undefined
   }
 
   /** The session if this panel owns it and the connection is still the one it started with. */
@@ -196,8 +234,115 @@ export function createAuthoring(deps: AuthoringDeps) {
     ) {
       return null
     }
-    const { grantId: _grant, workspaceId: _workspace, ...local } = draft
+    const {
+      grantId: _grant,
+      workspaceId: _workspace,
+      panelId: _panel,
+      version: _version,
+      ...local
+    } = draft
     return local
+  }
+
+  /**
+   * Keeps a panel's copy of its unsaved steps, bound to the connection, the
+   * guide, the panel and its edit version. Inside a transition, after the
+   * caller checked that `owner` may write. A copy never replaces a newer one
+   * from the same panel; a copy too large to keep is refused, never cut.
+   */
+  async function storeCopy(
+    owner: Pick<AuthoringSession, 'grantId' | 'workspaceId' | 'guide'>,
+    panelId: string,
+    draft: LocalDraftInput,
+    version: number,
+  ): Promise<CopyResult> {
+    if (
+      owner.guide?.guideId !== draft.guideId ||
+      owner.guide.applicationId !== draft.applicationId
+    ) {
+      return failure('STALE', 'This guide is no longer open in Edit Mode.')
+    }
+    const current = await vault.readDraft()
+    if (current?.panelId === panelId && current.version >= version) {
+      return success(
+        current.version === version
+          ? { stored: true, reason: null }
+          : { stored: false, reason: 'outdated' },
+      )
+    }
+    const stored = {
+      ...draft,
+      grantId: owner.grantId,
+      workspaceId: owner.workspaceId,
+      panelId,
+      version,
+      savedAt: now(),
+    }
+    if (JSON.stringify(stored).length > (deps.maxLocalDraftChars ?? MAX_LOCAL_DRAFT_CHARS)) {
+      return success({ stored: false, reason: 'too-large' })
+    }
+    try {
+      await vault.writeDraft(stored)
+    } catch {
+      return success({ stored: false, reason: 'quota' })
+    }
+    return success({ stored: true, reason: null })
+  }
+
+  /**
+   * The copy a panel sends with its own close, when its session was already
+   * ended by that same close (Chrome's panel-closed event, the tab closing,
+   * Exit): still kept, but only for the connection and guide that session
+   * had, and only if no newer session started since. Inside a transition.
+   */
+  async function storeClosingCopy(panelId: string, final: FinalCopy): Promise<void> {
+    if (await vault.readAuthoring()) return
+    const ended = await vault.readAuthoringEnded()
+    if (
+      ended?.panelId !== panelId ||
+      !OWN_ENDINGS.includes(ended.reason) ||
+      ended.grantId === undefined ||
+      ended.workspaceId === undefined
+    ) {
+      return
+    }
+    const connection = await vault.readConnection()
+    if (connection?.id !== ended.grantId || connection.workspace.id !== ended.workspaceId) return
+    await storeCopy(
+      { grantId: ended.grantId, workspaceId: ended.workspaceId, guide: ended.guide ?? null },
+      panelId,
+      final.draft,
+      final.version,
+    )
+  }
+
+  /**
+   * The panel closes (or leaves): its last copy, if it sent one, is kept and
+   * the session ends, in one transition, so nothing the panel sent before is
+   * judged against an already ended session. Then the page is cleaned up.
+   */
+  async function closeSession(
+    panelId: string,
+    reason: 'closed' | 'exited',
+    final: FinalCopy | undefined,
+  ): Promise<AuthoringSession | undefined> {
+    const ended = await lifecycle.exclusive(async () => {
+      const session = await vault.readAuthoring()
+      if (session?.panelId !== panelId) {
+        if (final) await storeClosingCopy(panelId, final)
+        return undefined
+      }
+      const owner = await owned(panelId)
+      if (final && !isFailure(owner)) {
+        await storeCopy(owner, panelId, final.draft, final.version)
+      }
+      return endSession(session, reason)
+    })
+    if (ended) {
+      cleanUp(ended)
+      notify()
+    }
+    return ended
   }
 
   async function loadGuide(
@@ -295,7 +440,7 @@ export function createAuthoring(deps: AuthoringDeps) {
     if (session?.panelId === panelId) {
       const connection = await vault.readConnection()
       if (connection?.id !== session.grantId) {
-        await lifecycle.exclusive(() => end(session, 'connection-changed'))
+        await end(session, 'connection-changed')
         return { state: 'ended', reason: 'connection-changed' }
       }
       const capture = session.capture
@@ -323,13 +468,15 @@ export function createAuthoring(deps: AuthoringDeps) {
     return { state: 'ended', reason: session ? 'moved' : 'closed' }
   }
 
-  /** The panel is closing (pagehide, or Chrome's panel-closed event): nothing may stay on the page. */
-  async function detach(panelId: string): Promise<MessageResult<{ done: boolean }>> {
-    const session = await vault.readAuthoring()
-    if (session?.panelId !== panelId) return success({ done: false })
-    await lifecycle.exclusive(() => end(session, 'closed'))
-    notify()
-    return success({ done: true })
+  /**
+   * The panel is closing (its pagehide, with its last unconfirmed copy, or
+   * Chrome's panel-closed event): nothing may stay on the page.
+   */
+  async function detach(
+    panelId: string,
+    final?: FinalCopy,
+  ): Promise<MessageResult<{ done: boolean }>> {
+    return success({ done: (await closeSession(panelId, 'closed', final)) !== undefined })
   }
 
   return {
@@ -381,13 +528,14 @@ export function createAuthoring(deps: AuthoringDeps) {
       }
       const installed = await lifecycle.exclusive(async () => {
         // Disconnected or replaced while the applications were loading.
-        if ((await vault.readConnection())?.id !== connection.id) return false
+        if ((await vault.readConnection())?.id !== connection.id) return undefined
         const previous = await vault.readAuthoring()
-        if (previous) await end(previous, 'moved')
+        if (previous) await endSession(previous, 'moved')
         await vault.writeAuthoring(session)
-        return true
+        return { previous }
       })
       if (!installed) return failure('STALE', 'The connection to ContextLayer changed.')
+      if (installed.previous) cleanUp(installed.previous)
       notify()
       return success({
         panelId: session.panelId,
@@ -697,51 +845,51 @@ export function createAuthoring(deps: AuthoringDeps) {
       }
     },
 
-    /** Keeps the unsaved steps in `storage.session`, bound to this connection and guide. */
-    async writeLocal(
+    /**
+     * Keeps the unsaved steps in `storage.session`, bound to this connection,
+     * guide, panel and edit version. The ownership check and the write are one
+     * transition, so Disconnect or a newer session always wins.
+     */
+    writeLocal(panelId: string, draft: LocalDraftInput, version: number): Promise<CopyResult> {
+      return lifecycle.exclusive(async () => {
+        const session = await owned(panelId)
+        if (isFailure(session)) return session
+        return storeCopy(session, panelId, draft, version)
+      })
+    },
+
+    /**
+     * Drops the guide's copy, unless this panel wrote a newer one than
+     * `version` since. One transition with the ownership check, so an old
+     * request never deletes the copy of a later session.
+     */
+    clearLocal(
       panelId: string,
-      draft: LocalDraftInput,
-    ): Promise<MessageResult<{ stored: boolean; reason: 'too-large' | 'quota' | null }>> {
-      const session = await owned(panelId)
-      if (isFailure(session)) return session
-      if (session.guide?.guideId !== draft.guideId) {
-        return failure('STALE', 'This guide is no longer open in Edit Mode.')
-      }
-      const stored = {
-        ...draft,
-        grantId: session.grantId,
-        workspaceId: session.workspaceId,
-        savedAt: now(),
-      }
-      if (JSON.stringify(stored).length > (deps.maxLocalDraftChars ?? MAX_LOCAL_DRAFT_CHARS)) {
-        return success({ stored: false, reason: 'too-large' })
-      }
-      try {
-        await vault.writeDraft(stored)
-      } catch {
-        return success({ stored: false, reason: 'quota' })
-      }
-      return success({ stored: true, reason: null })
+      guideId: string,
+      version: number,
+    ): Promise<MessageResult<{ done: boolean }>> {
+      return lifecycle.exclusive(async () => {
+        const session = await owned(panelId)
+        if (isFailure(session)) return session
+        const draft = await vault.readDraft()
+        if (
+          draft?.guideId !== guideId ||
+          draft.grantId !== session.grantId ||
+          draft.workspaceId !== session.workspaceId ||
+          (draft.panelId === panelId && draft.version > version)
+        ) {
+          return success({ done: false })
+        }
+        await vault.clearDraft()
+        return success({ done: true })
+      })
     },
 
-    async clearLocal(panelId: string, guideId: string): Promise<MessageResult<{ done: boolean }>> {
-      const session = await owned(panelId)
-      if (isFailure(session)) return session
-      const draft = await vault.readDraft()
-      if (draft?.guideId !== guideId || draft.grantId !== session.grantId) {
-        return success({ done: false })
-      }
-      await vault.clearDraft()
-      return success({ done: true })
-    },
-
-    /** "Exit Edit Mode": ends the session and closes the panel. */
-    async exit(panelId: string): Promise<MessageResult<{ done: boolean }>> {
-      const session = await vault.readAuthoring()
-      if (session?.panelId !== panelId) return success({ done: false })
-      await lifecycle.exclusive(() => end(session, 'exited'))
-      notify()
-      await chrome.closePanel(session.tabId).catch(() => undefined)
+    /** "Exit Edit Mode": keeps the panel's last copy, ends the session and closes the panel. */
+    async exit(panelId: string, final?: FinalCopy): Promise<MessageResult<{ done: boolean }>> {
+      const ended = await closeSession(panelId, 'exited', final)
+      if (!ended) return success({ done: false })
+      await chrome.closePanel(ended.tabId).catch(() => undefined)
       return success({ done: true })
     },
 
@@ -763,8 +911,7 @@ export function createAuthoring(deps: AuthoringDeps) {
     async tabClosed(tabId: number): Promise<void> {
       const session = await vault.readAuthoring()
       if (session?.tabId !== tabId) return
-      await lifecycle.exclusive(() => end(session, 'tab-closed'))
-      notify()
+      if (await end(session, 'tab-closed')) notify()
     },
 
     /**
@@ -785,13 +932,12 @@ export function createAuthoring(deps: AuthoringDeps) {
         reason = 'site-off'
       }
       if (!reason) return
-      const ending = reason
-      await lifecycle.exclusive(async () => {
-        if ((await vault.readAuthoring())?.id === session.id) await end(session, ending)
-      })
+      await end(session, reason)
       // An unsaved copy from another connection is never offered again.
-      const draft = await vault.readDraft()
-      if (draft && draft.grantId !== connection?.id) await vault.clearDraft()
+      await lifecycle.exclusive(async () => {
+        const draft = await vault.readDraft()
+        if (draft && draft.grantId !== (await vault.readConnection())?.id) await vault.clearDraft()
+      })
       notify()
     },
   }

@@ -15,6 +15,7 @@ import {
   type AuthoringAttachData,
   type AuthoringCaptureData,
   type AuthoringStateData,
+  type FinalCopy,
   type LocalDraft,
   type LocalDraftInput,
   type MessageResult,
@@ -49,11 +50,18 @@ export interface AuthoringClient {
     guideId: string,
     request: ReplaceStepsRequest,
   ): Promise<MessageResult<{ operationId: string; guide: Guide }>>
+  /** `version`: the panel's edit counter for this copy. */
   writeLocal(
     panelId: string,
     draft: LocalDraftInput,
-  ): Promise<MessageResult<{ stored: boolean; reason: 'too-large' | 'quota' | null }>>
-  clearLocal(panelId: string, guideId: string): Promise<MessageResult<{ done: boolean }>>
+    version: number,
+  ): Promise<MessageResult<{ stored: boolean; reason: 'too-large' | 'quota' | 'outdated' | null }>>
+  /** Drops the guide's copy unless this panel wrote a newer one than `version` since. */
+  clearLocal(
+    panelId: string,
+    guideId: string,
+    version: number,
+  ): Promise<MessageResult<{ done: boolean }>>
   showPreview(
     panelId: string,
     captureId: string,
@@ -61,9 +69,13 @@ export interface AuthoringClient {
     lines: string[],
   ): Promise<MessageResult<{ shown: boolean }>>
   hidePreview(panelId: string): Promise<MessageResult<{ done: boolean }>>
-  exit(panelId: string): Promise<MessageResult<{ done: boolean }>>
-  /** Fire and forget, from `pagehide`: the panel may be gone before an answer. */
-  detach(panelId: string): void
+  exit(panelId: string, final?: FinalCopy): Promise<MessageResult<{ done: boolean }>>
+  /**
+   * From `pagehide`, with the last copy the worker has not confirmed: one
+   * message, sent at once (the page may be gone before any answer, and
+   * cannot send anything after it).
+   */
+  detach(panelId: string, final?: FinalCopy): void
 }
 
 /**
@@ -118,14 +130,14 @@ export const chromeAuthoringClient: AuthoringClient = {
       },
       authoringSaveResultSchema,
     ),
-  writeLocal: (panelId, draft) =>
+  writeLocal: (panelId, draft, version) =>
     sendToBackground(
-      { type: 'authoring.local.write', panelId, draft: plain(draft) },
+      { type: 'authoring.local.write', panelId, draft: plain(draft), version },
       authoringLocalResultSchema,
     ),
-  clearLocal: (panelId, guideId) =>
+  clearLocal: (panelId, guideId, version) =>
     sendToBackground(
-      { type: 'authoring.local.clear', panelId, guideId },
+      { type: 'authoring.local.clear', panelId, guideId, version },
       authoringDoneResultSchema,
     ),
   showPreview: (panelId, captureId, title, lines) =>
@@ -135,9 +147,14 @@ export const chromeAuthoringClient: AuthoringClient = {
     ),
   hidePreview: (panelId) =>
     sendToBackground({ type: 'authoring.preview.hide', panelId }, authoringDoneResultSchema),
-  exit: (panelId) =>
-    sendToBackground({ type: 'authoring.exit', panelId }, authoringDoneResultSchema),
-  detach: (panelId) => {
-    chrome.runtime.sendMessage({ type: 'authoring.detach', panelId }).catch(() => undefined)
+  exit: (panelId, final) =>
+    sendToBackground(
+      { type: 'authoring.exit', panelId, ...(final && { final: plain(final) }) },
+      authoringDoneResultSchema,
+    ),
+  detach: (panelId, final) => {
+    chrome.runtime
+      .sendMessage({ type: 'authoring.detach', panelId, ...(final && { final: plain(final) }) })
+      .catch(() => undefined)
   },
 }
