@@ -5,10 +5,10 @@ import type {
   TargetDescriptor,
   UrlPattern,
 } from '@contextlayer/shared'
-import { and, asc, desc, eq, lt, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, ne, notInArray, sql } from 'drizzle-orm'
 
 import type { DbExecutor } from '../../infrastructure/database/client.js'
-import { guideSteps, guideVersions, guides } from './guides.schema.js'
+import { guideSteps, guides } from './guides.schema.js'
 
 /**
  * Every read and write is scoped by `workspaceId`; step queries reach their
@@ -43,6 +43,23 @@ export interface StepRow {
   placement: StepPlacement
 }
 
+/**
+ * Correlated subqueries over the outer `guides` row. Written with explicit
+ * aliases: in a single-table select Drizzle renders columns unqualified, which
+ * would make `guide_id = id` compare the inner table with itself.
+ */
+function latestVersionColumns() {
+  return {
+    stepCount: sql<number>`(select count(*)::int from "guide_steps" as s where s."guide_id" = "guides"."id")`,
+    latestVersion: sql<
+      number | null
+    >`(select max(v."version") from "guide_versions" as v where v."guide_id" = "guides"."id")`,
+    latestRevision: sql<
+      number | null
+    >`(select v."guide_revision" from "guide_versions" as v where v."guide_id" = "guides"."id" order by v."version" desc limit 1)`,
+  }
+}
+
 const guideColumns = {
   id: guides.id,
   applicationId: guides.applicationId,
@@ -54,13 +71,7 @@ const guideColumns = {
   createdAt: guides.createdAt,
   updatedAt: guides.updatedAt,
   archivedAt: guides.archivedAt,
-  stepCount: sql<number>`(select count(*)::int from ${guideSteps} where ${guideSteps.guideId} = ${guides.id})`,
-  latestVersion: sql<
-    number | null
-  >`(select max(${guideVersions.version}) from ${guideVersions} where ${guideVersions.guideId} = ${guides.id})`,
-  latestRevision: sql<
-    number | null
-  >`(select ${guideVersions.guideRevision} from ${guideVersions} where ${guideVersions.guideId} = ${guides.id} order by ${guideVersions.version} desc limit 1)`,
+  ...latestVersionColumns(),
 }
 
 const inWorkspace = (workspaceId: string, guideId: string) =>
@@ -210,4 +221,61 @@ export function listSteps(
     .innerJoin(guides, eq(guides.id, guideSteps.guideId))
     .where(inWorkspace(workspaceId, guideId))
     .orderBy(asc(guideSteps.position))
+}
+
+/** The editable content of one step; its position is its index in the list. */
+export interface StepValues {
+  position: number
+  title: string
+  body: RichText
+  target: TargetDescriptor | null
+  urlPattern: UrlPattern | null
+  placement: StepPlacement
+}
+
+/** Step writes reach rows only through a guide of the workspace. */
+function stepsOfGuide(db: DbExecutor, workspaceId: string, guideId: string) {
+  return inArray(
+    guideSteps.guideId,
+    db.select({ id: guides.id }).from(guides).where(inWorkspace(workspaceId, guideId)),
+  )
+}
+
+export async function deleteStepsExcept(
+  db: DbExecutor,
+  workspaceId: string,
+  guideId: string,
+  keepIds: readonly string[],
+): Promise<void> {
+  await db
+    .delete(guideSteps)
+    .where(
+      and(
+        stepsOfGuide(db, workspaceId, guideId),
+        keepIds.length > 0 ? notInArray(guideSteps.id, [...keepIds]) : undefined,
+      ),
+    )
+}
+
+export async function updateStep(
+  db: DbExecutor,
+  workspaceId: string,
+  guideId: string,
+  stepId: string,
+  values: StepValues,
+): Promise<void> {
+  await db
+    .update(guideSteps)
+    .set(values)
+    .where(and(eq(guideSteps.id, stepId), stepsOfGuide(db, workspaceId, guideId)))
+}
+
+/** The caller holds the guide lock, so `guideId` is known to belong to the workspace. */
+export async function insertSteps(
+  db: DbExecutor,
+  guideId: string,
+  steps: readonly StepValues[],
+): Promise<void> {
+  if (steps.length === 0) return
+  await db.insert(guideSteps).values(steps.map((step) => ({ ...step, guideId })))
 }

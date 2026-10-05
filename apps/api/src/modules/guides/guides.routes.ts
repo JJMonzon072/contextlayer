@@ -3,6 +3,7 @@ import {
   guideListQuerySchema,
   guideListSchema,
   guideSchema,
+  replaceStepsRequestSchema,
   updateGuideRequestSchema,
   WORKSPACES_PATH,
 } from '@contextlayer/shared'
@@ -36,6 +37,10 @@ const ERRORS: Record<GuideError, DomainErrorReply> = {
   'revision-conflict': {
     status: 409,
     message: 'This guide was changed by someone else. Reload it to see the latest draft.',
+  },
+  'step-not-found': {
+    status: 404,
+    message: 'A step in the request does not belong to this guide.',
   },
 }
 
@@ -117,6 +122,29 @@ export const guideRoutes: FastifyPluginAsyncZod<GuideRoutesOptions> = (app, opti
     async (request, reply) => {
       const { workspaceId, guideId } = request.params
       const result = await guides.update(
+        authOf(request).user.id,
+        workspaceId,
+        guideId,
+        request.body,
+      )
+      return result.ok
+        ? reply.send(result.value)
+        : sendDomainError(request, reply, ERRORS[result.error])
+    },
+  )
+
+  app.put(
+    `${BASE}/:guideId/steps`,
+    {
+      schema: {
+        params: guideParams,
+        body: replaceStepsRequestSchema,
+        response: { 200: guideSchema, ...domainErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const { workspaceId, guideId } = request.params
+      const result = await guides.replaceSteps(
         authOf(request).user.id,
         workspaceId,
         guideId,

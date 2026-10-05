@@ -93,3 +93,48 @@ export async function workspaceWithEveryRole(app: TestApp, name = 'Acme') {
   }
   return { workspace, people }
 }
+
+/** A valid TargetDescriptor v1 (the ADR 0014 example, shortened). */
+export function targetDescriptor() {
+  return {
+    version: 1,
+    capturedAt: '2026-10-04T15:21:07Z',
+    capture: { extensionVersion: '0.1.0', pickedTag: 'button', promotion: 'none' },
+    page: { urlPattern: { hostname: 'crm.acme.test', pathname: '/customers' } },
+    framePath: [],
+    shadowPath: [],
+    element: {
+      tag: 'button',
+      role: 'button',
+      accessibleName: 'New customer',
+      text: 'New customer',
+      testIds: [{ attr: 'data-testid', value: 'new-customer' }],
+      attributes: { type: 'button' },
+    },
+    anchors: [{ relation: 'precedingHeading', level: 1, text: 'Customers' }],
+    locators: [
+      {
+        strategy: 'testId',
+        attr: 'data-testid',
+        value: 'new-customer',
+        scope: 'root',
+        matchCount: 1,
+      },
+      {
+        strategy: 'role',
+        role: 'button',
+        name: 'New customer',
+        exact: true,
+        scope: 'root',
+        matchCount: 1,
+      },
+    ],
+    resolution: {
+      minScore: 0.65,
+      minMargin: 0.15,
+      timeoutMs: 10000,
+      onAmbiguous: 'show-unanchored',
+      onNotFound: 'show-unanchored',
+    },
+  }
+}

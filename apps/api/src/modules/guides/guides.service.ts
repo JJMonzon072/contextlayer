@@ -6,6 +6,7 @@ import {
   type GuideListQuery,
   type GuideStep,
   type GuideSummary,
+  type ReplaceStepsRequest,
   type UpdateGuideRequest,
 } from '@contextlayer/shared'
 
@@ -17,15 +18,19 @@ import {
 } from '../../infrastructure/database/client.js'
 import type { MembershipDirectory } from '../applications/applications.service.js'
 import {
+  deleteStepsExcept,
   findGuide,
   insertGuide,
+  insertSteps,
   listGuides,
   listSteps,
   lockGuide,
   setGuideStatus,
   updateGuideDraft,
+  updateStep,
   type GuideRow,
   type StepRow,
+  type StepValues,
 } from './guides.repository.js'
 
 /**
@@ -41,6 +46,7 @@ export type GuideError =
   | 'application-not-found'
   | 'archived'
   | 'revision-conflict'
+  | 'step-not-found'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: GuideError }
 
@@ -181,6 +187,62 @@ export function createGuidesService(deps: {
           return fail('revision-conflict')
         }
         await updateGuideDraft(tx, workspaceId, guideId, input)
+        return guideOrFail(tx, workspaceId, guideId)
+      })
+    },
+
+    /**
+     * Replaces the ordered list of steps in one transaction: steps missing from
+     * the request are deleted, listed ones are updated (keeping their ids) and
+     * new ones inserted, all at their index as position. Positions are checked
+     * at commit (deferred unique constraint), and any failure rolls back the
+     * whole replacement, so the previous order stays intact.
+     */
+    async replaceSteps(
+      userId: string,
+      workspaceId: string,
+      guideId: string,
+      input: ReplaceStepsRequest,
+    ): Promise<Result<Guide>> {
+      const denied = await authorize(userId, workspaceId)
+      if (denied) return fail(denied)
+      return db.transaction(async (tx) => {
+        const guide = await lockGuide(tx, workspaceId, guideId)
+        if (!guide) return fail('guide-not-found')
+        if (guide.status === 'archived') return fail('archived')
+        if (input.expectedRevision !== guide.revision) return fail('revision-conflict')
+
+        const existing = new Set((await listSteps(tx, workspaceId, guideId)).map((step) => step.id))
+        if (input.steps.some((step) => step.id !== undefined && !existing.has(step.id))) {
+          return fail('step-not-found')
+        }
+
+        const values = input.steps.map(
+          (step, position): StepValues & { id: string | undefined } => ({
+            id: step.id,
+            position,
+            title: step.title,
+            body: step.body,
+            target: step.target ?? null,
+            urlPattern: step.urlPattern ?? null,
+            placement: step.placement ?? 'auto',
+          }),
+        )
+        await deleteStepsExcept(
+          tx,
+          workspaceId,
+          guideId,
+          values.flatMap((step) => (step.id === undefined ? [] : [step.id])),
+        )
+        for (const { id, ...step } of values) {
+          if (id !== undefined) await updateStep(tx, workspaceId, guideId, id, step)
+        }
+        await insertSteps(
+          tx,
+          guideId,
+          values.flatMap(({ id, ...step }) => (id === undefined ? [step] : [])),
+        )
+        await updateGuideDraft(tx, workspaceId, guideId, {})
         return guideOrFail(tx, workspaceId, guideId)
       })
     },
