@@ -45,7 +45,7 @@ const dashboardLink = computed(() =>
 const busy = computed(() => state.loading || state.saving)
 const LOCAL: Record<typeof state.local, string> = {
   none: 'Unsaved changes in this panel.',
-  kept: 'Unsaved changes are kept in this browser session until you save. They are lost when the browser closes.',
+  kept: 'Unsaved changes are kept in this browser session until you save. They are lost when the browser closes or ContextLayer is updated.',
   'too-large': 'Unsaved changes are too large to keep in this browser session. Save to keep them.',
   quota: 'Unsaved changes could not be kept in this browser session. Save to keep them.',
   failed: 'Unsaved changes could not be kept in this browser session. Save to keep them.',
