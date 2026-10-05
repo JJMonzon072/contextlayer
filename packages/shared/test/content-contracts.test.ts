@@ -72,6 +72,7 @@ describe('originMatchPattern', () => {
     expect(originMatchPattern(new URL('https://crm.acme.test:8443/path?q=1'))).toBe(
       'https://crm.acme.test:8443/*',
     )
+    expect(() => originMatchPattern('crm.acme.test')).toThrow(TypeError)
   })
 })
 

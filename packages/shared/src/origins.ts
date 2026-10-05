@@ -92,8 +92,11 @@ export const originListSchema = z
  * scheme default that `URL.origin` omits: a pattern without a port matches
  * every port of the host. `https://crm.example.com` → `https://crm.example.com:443/*`.
  */
-export function originMatchPattern(origin: string | URL): string {
-  const url = typeof origin === 'string' ? new URL(origin) : origin
+export function originMatchPattern(
+  origin: string | { protocol: string; hostname: string; port: string },
+): string {
+  const url = typeof origin === 'string' ? parseUrl(origin) : origin
+  if (url === undefined) throw new TypeError('originMatchPattern needs an absolute URL.')
   const port = url.port || (url.protocol === 'https:' ? '443' : '80')
   return `${url.protocol}//${url.hostname}:${port}/*`
 }
