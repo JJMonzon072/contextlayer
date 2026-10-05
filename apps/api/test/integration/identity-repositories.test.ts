@@ -69,6 +69,8 @@ describe('sessions', () => {
     await insertSession(db, {
       userId: user.id,
       tokenHash: hash,
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
       userAgent: 'vitest',
       ip: '127.0.0.1',
@@ -87,6 +89,8 @@ describe('sessions', () => {
       insertSession(db, {
         userId: user.id,
         tokenHash: Buffer.from('raw-token-would-be-a-bug'),
+        createdAt: new Date(),
+        lastSeenAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
         userAgent: null,
         ip: null,
@@ -100,6 +104,8 @@ describe('sessions', () => {
     const session = await insertSession(db, {
       userId: user.id,
       tokenHash: hash,
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
       userAgent: null,
       ip: null,
@@ -116,6 +122,8 @@ describe('sessions', () => {
     await insertSession(db, {
       userId: user.id,
       tokenHash: hash,
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
       userAgent: null,
       ip: null,

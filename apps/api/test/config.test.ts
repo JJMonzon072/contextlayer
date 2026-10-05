@@ -11,7 +11,32 @@ describe('loadConfig', () => {
       server: { host: 'localhost', port: 3000 },
       logLevel: 'info',
       database: { url: DATABASE_URL },
+      session: {
+        cookieName: 'cl_session',
+        idleTimeoutMs: 30 * 60_000,
+        absoluteTimeoutMs: 8 * 3_600_000,
+      },
     })
+  })
+
+  it('names the session cookie with the __Host- prefix only in production', () => {
+    expect(loadConfig({ DATABASE_URL, NODE_ENV: 'production' }).session.cookieName).toBe(
+      '__Host-cl_session',
+    )
+    expect(loadConfig({ DATABASE_URL, NODE_ENV: 'development' }).session.cookieName).toBe(
+      'cl_session',
+    )
+  })
+
+  it('reads session lifetimes from the environment', () => {
+    const { session } = loadConfig({
+      DATABASE_URL,
+      SESSION_IDLE_MINUTES: '15',
+      SESSION_ABSOLUTE_HOURS: '4',
+    })
+
+    expect(session.idleTimeoutMs).toBe(15 * 60_000)
+    expect(session.absoluteTimeoutMs).toBe(4 * 3_600_000)
   })
 
   it('coerces API_PORT from a string', () => {
