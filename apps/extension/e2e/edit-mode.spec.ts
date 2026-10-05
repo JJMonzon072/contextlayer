@@ -548,6 +548,10 @@ test('switching tabs keeps Edit Mode bound to the tab it was opened on', async (
   expect(enabled).toEqual([true, false])
 
   await page.bringToFront()
+  // Diagnostic only (no guide content): which behaviour this Chrome showed.
+  const behaviour = panel.isClosed() ? 'closed' : 'kept'
+  test.info().annotations.push({ type: 'panel-after-tab-switch', description: behaviour })
+  process.stdout.write(`[diagnostic] side panel after a tab switch: ${behaviour}\n`)
   if (!panel.isClosed()) {
     // macOS (measured): the panel's document survives, the selection goes on in its tab.
     await page.getByTestId('new-customer').click()
@@ -565,4 +569,29 @@ test('switching tabs keeps Edit Mode bound to the tab it was opened on', async (
   await again.getByRole('button', { name: 'Restore them' }).click()
   await expect(again.getByTestId('step').getByLabel('Title')).toHaveValue('Start a new customer')
   await expectPageUntouched(page)
+})
+
+test('offers back an edit typed just before the panel closed', async ({
+  context,
+  extensionBrowser,
+}) => {
+  await acme(context)
+  const page = await demoPage(context, extensionBrowser)
+  const panel = await openEditMode(extensionBrowser, page)
+  await createGuide(panel, 'Closed in a hurry')
+  await panel.getByRole('button', { name: 'Add step' }).click()
+  await panel.getByTestId('step').getByLabel('Title').fill('Typed right before closing')
+
+  // No wait for the copy: the panel closes within the quiet time.
+  await panel.close()
+  await expect.poll(async () => (await sidePanels(extensionBrowser)).length).toBe(0)
+
+  const again = await openEditMode(extensionBrowser, page)
+  await again.getByRole('button', { name: /Closed in a hurry/ }).click()
+  await expect(again.getByTestId('recovery')).toBeVisible()
+  await again.getByRole('button', { name: 'Restore them' }).click()
+  await expect(again.getByTestId('step').getByLabel('Title')).toHaveValue(
+    'Typed right before closing',
+  )
+  await expect(again.getByTestId('save-state')).toContainText('kept in this browser session')
 })
