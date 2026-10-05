@@ -1,7 +1,7 @@
 import { healthReportSchema } from '@contextlayer/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { getJson, HttpError } from '../src/lib/http'
+import { getJson, HttpError, request } from '../src/lib/http'
 
 const report = {
   status: 'ok',
@@ -87,5 +87,54 @@ describe('getJson', () => {
 
     expect(error).toBeInstanceOf(HttpError)
     expect(error).toMatchObject({ kind: 'network' })
+  })
+})
+
+describe('request', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('sends JSON bodies same-origin, so the HttpOnly cookie travels with them', async () => {
+    const fetchMock = stubFetch(() => Promise.resolve(new Response(null, { status: 204 })))
+
+    await expect(request('POST', '/v1/auth/logout', { body: { a: 1 } })).resolves.toBeUndefined()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/auth/logout',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'same-origin',
+        body: '{"a":1}',
+        headers: expect.objectContaining({ 'content-type': 'application/json' }) as unknown,
+      }),
+    )
+  })
+
+  it('turns the API error envelope into a typed error', async () => {
+    stubFetch(() =>
+      json({ error: { code: 'CONFLICT', message: 'Already a member.', requestId: 'r1' } }, 409),
+    )
+
+    await expect(request('POST', '/v1/workspaces/x/members', { body: {} })).rejects.toMatchObject({
+      kind: 'status',
+      status: 409,
+      code: 'CONFLICT',
+      apiMessage: 'Already a member.',
+    })
+  })
+
+  it('reads retry-after on 429 responses', async () => {
+    stubFetch(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Too many' } }), {
+          status: 429,
+          headers: { 'retry-after': '120' },
+        }),
+      ),
+    )
+
+    await expect(request('POST', '/v1/auth/login', { body: {} })).rejects.toMatchObject({
+      retryAfterSeconds: 120,
+    })
   })
 })
