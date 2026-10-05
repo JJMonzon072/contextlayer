@@ -124,6 +124,13 @@ export function createAppRouter(store: SessionStore, history: RouterHistory = cr
         ],
       },
       {
+        // Opened by the extension ("Connect to ContextLayer"); login keeps the query.
+        path: '/extension/connect',
+        name: 'extension-connect',
+        meta: { requiresAuth: true },
+        component: () => import('../features/extension/ExtensionConnectPage.vue'),
+      },
+      {
         path: '/status',
         name: 'status',
         component: () => import('../features/system-status/SystemStatusPage.vue'),

@@ -62,6 +62,7 @@ export function testRouter() {
         name: 'connected-browsers',
         component: Empty,
       },
+      { path: '/extension/connect', name: 'extension-connect', component: Empty },
       {
         path: '/workspaces/:workspaceId/guides/:guideId/versions/:version',
         name: 'guide-version',
