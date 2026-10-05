@@ -1,6 +1,6 @@
 # ADR 0014: Multi-signal target descriptors for element targeting
 
-- Status: Proposed
+- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3); Proposed for capture (Phase 5) and resolution (Phase 6)
 - Date: 2026-10-04
 - Deciders: JJ
 
@@ -12,16 +12,16 @@ Prior art: Playwright's selector generator scores a test id 1, role plus name 10
 
 ## Decision
 
-**Proposed.** Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by scoring. Never guess silently.
+Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by scoring. Never guess silently. The storage half is **Accepted and implemented** (Phase 3); capture and resolution stay **Proposed** until they are built against a fixture corpus.
 
 ### What is stored where
 
-| Data                    | Location                                                                                                                                                                                                                  | Phase                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `TargetDescriptor` v1   | `guide_steps.target jsonb`, validated by a zod union on `version` in `packages/shared`. Unknown versions are rejected and strings capped.                                                                                 | Planned (Phase 3 contract, Phase 5 capture) |
-| Frozen copy for players | `guide_versions.snapshot`                                                                                                                                                                                                 | Planned (Phase 3)                           |
-| Page matching           | URLPattern init objects (descriptor `page.urlPattern`, optionally overridden by `guide_steps.url_pattern`), evaluated in the extension. Node 22 has no URLPattern, so the API narrows by origin (`applications.origins`). | Planned (Phase 6)                           |
-| Resolution outcome      | `guide_events` of type `target_not_found`, with `metadata.reason` and per-strategy counts. Page text is never stored.                                                                                                     | Planned (Phase 7)                           |
+| Data                    | Location                                                                                                                                                                                                                                                   | Phase                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `TargetDescriptor` v1   | `guide_steps.target jsonb`, validated by a zod union on `version` in `packages/shared/src/target-descriptor.ts`. Unknown versions and unknown keys are rejected, strings and arrays capped, the whole descriptor ≤ 16 384 characters. Null until captured. | Implemented (Phase 3 contract); Planned (Phase 5 capture) |
+| Frozen copy for players | `guide_versions.snapshot` ([ADR 0016](0016-immutable-published-guide-versions.md))                                                                                                                                                                         | Implemented (Phase 3)                                     |
+| Page matching           | URLPattern init objects (descriptor `page.urlPattern`, optionally overridden by `guide_steps.url_pattern`), evaluated in the extension. Node 22 has no URLPattern, so the API narrows by origin (`applications.origins`).                                  | Planned (Phase 6)                                         |
+| Resolution outcome      | `guide_events` of type `target_not_found`, with `metadata.reason` and per-strategy counts. Page text is never stored.                                                                                                                                      | Planned (Phase 7)                                         |
 
 ### Example (light-DOM target in a modal)
 
@@ -153,7 +153,13 @@ The thresholds are starting values, to be calibrated against a fixture corpus in
 
 - **Positive:** survives the loss of individual signals, and failures are explainable through scores and per-strategy counts. The version field allows schema evolution.
 - **Negative:** a few KB of JSON per step; complex capture; accessible-name computation and scoring add content-script weight ([R-15](../technical-risks.md)) and CPU on large DOMs (bounded by the candidate cap); captured text may contain personal data; thresholds need tuning.
-- **Follow-ups:** accept the storage shape in Phase 3, capture in Phase 5, resolution in Phase 6 ([roadmap](../roadmap.md)), with a fixture corpus (generated ids, CSS-in-JS, shadow roots, iframes, virtualized lists, modals).
+- **Follow-ups:** storage shape accepted and implemented in Phase 3. Its limits, in `packages/shared/src/target-descriptor.ts`:
+  - captured strings ≤ 80 characters, selectors ≤ 512;
+  - 1–12 locators of 11 known strategies;
+  - ≤ 6 anchors, ≤ 5 frame and ≤ 5 shadow hops, ≤ 12 attributes;
+  - strict objects everywhere.
+
+  A step's `target` is null until captured, which also allows unanchored steps. Capture in Phase 5 and resolution in Phase 6 ([roadmap](../roadmap.md)) are still to be validated with a fixture corpus (generated ids, CSS-in-JS, shadow roots, iframes, virtualized lists, modals).
 
 ## References
 

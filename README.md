@@ -4,7 +4,7 @@ ContextLayer is a Digital Adoption Platform. A Chrome extension lets an organiza
 
 The goal is to cut training and onboarding time for business software by teaching people in context instead of in slide decks.
 
-> **Status: Phase 2 (Identity and workspaces) is complete.** People can create an account, sign in with a server-side session, create workspaces and manage their members and roles from the dashboard. The guide builder, guide player and analytics are planned in [docs/roadmap.md](docs/roadmap.md).
+> **Status: Phase 3 (Applications, guides and publishing) is complete.** In the dashboard, a team registers the web applications it uses, writes step-by-step guides for them, and publishes immutable versions while the draft keeps evolving. Accounts, sessions, workspaces and roles arrived in Phase 2. Connecting the extension, picking elements in Edit Mode, the in-page player and analytics are planned in [docs/roadmap.md](docs/roadmap.md).
 
 ## How it fits together
 
@@ -83,7 +83,7 @@ Then:
 | What             | Where                                                                          |
 | ---------------- | ------------------------------------------------------------------------------ |
 | API health check | http://localhost:3000/health (readiness) and http://localhost:3000/health/live |
-| Dashboard        | http://localhost:5173 (create an account, then your first workspace)           |
+| Dashboard        | http://localhost:5173 (create an account, a workspace, then Applications)      |
 | System status    | http://localhost:5173/status (live API and database status, no sign-in)        |
 | Extension build  | `apps/extension/dist` (rebuilt on every change)                                |
 
@@ -115,9 +115,18 @@ After changing extension code, click the reload icon on the extension card and r
 ## Testing
 
 - **Unit and component tests** (Vitest): contracts, configuration, password hashing and session tokens, the CSRF guard, the dashboard HTTP client, session store, route guards, forms and workspace switcher, extension message routing and manifest policy. They need no running services.
-- **API integration tests** (Vitest, `apps/api/test/integration`) run the real API against PostgreSQL: registration, login, logout, idle and absolute session expiry, revocation, CSRF, rate limits, the workspace role rules and a tenant-isolation matrix. They use a separate database, `TEST_DATABASE_URL` (default `contextlayer_test`), which they create, migrate and truncate between tests; they refuse to run against a database whose name does not end in `_test`. Run them alone with `pnpm --filter @contextlayer/api test:integration`.
+- **API integration tests** (Vitest, `apps/api/test/integration`) run the real API against PostgreSQL:
+  - Registration, login, logout, idle and absolute session expiry, revocation, CSRF and rate limits.
+  - The workspace role rules; applications, guides and ordered steps, including a forced failure halfway through a step replacement that must leave the previous order intact.
+  - Publishing, including racing publishes that must create exactly one version.
+  - The database constraints, and tenant-isolation matrices over every route. They use a separate database, `TEST_DATABASE_URL` (default `contextlayer_test`), which they create, migrate and truncate between tests; they refuse to run against a database whose name does not end in `_test`. Run them alone with `pnpm --filter @contextlayer/api test:integration`.
 - **End-to-end tests** (Playwright) run against the built artifacts:
-  - Dashboard: register, create the first workspace, sign out, sign back in and find the workspace again, with an axe audit of every screen; wrong credentials; form validation; and the system status page (real API, a simulated 503, an unreachable API). Each run registers a new `e2e-…@example.test` account in the development database.
+  - Dashboard:
+    - Authentication: register, create the first workspace, sign out, sign back in and find the workspace again; wrong credentials; form validation.
+    - Guide authoring: register an application (an invalid origin is explained), write a guide with three steps, publish version 1, edit, publish version 2, and check that version 1 did not change. Another account gets 404 for the same guide.
+    - The system status page: real API, a simulated 503, an unreachable API.
+    - An axe audit of every screen.
+    - Each run registers new `e2e-…@example.test` accounts in the development database.
   - Extension: loads the unpacked build in Chromium and checks the service worker, the popup ↔ service worker ↔ API path, the closed Shadow DOM root of the injected UI, and a content script ↔ service worker ↔ API round trip.
 - **CI**: [GitHub Actions](.github/workflows/ci.yml) runs all of the above (format, typecheck, lint, migrations, unit + integration tests, build, e2e) on every pull request and on pushes to `main`, with PostgreSQL as a service container. It needs no secrets.
 
@@ -142,7 +151,7 @@ The session cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. It i
 - [Product](docs/product.md): problem, users, MVP scope and non-goals.
 - [Architecture](docs/architecture.md): components, module boundaries, communication flows, security model.
 - [Technical risks](docs/technical-risks.md): Manifest V3, DOM targeting, isolation, security, and their mitigations.
-- [Data model](docs/data-model.md): PostgreSQL schema (identity tables implemented, the rest planned).
+- [Data model](docs/data-model.md): PostgreSQL schema (identity and content tables implemented, the rest planned).
 - [API](docs/api.md): module boundaries, conventions, implemented and planned endpoints.
 - [Deployment](docs/deployment.md): local setup today, provider-agnostic production options later.
 - [Roadmap](docs/roadmap.md): delivery phases and exit criteria.

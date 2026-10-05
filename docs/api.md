@@ -1,6 +1,6 @@
 # API
 
-> **Status.** **Implemented (Phase 1):** `GET /health` and `GET /health/live`, the `ApiError` envelope, request ids, security headers, and zod validation and serialization. **Implemented (Phase 2):** the `auth` and `workspaces` modules under `/v1` ([section 3.2](#32-phase-2-auth-and-workspaces)), dashboard sessions, the CSRF guard and auth rate limits ([ADR 0015](adr/0015-authentication-strategy.md), Accepted for the dashboard). Every other endpoint is **Planned** for the phase shown.
+> **Status.** **Implemented (Phase 1):** `GET /health` and `GET /health/live`, the `ApiError` envelope, request ids, security headers, and zod validation and serialization. **Implemented (Phase 2):** the `auth` and `workspaces` modules under `/v1` ([section 3.2](#32-phase-2-auth-and-workspaces)), dashboard sessions, the CSRF guard and auth rate limits ([ADR 0015](adr/0015-authentication-strategy.md), Accepted for the dashboard). **Implemented (Phase 3):** the `applications` and `guides` modules ([section 3.3](#33-phase-3-applications-guides-and-publishing)), cursor pagination and immutable published versions ([ADR 0016](adr/0016-immutable-published-guide-versions.md)). Every other endpoint is **Planned** for the phase shown.
 
 Related: [architecture](architecture.md), [data model](data-model.md), [ADR 0002](adr/0002-modular-monolith-backend.md), [ADR 0003](adr/0003-fastify-http-framework.md), [ADR 0010](adr/0010-runtime-validated-shared-contracts.md), [ADR 0012](adr/0012-service-worker-api-gateway.md), [deployment](deployment.md).
 
@@ -49,19 +49,21 @@ An unmapped 4xx keeps its real HTTP status and uses `BAD_REQUEST`. The 503 from 
 
 `genReqId` assigns `randomUUID()` to every request. An `onRequest` hook returns it as `x-request-id`, including on 404s and errors, and it also appears as `error.requestId` and on every log line of the request. Fastify 5 ignores incoming `request-id` headers by default (`requestIdHeader: false`), so clients cannot inject ids into the logs. Proposed for Phase 8: accept the id that the reverse proxy sets.
 
-### 1.4 Pagination (Planned, Phase 3)
+### 1.4 Pagination (Implemented, Phase 3)
 
-`?limit=` (1–100, default 20) and an opaque `?cursor=`, returning `{ "items": [...], "nextCursor": null }`.
+`?limit=` (1–100, default 20) and an opaque `?cursor=`, returning `{ "items": [...], "nextCursor": null }` (`pageQuerySchema` and `pageSchema` in `packages/shared/src/pagination.ts`).
 
-- The cursor is the base64url-encoded sort key of the last row, for example `(updatedAt, id)`, served by a matching index such as `guides (workspace_id, updated_at desc, id desc)` ([data model](data-model.md#5-indexes)). A mutable sort key like `updatedAt` can still skip a row edited during paging; lists that must never skip rows sort by the immutable UUIDv7 `id`. It drives a keyset query: `where (updated_at, id) < ($1, $2) order by updated_at desc, id desc`.
-- Lists in creation order can use the UUIDv7 `id` alone, because it is time-ordered.
-- Offsets were rejected: they skip or repeat rows under concurrent inserts and slow down with depth. The cost is no page jumps or totals, which these screens do not need.
+- Lists are ordered newest first by UUIDv7 `id`, which is unique, immutable and time-ordered. A keyset query (`where id < $cursor order by id desc limit $limit + 1`) therefore never skips or repeats a row, even while other rows are inserted or edited between pages. The extra row only tells whether a next page exists.
+- The cursor is `base64url(JSON.stringify({ v: 1, id }))` (`apps/api/src/http/cursor.ts`). Clients treat it as opaque; the API decodes and validates it, and a cursor it did not issue gets 400 `Invalid cursor.`.
+- Indexes: `applications (workspace_id, id)` (its unique constraint), `guides (workspace_id, id desc)` and `guides (workspace_id, application_id, id desc)`.
+- Offsets were rejected: they skip or repeat rows under concurrent inserts and slow down with depth. Sorting by a mutable key such as `updated_at` was rejected for the same reason. The cost is no page jumps or totals, which these screens do not need.
 
 ### 1.5 Idempotency
 
-- `PUT …/steps` (full replacement) and `DELETE` (archive) are idempotent by design (Phase 3).
+- `POST …/publish` (Implemented, Phase 3) returns the latest version with 200 when the draft has not changed since, so a double click or a retry never creates a second version ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
+- `DELETE …/guides/:guideId` (archive) and `POST …/restore` are idempotent (Phase 3).
+- `PUT …/steps` is a full replacement guarded by `expectedRevision`: replaying it after a lost response gets 409, and the client reloads the draft instead of overwriting newer work.
 - `POST /v1/analytics/events`: each event carries a `clientEventId`. Duplicates are acknowledged but stored once, and the response is `{ accepted, duplicates }` (Phase 7, [data model 3.7](data-model.md#37-idempotent-event-ingestion)).
-- `POST …/publish` returns the latest version when the draft has not changed since, so a double click does not create a second version (Proposed).
 - Refresh-token rotation has a short reuse grace window, because the service worker can stop between the server rotating a token and the extension storing the new one (Phase 4).
 - Other creates are not idempotent; the dashboard prevents double submission. No generic `Idempotency-Key` header is planned.
 
@@ -204,6 +206,43 @@ Contracts: `packages/shared/src/auth.ts` and `workspaces.ts`. Code: `apps/api/sr
 - **Registration creates no workspace.** The dashboard's onboarding asks for the first workspace's name instead of inventing one.
 - **Adding members** requires an existing account. Invitations by email are out of scope until email delivery exists.
 
+### 3.3 Phase 3: applications, guides and publishing
+
+Contracts: `packages/shared/src/{applications,guides,origins,rich-text,target-descriptor,url-pattern,pagination}.ts`. Code: `apps/api/src/modules/applications/` and `modules/guides/`. Paths below are under `/v1/workspaces/:workspaceId`.
+
+| Endpoint                                 | Request                                                         | Success                                     | Errors (besides 401, 403 CSRF, 404 workspace)      |
+| ---------------------------------------- | --------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------- |
+| `GET /applications`                      | `?limit&cursor`                                                 | 200 `{ items: Application[], nextCursor }`  | 400 cursor                                         |
+| `POST /applications`                     | `{ name, origins }`                                             | 201 `Application`                           | 400, 403 role                                      |
+| `GET /applications/:applicationId`       |                                                                 | 200 `Application`                           | 404                                                |
+| `PATCH /applications/:applicationId`     | `{ name?, origins? }`                                           | 200 `Application`                           | 400, 403 role, 404                                 |
+| `DELETE /applications/:applicationId`    |                                                                 | 204                                         | 403 role, 404, 409 has guides                      |
+| `GET /guides`                            | `?applicationId&status&limit&cursor`                            | 200 `{ items: GuideSummary[], nextCursor }` | 400, 403 role                                      |
+| `POST /guides`                           | `{ applicationId, title, description?, startUrlPattern? }`      | 201 `Guide`                                 | 400, 403 role, 404 application                     |
+| `GET /guides/:guideId`                   |                                                                 | 200 `Guide` (draft with steps)              | 403 role, 404                                      |
+| `PATCH /guides/:guideId`                 | `{ title?, description?, startUrlPattern?, expectedRevision? }` | 200 `Guide`                                 | 400, 403 role, 404, 409 archived or stale revision |
+| `PUT /guides/:guideId/steps`             | `{ expectedRevision, steps: StepInput[] }`                      | 200 `Guide`                                 | 400, 403 role, 404 guide or foreign step, 409      |
+| `POST /guides/:guideId/publish`          |                                                                 | 201 new version / 200 unchanged draft       | 403 role, 404, 409 no steps or archived            |
+| `GET /guides/:guideId/versions`          |                                                                 | 200 `{ items: GuideVersionSummary[] }`      | 403 role, 404                                      |
+| `GET /guides/:guideId/versions/:version` |                                                                 | 200 `GuideVersion` (with `snapshot`)        | 400 version number, 403 role, 404                  |
+| `DELETE /guides/:guideId`                |                                                                 | 204, guide archived                         | 403 role, 404                                      |
+| `POST /guides/:guideId/restore`          |                                                                 | 200 `Guide`                                 | 403 role, 404                                      |
+
+- **Roles.** Any member reads applications. `admin` and `owner` create, change and delete them. Guides are authoring data: every guide route needs `editor` or above, and `member` gets 403. Learners will receive published versions through the extension (Phase 4). A non-member gets the same 404 as a workspace that does not exist; an id from another workspace inside your own workspace's URL gets the same 404 as a random id. Both are verified by a matrix test over every route.
+- **Origins.** Exactly scheme, host and optional port; `http` or `https`; up to 20, no duplicates. They are stored the way browsers serialize `location.origin`: lower case, default port and trailing slash removed, punycode host. Paths, query strings, fragments, credentials, wildcards and other schemes get 400. A database CHECK repeats the essentials.
+- **Shapes.**
+  - `GuideSummary` has `revision`, `stepCount`, `latestVersion` (or `null`), `hasUnpublishedChanges` and `archivedAt`.
+  - `Guide` adds `startUrlPattern` (URLPattern init) and the ordered `steps`: `{ id, position, title, body, target, urlPattern, placement }`.
+  - `target` is a TargetDescriptor v1 or `null` (not captured yet).
+- **Steps.** `PUT …/steps` replaces the whole list in one transaction.
+  - The array order is the position (0…n−1); the request has no `position` field.
+  - Steps with an `id` keep it; steps without one are created; steps left out are deleted.
+  - Omitted optional fields take their defaults (`target: null`, `urlPattern: null`, `placement: "auto"`).
+  - Ids of other guides are refused with 404 and nothing changes.
+  - At most 50 steps; the route accepts bodies up to 2 MiB, since a list at its limits is about 1.6 MB.
+- **Publishing.** Freezes the draft into the next version under the guide's row lock. Versions cannot be changed or deleted through the API, and the database rejects updates ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
+- **Content.** `body` is the restricted rich-text v1 document: at most 20 blocks, 2000 characters and 200 text runs; links only `https:`. Unknown versions and unknown keys get 400, for bodies and descriptors alike.
+
 #### Unknown routes
 
 All of these return **404** with `{ "error": { "code": "NOT_FOUND", "message": "Route not found", "requestId": "…" } }`:
@@ -214,33 +253,27 @@ All of these return **404** with `{ "error": { "code": "NOT_FOUND", "message": "
 
 ## 4. Modules and planned endpoints
 
-API paths are listed as the API sees them; the dashboard adds the `/api` prefix. Roles (Implemented, Phase 2): `owner` > `admin` > `editor` > `member`, where "editor+" means `editor` or above. "Session" is the dashboard cookie and "bearer" is the extension token. The Phase 2 endpoints are in [section 3.2](#32-phase-2-auth-and-workspaces); from Phase 4, workspace reads also accept a bearer token bound to that workspace.
+API paths are listed as the API sees them; the dashboard adds the `/api` prefix. Roles (Implemented, Phase 2): `owner` > `admin` > `editor` > `member`, where "editor+" means `editor` or above. "Session" is the dashboard cookie and "bearer" is the extension token. The Phase 2 and 3 endpoints are in sections [3.2](#32-phase-2-auth-and-workspaces) and [3.3](#33-phase-3-applications-guides-and-publishing); from Phase 4, reads of applications and guides also accept a bearer token bound to that workspace.
 
 | Module         | Owns                                      | Phase                 |
 | -------------- | ----------------------------------------- | --------------------- |
 | `health`       | none                                      | Implemented (Phase 1) |
 | `auth`         | `users`, `sessions`                       | Implemented (Phase 2) |
 | `workspaces`   | `workspaces`, `workspace_members`         | Implemented (Phase 2) |
-| `applications` | `applications`                            | Planned (Phase 3)     |
-| `guides`       | `guides`, `guide_steps`, `guide_versions` | Planned (Phase 3)     |
+| `applications` | `applications`                            | Implemented (Phase 3) |
+| `guides`       | `guides`, `guide_steps`, `guide_versions` | Implemented (Phase 3) |
 | `extension`    | `extension_grants` and both token tables  | Planned (Phase 4)     |
 | `analytics`    | `guide_runs`, `guide_events`              | Planned (Phase 7)     |
 
-| Endpoint                                                    | Purpose                                         | Auth                                             | Phase |
-| ----------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------ | ----- |
-| `GET \| POST /v1/workspaces/:workspaceId/applications`      | list; create (name, origins)                    | GET: member, session or bearer; POST: admin+     | 3     |
-| `PATCH \| DELETE …/applications/:applicationId`             | update; delete (409 while guides reference it)  | admin+                                           | 3     |
-| `GET \| POST /v1/workspaces/:workspaceId/guides`            | cursor list (status, application); create draft | editor+; session or bearer                       | 3     |
-| `GET \| PATCH \| DELETE …/guides/:guideId`                  | draft with steps; metadata; archive             | editor+; session or bearer                       | 3     |
-| `PUT …/guides/:guideId/steps`                               | replace the ordered list atomically             | editor+; session or bearer (Edit Mode, Phase 5)  | 3     |
-| `POST …/guides/:guideId/publish`                            | next immutable version                          | editor+ (open question in [product](product.md)) | 3     |
-| `POST /v1/extension/codes`                                  | session → one-time code                         | session, CSRF guard                              | 4     |
-| `POST /v1/extension/token`                                  | code + PKCE verifier, or refresh token → tokens | credential in body; rate-limited                 | 4     |
-| `POST /v1/extension/revoke`                                 | revoke the calling grant                        | bearer                                           | 4     |
-| `GET /v1/workspaces/:workspaceId/extension-grants`          | my connected browsers                           | session                                          | 4     |
-| `GET /v1/extension/guides?url=`                             | published guides for a page, grant's workspace  | bearer                                           | 4     |
-| `POST /v1/analytics/events`                                 | batched, idempotent ingestion                   | bearer                                           | 7     |
-| `GET /v1/workspaces/:workspaceId/analytics/guides/:guideId` | runs, completion, per-step drop-off per version | editor+; session                                 | 7     |
+| Endpoint                                                    | Purpose                                         | Auth                             | Phase |
+| ----------------------------------------------------------- | ----------------------------------------------- | -------------------------------- | ----- |
+| `POST /v1/extension/codes`                                  | session → one-time code                         | session, CSRF guard              | 4     |
+| `POST /v1/extension/token`                                  | code + PKCE verifier, or refresh token → tokens | credential in body; rate-limited | 4     |
+| `POST /v1/extension/revoke`                                 | revoke the calling grant                        | bearer                           | 4     |
+| `GET /v1/workspaces/:workspaceId/extension-grants`          | my connected browsers                           | session                          | 4     |
+| `GET /v1/extension/guides?url=`                             | published guides for a page, grant's workspace  | bearer                           | 4     |
+| `POST /v1/analytics/events`                                 | batched, idempotent ingestion                   | bearer                           | 7     |
+| `GET /v1/workspaces/:workspaceId/analytics/guides/:guideId` | runs, completion, per-step drop-off per version | editor+; session                 | 7     |
 
 Members (learners) never read drafts: they consume published versions through `GET /v1/extension/guides`. Whether members may see aggregates is open ([product](product.md)).
 
@@ -255,22 +288,24 @@ Members (learners) never read drafts: they consume published versions through `G
   - Module plugins are typed `FastifyPluginAsyncZod`, because type providers do not carry over into registered plugins.
 - **Dashboard (Implemented).** `request(method, path, { schema, body, acceptedStatuses, signal })` in `apps/dashboard/src/lib/http.ts` (with `getJson` as the GET shorthand) parses every response. Drift becomes `HttpError('invalid-response')`. Error responses are parsed as `ApiError`, so the error carries `code`, the API's `message` and `retry-after`. A 5xx with a body that is not ours (for example a proxy error page) counts as a `status` error, meaning the API is unavailable rather than out of contract. Forms validate with the same shared schemas before submitting.
 - **Extension (Implemented).** The service worker parses API responses with the shared schemas, and runtime messages with `src/messaging/protocol.ts`.
-- **Strictness (Proposed).** Request bodies use `z.strictObject`, because `z.object` silently drops unknown keys and hides client typos. Responses stay `z.object`, so older clients ignore new fields.
-- **Contract tests (Phase 3).** Route tests parse responses with the shared schemas, as `apps/api/test/health.test.ts` does today.
+- **Strictness (Implemented for Phase 3 contracts).** Request bodies of applications and guides use `z.strictObject`: unknown keys (a `workspaceId`, a `status`, a step `position`) get 400 instead of being silently dropped, which also rules out mass assignment. Stored documents (descriptor, rich text, snapshot) are strict at every level. Responses stay `z.object`, so older clients ignore new fields. Phase 2 request bodies still use `z.object`.
+- **Normalizing without transforms.** Origins are normalized with zod's `.overwrite()`, which keeps the schema's type and its JSON representation ([ADR 0010](adr/0010-runtime-validated-shared-contracts.md) forbids `.transform()` in shared schemas).
+- **Contract tests.** `packages/shared/test/content-contracts.test.ts` checks the limits (string lengths, array sizes, version 999, origin with a path, a step listed twice, oversize descriptors), and the integration tests parse responses with the shared schemas.
 
 ## 6. Module internal structure
 
 ```text
 apps/api/src/modules/guides/
-  guides.routes.ts      plugin: route schemas, auth preHandlers, status codes
-  guides.service.ts     use cases, transactions, role rules, domain errors
-  guides.repository.ts  Drizzle queries; every function takes workspaceId
-  guides.schemas.ts     optional: API-internal schemas
+  guides.routes.ts               plugin: route schemas, status codes, error mapping
+  guides.service.ts              use cases, transactions and row locks, role rules
+  guides.repository.ts           Drizzle queries for guides and steps; every function takes workspaceId
+  guide-versions.repository.ts   insert-only access to published versions
+  guides.schema.ts               Drizzle tables (re-exported by infrastructure/database/schema.ts)
 ```
 
 - **Wiring.** `buildApp()` (`apps/api/src/app.ts`) wires everything by hand: repository, then service, then routes. Health already works this way (`createHealthService(...)`, then `app.register(healthRoutes, { healthService })`); it has no repository because its probe is injected.
 - **Registration.** Modules are registered without `fastify-plugin`, so their hooks stay local. `health` is registered at the root (unversioned); business modules are registered inside a `/v1` scope (Implemented, Phase 2).
-- **Boundaries.** Modules call each other only through service interfaces injected in `buildApp()`, never through each other's tables ([architecture](architecture.md)). Example: `workspaces` reads user profiles through a `UserDirectory` that the `auth` service implements, and `auth` lists a user's workspaces through a function backed by the `workspaces` service.
+- **Boundaries.** Modules call each other only through service interfaces injected in `buildApp()`, never through each other's tables ([architecture](architecture.md)). Example: `workspaces` reads user profiles through a `UserDirectory` that the `auth` service implements, and `auth` lists a user's workspaces through a function backed by the `workspaces` service. In Phase 3, `applications` and `guides` authorize through a `MembershipDirectory` (the caller's role, from `workspaces`), `guides` checks applications through an `ApplicationDirectory` and names publishers through a `PublisherDirectory` (`auth`).
 - **Domain errors (Implemented, Phase 2).** Services return results such as `{ ok: false, error: 'last-owner' }` instead of throwing; each route plugin maps them to a status, code and client-safe message (`ERRORS` in `workspaces.routes.ts`). No generic `DomainError` class was needed.
 
 ## 7. OpenAPI (Proposed, later)
