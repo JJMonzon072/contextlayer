@@ -1,6 +1,8 @@
 import type { HealthReport } from '@contextlayer/shared'
 import { describe, expect, it, vi } from 'vitest'
 
+import type { Authoring } from '../src/background/authoring'
+import type { MessageResult } from '../src/messaging/protocol'
 import { classifySender, handleBackgroundMessage } from '../src/background/handle-message'
 
 const report: HealthReport = {
@@ -19,6 +21,14 @@ const contentScriptSender = {
   url: 'http://localhost:5173/',
   tab: { id: 7 } as chrome.tabs.Tab,
 }
+const panelSender = {
+  id: EXTENSION_ID,
+  url: `chrome-extension://${EXTENSION_ID}/sidepanel.html?tab=7`,
+}
+const PANEL = 'Pn1_panel-id-0123456789abcdef'
+const CAPTURE = 'Zk3_q-9xYt2LmN8pQ4rS'
+const GUIDE = '01a10a2e-864b-75bc-8800-aa3f01a05330'
+const APP = '01a10a2e-864b-75bc-8800-aa3f01a05320'
 
 const status = {
   state: 'disconnected',
@@ -47,8 +57,66 @@ function deps(fetchApiHealth = vi.fn(() => Promise.resolve(report))) {
       disable: vi.fn(() => Promise.resolve(siteStatus)),
       hello: vi.fn(() => Promise.resolve({ active: true })),
     },
+    authoring: fakeAuthoring(),
   }
 }
+
+/** Every authoring entry point, recording calls; answers do not matter to the router. */
+function fakeAuthoring() {
+  // The router passes answers through untouched; their shape is not its concern.
+  const done = () => Promise.resolve({ ok: true, data: { done: true } } as MessageResult<never>)
+  return {
+    attach: vi.fn(done),
+    state: vi.fn(() => Promise.resolve({ state: 'ended' as const, reason: 'closed' as const })),
+    guides: vi.fn(done),
+    open: vi.fn(done),
+    create: vi.fn(done),
+    resume: vi.fn(done),
+    startCapture: vi.fn(done),
+    cancelCapture: vi.fn(done),
+    takeCapture: vi.fn(done),
+    save: vi.fn(done),
+    writeLocal: vi.fn(done),
+    clearLocal: vi.fn(done),
+    exit: vi.fn(done),
+    detach: vi.fn(done),
+    panelClosed: vi.fn(() => Promise.resolve()),
+    pageHello: vi.fn(() => Promise.resolve()),
+    tabClosed: vi.fn(() => Promise.resolve()),
+    verify: vi.fn(() => Promise.resolve()),
+    pickerResult: vi.fn(() => Promise.resolve({ accepted: true })),
+    pickerCancelled: vi.fn(() => Promise.resolve({ accepted: true })),
+  } satisfies Authoring
+}
+
+/** One valid request of each Edit Mode type. */
+const AUTHORING = [
+  { type: 'authoring.attach', tabId: 7 },
+  { type: 'authoring.state', panelId: PANEL },
+  { type: 'authoring.guides', panelId: PANEL, applicationId: APP },
+  { type: 'authoring.open', panelId: PANEL, applicationId: APP, guideId: GUIDE },
+  { type: 'authoring.create', panelId: PANEL, applicationId: APP, title: 'Create a customer' },
+  { type: 'authoring.resume', panelId: PANEL },
+  { type: 'authoring.capture.start', panelId: PANEL },
+  { type: 'authoring.capture.cancel', panelId: PANEL },
+  { type: 'authoring.capture.take', panelId: PANEL, captureId: CAPTURE },
+  {
+    type: 'authoring.save',
+    panelId: PANEL,
+    operationId: 'op-123456',
+    applicationId: APP,
+    guideId: GUIDE,
+    request: { expectedRevision: 3, steps: [] },
+  },
+  {
+    type: 'authoring.local.write',
+    panelId: PANEL,
+    draft: { applicationId: APP, guideId: GUIDE, baseRevision: 3, steps: [] },
+  },
+  { type: 'authoring.local.clear', panelId: PANEL, guideId: GUIDE },
+  { type: 'authoring.exit', panelId: PANEL },
+  { type: 'authoring.detach', panelId: PANEL },
+] as const
 
 const siteStatus = { state: 'unsupported' } as const
 
@@ -70,6 +138,16 @@ describe('classifySender', () => {
     expect(classifySender(popupSender, EXTENSION_ID)).toBe('extension-page')
     expect(
       classifySender({ ...popupSender, tab: { id: 3 } as chrome.tabs.Tab }, EXTENSION_ID),
+    ).toBe('extension-page')
+  })
+
+  it('tells the Edit Mode side panel apart by its path', () => {
+    expect(classifySender(panelSender, EXTENSION_ID)).toBe('side-panel')
+    expect(
+      classifySender(
+        { ...panelSender, url: `chrome-extension://${EXTENSION_ID}/sidepanel.html.popup.html` },
+        EXTENSION_ID,
+      ),
     ).toBe('extension-page')
   })
 
@@ -198,5 +276,74 @@ describe('handleBackgroundMessage', () => {
     )
 
     expect(result).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('runs Edit Mode requests for the side panel only', async () => {
+    for (const request of AUTHORING) {
+      for (const sender of [popupSender, contentScriptSender]) {
+        const handlers = deps()
+        expect(
+          await handleBackgroundMessage(request, sender, handlers),
+          `${request.type} from ${sender.url}`,
+        ).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
+        for (const command of Object.values(handlers.authoring)) {
+          expect(command).not.toHaveBeenCalled()
+        }
+      }
+      expect(await handleBackgroundMessage(request, panelSender, deps())).toMatchObject({
+        ok: true,
+      })
+    }
+  })
+
+  it('never lets the side panel run connection or site commands', async () => {
+    const handlers = deps()
+
+    for (const request of PRIVILEGED) {
+      const result = await handleBackgroundMessage(request, panelSender, handlers)
+      expect(result).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
+    }
+  })
+
+  it('accepts capture answers from content scripts only, with the sender Chrome reports', async () => {
+    const outcome = { ok: false, reason: 'Elements inside frames are not supported yet.' }
+    const result = { type: 'picker.result', captureId: CAPTURE, outcome }
+    const cancelled = { type: 'picker.cancelled', captureId: CAPTURE, reason: 'escape' }
+
+    for (const sender of [popupSender, panelSender]) {
+      expect(await handleBackgroundMessage(result, sender, deps())).toMatchObject({
+        ok: false,
+        error: { code: 'FORBIDDEN' },
+      })
+    }
+    const handlers = deps()
+    await handleBackgroundMessage(result, contentScriptSender, handlers)
+    await handleBackgroundMessage(cancelled, contentScriptSender, handlers)
+    expect(handlers.authoring.pickerResult).toHaveBeenCalledWith(
+      contentScriptSender,
+      CAPTURE,
+      outcome,
+    )
+    expect(handlers.authoring.pickerCancelled).toHaveBeenCalledWith(
+      contentScriptSender,
+      CAPTURE,
+      'escape',
+    )
+    // A content script cannot slip a save or a workspace into its answer.
+    expect(
+      await handleBackgroundMessage(
+        { ...result, guideId: GUIDE, workspaceId: 'w' },
+        contentScriptSender,
+        deps(),
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('tells Edit Mode when an authorized page says hello', async () => {
+    const handlers = deps()
+
+    await handleBackgroundMessage({ type: 'page.hello' }, contentScriptSender, handlers)
+
+    expect(handlers.authoring.pageHello).toHaveBeenCalledWith(contentScriptSender)
   })
 })

@@ -6,7 +6,23 @@ const REQUEST_TIMEOUT_MS = 5_000
 
 /** The API answered (any status). Network failures, timeouts and redirects throw `ApiUnreachableError`. */
 export class ApiUnreachableError extends Error {
-  override readonly name = 'ApiUnreachableError'
+  override readonly name: string = 'ApiUnreachableError'
+}
+
+/**
+ * The API answered with an error status. A subclass of `ApiUnreachableError`
+ * so callers that only tell "worked" from "did not" keep treating it as they
+ * did; Edit Mode reads `status` and `code` to explain conflicts and refusals.
+ */
+export class ApiStatusError extends ApiUnreachableError {
+  override readonly name = 'ApiStatusError'
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined,
+    message: string,
+  ) {
+    super(message)
+  }
 }
 
 export interface ApiClient {

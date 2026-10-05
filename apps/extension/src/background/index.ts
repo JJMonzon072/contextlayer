@@ -13,8 +13,9 @@ import { originMatchPattern } from '@contextlayer/shared'
 
 import { API_BASE_URL, DASHBOARD_ORIGIN, EXTENSION_VERSION } from '../config'
 import { logger } from '../lib/logger'
-import { CONNECTION_CHANGED, failure } from '../messaging/protocol'
+import { AUTHORING_CHANGED, CONNECTION_CHANGED, failure } from '../messaging/protocol'
 import { createApiClient, fetchApiHealth } from './api-client'
+import { createAuthoring, type AuthoringChrome } from './authoring'
 import { createWorkerCore } from './core'
 import { handleBackgroundMessage } from './handle-message'
 import { CONTENT_SCRIPT_FILES } from '../content-files'
@@ -62,9 +63,36 @@ function broadcastChange(): void {
   chrome.runtime.sendMessage(CONNECTION_CHANGED).catch(() => undefined)
 }
 
+/**
+ * The side panel API, when present: the `sidePanel` permission, and Chrome
+ * 116+ for `open()`. Newer members (`onClosed`, Chrome 142) are detected
+ * before use, since the manifest allows Chrome 120.
+ */
+type SidePanelApi = Omit<typeof chrome.sidePanel, 'onClosed'> & {
+  onClosed?: chrome.events.Event<(info: { tabId?: number }) => void>
+}
+const sidePanel = (chrome as { sidePanel?: SidePanelApi }).sidePanel
+
+const authoringChrome: AuthoringChrome = {
+  hasHostAccess: (pattern) => siteChrome.hasHostAccess(pattern),
+  tabUrl: (tabId) => siteChrome.tabUrl(tabId),
+  sendToTab: (tabId, message, documentId) =>
+    chrome.tabs.sendMessage(tabId, message, { documentId }),
+  // Disabling the tab's panel also closes it (measured in the Phase 5 spike).
+  closePanel: async (tabId) => {
+    await sidePanel?.setOptions({ tabId, enabled: false })
+  },
+}
+
 function reconcileSites(options?: { injectAll?: boolean }): void {
   site.reconcile(options).catch((error: unknown) => {
     logger.warn('could not reconcile site access', error)
+  })
+}
+
+function verifyAuthoring(): void {
+  authoring.verify().catch((error: unknown) => {
+    logger.warn('could not check the Edit Mode session', error)
   })
 }
 
@@ -72,6 +100,7 @@ function reconcileSites(options?: { injectAll?: boolean }): void {
 const onConnectionChanged = () => {
   broadcastChange()
   reconcileSites()
+  verifyAuthoring()
   return Promise.resolve()
 }
 const { vault, lifecycle, auth, connection } = createWorkerCore({
@@ -85,6 +114,20 @@ const { vault, lifecycle, auth, connection } = createWorkerCore({
   onChanged: onConnectionChanged,
 })
 const site = createSiteAccess({ vault, auth, lifecycle, chrome: siteChrome, apiPattern, now })
+const authoring = createAuthoring({
+  vault,
+  auth,
+  lifecycle,
+  chrome: authoringChrome,
+  now,
+  applicationsFor: async (origin) =>
+    (await site.applications()).applications
+      ?.filter((app) => app.origins.some((entry) => entry.origin === origin && entry.on))
+      .map(({ id, name }) => ({ id, name })),
+  notify: () => {
+    chrome.runtime.sendMessage(AUTHORING_CHANGED).catch(() => undefined)
+  },
+})
 
 // Restrict chrome.storage.local before anything can write a credential to it.
 void vault.ready().then((restricted) => {
@@ -98,6 +141,8 @@ void vault.ready().then((restricted) => {
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   logger.info(`installed (${reason}), version ${EXTENSION_VERSION}`)
   reconcileSites({ injectAll: true })
+  // The side panel exists only for the tab Edit Mode was opened on.
+  sidePanel?.setOptions({ enabled: false }).catch(() => undefined)
 })
 chrome.runtime.onStartup.addListener(() => {
   reconcileSites({ injectAll: true })
@@ -114,6 +159,8 @@ chrome.permissions.onAdded.addListener(() => {
 chrome.permissions.onRemoved.addListener(() => {
   reconcileSites()
   broadcastChange()
+  // Edit Mode ends on a site that lost Chrome's access.
+  verifyAuthoring()
 })
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -122,6 +169,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     fetchApiHealth: () => fetchApiHealth(api),
     connection,
     site,
+    authoring,
     onApiError: (error) => {
       logger.warn('API request failed', error)
     },
@@ -148,4 +196,11 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void connection.tabClosed(tabId).then(broadcastChange)
   void site.pageClosed(tabId)
+  void authoring.tabClosed(tabId)
+})
+
+// Chrome 142+: the author closed the panel. Earlier versions rely on the
+// panel's own pagehide message and on the capture time limit.
+sidePanel?.onClosed?.addListener(({ tabId }) => {
+  if (tabId !== undefined) void authoring.panelClosed(tabId)
 })

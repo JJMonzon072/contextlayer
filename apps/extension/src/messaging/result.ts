@@ -9,6 +9,16 @@ export const MESSAGE_ERROR_CODES = [
   'API_UNREACHABLE',
   'NOT_AVAILABLE',
   'INTERNAL_ERROR',
+  // Edit Mode (Phase 5).
+  'NOT_FOUND',
+  /** The guide changed on the server since it was loaded (revision), or it is archived. */
+  'CONFLICT',
+  /** The answer belongs to an older connection, session, guide or request: ignore it. */
+  'STALE',
+  /** The page the session was bound to was reloaded or left: continue explicitly. */
+  'PAGE_CHANGED',
+  /** A save was sent but its answer was lost: reload the guide before deciding. */
+  'OUTCOME_UNKNOWN',
 ] as const
 
 export interface MessageError {
