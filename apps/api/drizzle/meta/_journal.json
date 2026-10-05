@@ -36,6 +36,13 @@
       "when": 1791212996687,
       "tag": "0004_extension_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791213845833,
+      "tag": "0005_applications_origins_index",
+      "breakpoints": true
     }
   ]
 }

@@ -3,17 +3,23 @@ import {
   connectionListSchema,
   createConnectionCodeRequestSchema,
   EXTENSION_PATHS,
+  extensionApplicationListSchema,
   extensionConnectionInfoSchema,
   extensionTokenRequestSchema,
   extensionTokenResponseSchema,
+  publishedGuideListSchema,
+  publishedGuideQuerySchema,
+  publishedGuideSchema,
 } from '@contextlayer/shared'
 import type { FastifyRequest, preHandlerAsyncHookHandler } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 
 import type { AppConfig } from '../../config/env.js'
+import { decodeCursor } from '../../http/cursor.js'
 import {
   domainErrorResponses,
+  INVALID_CURSOR,
   sendDomainError,
   WORKSPACE_NOT_FOUND,
   type DomainErrorReply,
@@ -36,7 +42,15 @@ const ERRORS: Record<ExtensionError, DomainErrorReply> = {
     message: 'The connection code or refresh token is invalid, expired or already used.',
   },
   'connection-not-found': { status: 404, message: 'Connection not found.' },
+  'invalid-origin': {
+    status: 400,
+    message: 'origin must be an exact origin such as https://app.example.com.',
+  },
+  'guide-not-found': { status: 404, message: 'Guide not found.' },
 }
+
+/** Applications per connection are few; the list is bounded instead of paginated. */
+const APPLICATION_LIST_LIMIT = 100
 
 /**
  * Authentication per route (ADR 0015):
@@ -44,7 +58,9 @@ const ERRORS: Record<ExtensionError, DomainErrorReply> = {
  *                         dashboard session cookie + CSRF guard
  * - POST token            credential in the body only (no cookie, no bearer);
  *                         exempt from the CSRF guard because it reads no cookie
- * - POST revoke, GET session   extension access token (bearer)
+ * - POST revoke, GET session, applications, guides, guides/:id
+ *                         extension access token (bearer); the workspace is the
+ *                         grant's, never a value from the request
  */
 export const extensionRoutes: FastifyPluginAsyncZod<ExtensionRoutesOptions> = (app, options) => {
   const { extension, rateLimits, requireSession, requireExtensionAccess } = options
@@ -138,6 +154,66 @@ export const extensionRoutes: FastifyPluginAsyncZod<ExtensionRoutesOptions> = (a
     async (request, reply) => {
       await extension.revoke(extensionAuthOf(request).grantId, 'disconnected')
       return reply.code(204).send()
+    },
+  )
+
+  app.get(
+    EXTENSION_PATHS.applications,
+    {
+      preHandler: requireExtensionAccess,
+      schema: { response: { 200: extensionApplicationListSchema } },
+    },
+    async (request) => ({
+      items: (await extension.applications(extensionAuthOf(request))).slice(
+        0,
+        APPLICATION_LIST_LIMIT,
+      ),
+    }),
+  )
+
+  app.get(
+    EXTENSION_PATHS.guides,
+    {
+      preHandler: requireExtensionAccess,
+      schema: {
+        querystring: publishedGuideQuerySchema,
+        response: { 200: publishedGuideListSchema, ...domainErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const { origin, limit, cursor } = request.query
+      const afterId = cursor === undefined ? undefined : decodeCursor(cursor)
+      if (cursor !== undefined && afterId === undefined) {
+        return sendDomainError(request, reply, INVALID_CURSOR)
+      }
+      const result = await extension.publishedGuides(extensionAuthOf(request), {
+        origin,
+        limit,
+        afterId,
+      })
+      return result.ok
+        ? reply.send(result.value)
+        : sendDomainError(request, reply, ERRORS[result.error])
+    },
+  )
+
+  app.get(
+    `${EXTENSION_PATHS.guides}/:guideId`,
+    {
+      preHandler: requireExtensionAccess,
+      schema: {
+        params: z.object({ guideId: z.uuid() }),
+        response: { 200: publishedGuideSchema, ...domainErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const result = await extension.publishedGuide(
+        extensionAuthOf(request),
+        request.params.guideId,
+      )
+      return result.ok
+        ? reply.send(result.value)
+        : sendDomainError(request, reply, ERRORS[result.error])
     },
   )
 

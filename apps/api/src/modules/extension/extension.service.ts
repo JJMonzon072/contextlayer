@@ -1,5 +1,9 @@
 import {
   CONNECTION_CODE_TTL_SECONDS,
+  parseOrigin,
+  type ExtensionApplication,
+  type PublishedGuide,
+  type PublishedGuideList,
   type Connection,
   type ConnectionCode,
   type CreateConnectionCodeRequest,
@@ -39,7 +43,8 @@ import {
  * same `invalid-grant`: a client learns nothing about why a code or refresh
  * token was refused.
  */
-export type ExtensionError = 'not-found' | 'invalid-grant' | 'connection-not-found'
+export type ExtensionError =
+  'not-found' | 'invalid-grant' | 'connection-not-found' | 'invalid-origin' | 'guide-not-found'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: ExtensionError }
 
@@ -50,6 +55,20 @@ export interface ExtensionDirectories {
   roleOf(workspaceId: string, userId: string): Promise<WorkspaceRole | undefined>
   workspaceName(userId: string, workspaceId: string): Promise<string | undefined>
   profileOf(userId: string): Promise<{ displayName: string; email: string } | undefined>
+}
+
+/**
+ * Published content, from the applications and guides modules (wired in
+ * app.ts). Always scoped by the grant's workspace, never by a client value.
+ */
+export interface PublishedContentDirectory {
+  listApplications(workspaceId: string): Promise<ExtensionApplication[]>
+  listPublished(
+    workspaceId: string,
+    origin: string,
+    page: { limit: number; afterId: string | undefined },
+  ): Promise<PublishedGuideList>
+  getPublished(workspaceId: string, guideId: string): Promise<PublishedGuide | undefined>
 }
 
 /** The caller of an extension route, from a live access token. */
@@ -71,8 +90,9 @@ export function createExtensionService(deps: {
   config: ExtensionConfig
   now: () => Date
   directories: ExtensionDirectories
+  content: PublishedContentDirectory
 }) {
-  const { db, config, now, directories } = deps
+  const { db, config, now, directories, content } = deps
 
   async function connectionInfo(grant: GrantRow): Promise<ExtensionConnectionInfo | undefined> {
     const [profile, workspaceName] = await Promise.all([
@@ -289,6 +309,36 @@ export function createExtensionService(deps: {
       if (role === undefined) return undefined
       await touchGrant(db, grant.id, at)
       return { grantId: grant.id, userId: grant.userId, workspaceId: grant.workspaceId, role }
+    },
+
+    /** Applications of the grant's workspace (names and origins only). */
+    applications(auth: ExtensionAuth): Promise<ExtensionApplication[]> {
+      return content.listApplications(auth.workspaceId)
+    },
+
+    /**
+     * Discovery: published guides of the grant's workspace for one exact origin,
+     * normalized like application origins. Query strings and paths of the page
+     * never reach the API; it never fetches the origin either.
+     */
+    async publishedGuides(
+      auth: ExtensionAuth,
+      query: { origin: string; limit: number; afterId: string | undefined },
+    ): Promise<Result<PublishedGuideList>> {
+      const origin = parseOrigin(query.origin)
+      if (!origin.ok) return fail('invalid-origin')
+      return {
+        ok: true,
+        value: await content.listPublished(auth.workspaceId, origin.origin, {
+          limit: query.limit,
+          afterId: query.afterId,
+        }),
+      }
+    },
+
+    async publishedGuide(auth: ExtensionAuth, guideId: string): Promise<Result<PublishedGuide>> {
+      const guide = await content.getPublished(auth.workspaceId, guideId)
+      return guide ? { ok: true, value: guide } : fail('guide-not-found')
     },
 
     async session(auth: ExtensionAuth): Promise<ExtensionConnectionInfo | undefined> {

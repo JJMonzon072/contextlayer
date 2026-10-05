@@ -132,6 +132,12 @@ export async function buildApp({
         return profile && { displayName: profile.displayName, email: profile.email }
       },
     },
+    content: {
+      listApplications: (workspaceId) => applications.listForWorkspace(workspaceId, 100),
+      listPublished: (workspaceId, origin, page) =>
+        guides.listPublishedForOrigin(workspaceId, origin, page),
+      getPublished: (workspaceId, guideId) => guides.getPublished(workspaceId, guideId),
+    },
   })
   const requireSession = createRequireSession(auth, config.session.cookieName)
   const requireExtensionAccess = createRequireExtensionAccess(extension)
