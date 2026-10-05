@@ -107,6 +107,11 @@ export function createAppRouter(store: SessionStore, history: RouterHistory = cr
             component: () => import('../features/guides/GuideEditorPage.vue'),
           },
           {
+            path: 'guides/:guideId/versions/:version(\\d+)',
+            name: 'guide-version',
+            component: () => import('../features/guides/GuideVersionPage.vue'),
+          },
+          {
             path: 'members',
             name: 'members',
             component: () => import('../features/workspaces/MembersPage.vue'),

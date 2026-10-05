@@ -4,6 +4,7 @@ import {
   guideTitleSchema,
   roleAtLeast,
   type Guide,
+  type GuideVersionSummary,
   type UrlPattern,
 } from '@contextlayer/shared'
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -30,6 +31,7 @@ import {
 import GuideStatusBadge from './GuideStatusBadge.vue'
 import * as api from './guides-api'
 import StepCard from './StepCard.vue'
+import VersionHistory from './VersionHistory.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -79,6 +81,20 @@ function apply(next: Guide) {
   savedSteps.value = stepsFingerprint(steps.value)
 }
 
+const versions = shallowRef<GuideVersionSummary[]>([])
+const versionsLoading = shallowRef(false)
+
+async function loadVersions(workspaceId: string, id: string) {
+  versionsLoading.value = true
+  try {
+    versions.value = await api.listVersions(workspaceId, id)
+  } catch {
+    // The history is secondary: the editor stays usable, the list shows what it has.
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
 async function load(workspaceId: string, id: string) {
   loading.value = true
   loadError.value = undefined
@@ -86,6 +102,7 @@ async function load(workspaceId: string, id: string) {
   try {
     const loaded = await api.getGuide(workspaceId, id)
     apply(loaded)
+    void loadVersions(workspaceId, id)
     applicationName.value = (await getApplication(workspaceId, loaded.applicationId)).name
   } catch (cause) {
     loadError.value = describeError(cause)
@@ -200,6 +217,40 @@ async function reloadLatest() {
   if (workspace.value) await load(workspace.value.id, guideId.value)
 }
 
+// Publishing.
+const publishing = shallowRef(false)
+const canPublish = computed(
+  () => !readOnly.value && !dirty.value && (guide.value?.stepCount ?? 0) > 0,
+)
+const publishHint = computed(() => {
+  if (readOnly.value) return undefined
+  if (dirty.value) return 'Save your changes before publishing.'
+  if ((guide.value?.stepCount ?? 0) === 0) return 'Add and save at least one step to publish.'
+  if (guide.value?.latestVersion !== null && guide.value?.hasUnpublishedChanges === false) {
+    return `Version ${String(guide.value.latestVersion)} matches the draft.`
+  }
+  return undefined
+})
+
+async function publish() {
+  if (!workspace.value || !guide.value || !canPublish.value) return
+  publishing.value = true
+  saveError.value = undefined
+  notice.value = undefined
+  try {
+    const result = await api.publishGuide(workspace.value.id, guide.value.id)
+    guide.value = { ...guide.value, ...result.guide }
+    notice.value = result.created
+      ? `Version ${String(result.version.version)} published. It is a read-only snapshot: later edits stay in this draft until you publish again.`
+      : `Nothing changed since version ${String(result.version.version)}, so no new version was created.`
+    await loadVersions(workspace.value.id, guide.value.id)
+  } catch (cause) {
+    saveError.value = describeError(cause)
+  } finally {
+    publishing.value = false
+  }
+}
+
 // Archive and restore.
 const archiving = shallowRef(false)
 
@@ -297,6 +348,14 @@ function backToApplication() {
               @click="save"
               >Save draft</AppButton
             >
+            <AppButton
+              :variant="dirty ? 'secondary' : 'primary'"
+              :disabled="!canPublish"
+              :loading="publishing"
+              data-testid="publish"
+              @click="publish"
+              >Publish</AppButton
+            >
             <AppButton variant="danger" :loading="archiving" @click="archive">Archive</AppButton>
           </template>
           <template v-else>
@@ -306,6 +365,13 @@ function backToApplication() {
         </div>
       </header>
 
+      <p
+        v-if="publishHint"
+        class="mt-3 text-right text-xs text-slate-600"
+        data-testid="publish-hint"
+      >
+        {{ publishHint }}
+      </p>
       <p
         v-if="readOnly"
         class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
@@ -405,8 +471,14 @@ function backToApplication() {
         </div>
 
         <aside class="space-y-6" aria-label="Guide information">
+          <VersionHistory
+            :workspace-id="workspace.id"
+            :guide-id="guide.id"
+            :versions="versions"
+            :loading="versionsLoading"
+          />
           <section class="rounded-xl border border-slate-200 bg-white p-5">
-            <h2 class="text-sm font-semibold">Revision</h2>
+            <h2 class="text-sm font-semibold">Draft</h2>
             <p class="mt-1 text-sm text-slate-600">
               Draft revision {{ guide.revision }} · {{ guide.stepCount }}
               {{ guide.stepCount === 1 ? 'step' : 'steps' }} saved

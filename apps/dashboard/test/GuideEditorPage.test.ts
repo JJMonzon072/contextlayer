@@ -40,6 +40,8 @@ describe('GuideEditorPage', () => {
     vi.mocked(guidesApi.replaceSteps).mockReset()
     vi.mocked(guidesApi.updateGuide).mockReset()
     vi.mocked(applicationsApi.getApplication).mockReset().mockResolvedValue(CRM)
+    vi.mocked(guidesApi.listVersions).mockReset().mockResolvedValue([])
+    vi.mocked(guidesApi.publishGuide).mockReset()
   })
 
   it('shows the draft with its steps and nothing to save', async () => {
@@ -153,5 +155,105 @@ describe('GuideEditorPage', () => {
     expect(button(wrapper, 'Add step')).toBeUndefined()
     expect(wrapper.get('input').attributes('readonly')).toBeDefined()
     expect(button(wrapper, 'Restore')).toBeDefined()
+  })
+
+  it('publishes the saved draft and explains the snapshot', async () => {
+    const {
+      steps: _steps,
+      startUrlPattern: _pattern,
+      ...summary
+    } = guide({
+      status: 'published',
+      latestVersion: 1,
+      hasUnpublishedChanges: false,
+    })
+    vi.mocked(guidesApi.publishGuide).mockResolvedValue({
+      created: true,
+      version: {
+        version: 1,
+        publishedAt: '2026-10-05T14:00:00.000Z',
+        publishedBy: null,
+        stepCount: 2,
+      },
+      guide: summary,
+    })
+    const { wrapper, workspace } = await mountEditor()
+    vi.mocked(guidesApi.listVersions).mockResolvedValue([
+      {
+        version: 1,
+        publishedAt: '2026-10-05T14:00:00.000Z',
+        publishedBy: { userId: 'u', displayName: 'Alice' },
+        stepCount: 2,
+      },
+    ])
+
+    await wrapper.get('[data-testid="publish"]').trigger('click')
+    await flushPromises()
+
+    expect(guidesApi.publishGuide).toHaveBeenCalledWith(workspace.id, guide().id)
+    expect(wrapper.get('[data-testid="notice"]').text()).toMatch(
+      /^Version 1 published\. It is a read-only snapshot/,
+    )
+    expect(wrapper.get('[data-testid="guide-status"]').text()).toBe('Published · v1')
+    const item = wrapper.get('[data-testid="version-item"]')
+    expect(item.text()).toContain('Version 1')
+    expect(item.text()).toContain('by Alice')
+  })
+
+  it('says when nothing changed since the latest version', async () => {
+    const {
+      steps: _steps,
+      startUrlPattern: _pattern,
+      ...summary
+    } = guide({
+      status: 'published',
+      latestVersion: 3,
+      hasUnpublishedChanges: false,
+    })
+    vi.mocked(guidesApi.publishGuide).mockResolvedValue({
+      created: false,
+      version: {
+        version: 3,
+        publishedAt: '2026-10-05T14:00:00.000Z',
+        publishedBy: null,
+        stepCount: 2,
+      },
+      guide: summary,
+    })
+    const { wrapper } = await mountEditor()
+
+    await wrapper.get('[data-testid="publish"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="notice"]').text()).toBe(
+      'Nothing changed since version 3, so no new version was created.',
+    )
+  })
+
+  it('asks to save before publishing and needs at least one step', async () => {
+    const { wrapper } = await mountEditor()
+
+    await button(wrapper, '↓Move step 1 down')?.trigger('click')
+    expect(wrapper.get('[data-testid="publish"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="publish-hint"]').text()).toBe(
+      'Save your changes before publishing.',
+    )
+
+    vi.mocked(guidesApi.getGuide).mockResolvedValue(guide({ steps: [], stepCount: 0 }))
+    const empty = await mountEditor()
+    expect(empty.wrapper.get('[data-testid="publish"]').attributes('disabled')).toBeDefined()
+    expect(empty.wrapper.get('[data-testid="publish-hint"]').text()).toMatch(/at least one step/)
+  })
+
+  it('shows publishing errors from the API', async () => {
+    vi.mocked(guidesApi.publishGuide).mockRejectedValue(
+      apiError(409, 'CONFLICT', 'Add at least one step before publishing.'),
+    )
+    const { wrapper } = await mountEditor()
+
+    await wrapper.get('[data-testid="publish"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('Add at least one step before publishing.')
   })
 })
