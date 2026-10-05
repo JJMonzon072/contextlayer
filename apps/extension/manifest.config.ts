@@ -26,6 +26,11 @@ interface ManifestOptions {
   /** The dashboard that hands over connection codes; only its exact origin may message us. */
   dashboardUrl: URL
   identity: ExtensionIdentity
+  /**
+   * End-to-end build only: customer sites granted at install time, because
+   * Chrome's permission prompt cannot be answered under automation.
+   */
+  preGrantedSites?: URL[]
 }
 
 /**
@@ -39,6 +44,7 @@ export function createManifest({
   apiBaseUrl,
   dashboardUrl,
   identity,
+  preGrantedSites = [],
 }: ManifestOptions): chrome.runtime.ManifestV3 {
   return {
     manifest_version: 3,
@@ -70,7 +76,7 @@ export function createManifest({
     ],
     // A pattern without a port matches every port, so the port is always
     // explicit, including the scheme default that `URL.origin` would omit.
-    host_permissions: [originPattern(apiBaseUrl)],
+    host_permissions: [originPattern(apiBaseUrl), ...preGrantedSites.map(originPattern)],
     // The dashboard page and nothing else may message the extension: no other
     // site and, since "ids" is absent, no other extension (verified in the spike).
     externally_connectable: { matches: [originPattern(dashboardUrl)] },

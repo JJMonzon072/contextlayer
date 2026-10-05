@@ -385,6 +385,9 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
     devDependencies:
+      '@axe-core/playwright':
+        specifier: ^4.13.0
+        version: 4.13.0(playwright-core@1.63.0)
       '@contextlayer/config':
         specifier: workspace:*
         version: link:../../packages/config

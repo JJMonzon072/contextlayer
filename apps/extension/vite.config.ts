@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defaultClientConditions, loadEnv, type InlineConfig, type Plugin } from 'vite'
 
+import { E2E_API_URL, E2E_DASHBOARD_URL, E2E_OUT_DIR, GRANTED_SITE } from './e2e/environment'
 import {
   createManifest,
   parseApiBaseUrl,
@@ -29,6 +30,8 @@ export const OUT_DIR = fileURLToPath(new URL('./dist', import.meta.url))
 interface BuildOptions {
   mode: 'development' | 'production'
   watch: boolean
+  /** The end-to-end variant: e2e servers, a pre-granted test site, dist-e2e/. */
+  e2e?: boolean
 }
 
 interface ExtensionEnv {
@@ -36,21 +39,35 @@ interface ExtensionEnv {
   dashboardUrl: URL
   identity: ExtensionIdentity
   version: string
+  outDir: string
+  preGrantedSites: URL[]
 }
 
-function readExtensionEnv(mode: string): ExtensionEnv {
-  const env = loadEnv(mode, workspaceRoot, '')
-  const apiBaseUrl = parseApiBaseUrl(env.EXTENSION_API_BASE_URL)
-
+function readExtensionEnv({ mode, e2e = false }: BuildOptions): ExtensionEnv {
   const packageJson = JSON.parse(
     readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
   ) as { version: string }
 
+  if (e2e) {
+    // Fixed values, independent of the developer's .env.
+    return {
+      apiBaseUrl: parseApiBaseUrl(E2E_API_URL),
+      dashboardUrl: parseDashboardUrl(E2E_DASHBOARD_URL),
+      identity: resolveExtensionIdentity({}),
+      version: packageJson.version,
+      outDir: E2E_OUT_DIR,
+      preGrantedSites: [new URL(GRANTED_SITE)],
+    }
+  }
+
+  const env = loadEnv(mode, workspaceRoot, '')
   return {
-    apiBaseUrl,
+    apiBaseUrl: parseApiBaseUrl(env.EXTENSION_API_BASE_URL),
     dashboardUrl: parseDashboardUrl(env.EXTENSION_DASHBOARD_URL),
     identity: resolveExtensionIdentity(env),
     version: packageJson.version,
+    outDir: OUT_DIR,
+    preGrantedSites: [],
   }
 }
 
@@ -68,7 +85,7 @@ function baseConfig({ mode, watch }: BuildOptions, env: ExtensionEnv): InlineCon
       __CONTEXTLAYER_VERSION__: JSON.stringify(env.version),
     },
     build: {
-      outDir: OUT_DIR,
+      outDir: env.outDir,
       // scripts/build.ts cleans dist once; the two builds must not wipe each other.
       emptyOutDir: false,
       sourcemap: mode === 'development' ? 'inline' : false,
@@ -87,6 +104,7 @@ function manifestPlugin(env: ExtensionEnv): Plugin {
         apiBaseUrl: env.apiBaseUrl,
         dashboardUrl: env.dashboardUrl,
         identity: env.identity,
+        preGrantedSites: env.preGrantedSites,
       })
       this.emitFile({
         type: 'asset',
@@ -98,7 +116,7 @@ function manifestPlugin(env: ExtensionEnv): Plugin {
 }
 
 export function createPagesConfig(options: BuildOptions): InlineConfig {
-  const env = readExtensionEnv(options.mode)
+  const env = readExtensionEnv(options)
   const base = baseConfig(options, env)
 
   return {
@@ -122,7 +140,7 @@ export function createPagesConfig(options: BuildOptions): InlineConfig {
 }
 
 export function createContentScriptConfig(options: BuildOptions): InlineConfig {
-  const env = readExtensionEnv(options.mode)
+  const env = readExtensionEnv(options)
   const base = baseConfig(options, env)
 
   return {
