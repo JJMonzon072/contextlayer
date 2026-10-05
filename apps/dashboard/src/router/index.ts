@@ -112,6 +112,11 @@ export function createAppRouter(store: SessionStore, history: RouterHistory = cr
             component: () => import('../features/guides/GuideVersionPage.vue'),
           },
           {
+            path: 'connected-browsers',
+            name: 'connected-browsers',
+            component: () => import('../features/extension/ConnectedBrowsersPage.vue'),
+          },
+          {
             path: 'members',
             name: 'members',
             component: () => import('../features/workspaces/MembersPage.vue'),

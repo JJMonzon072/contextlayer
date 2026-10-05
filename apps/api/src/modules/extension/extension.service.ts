@@ -1,5 +1,6 @@
 import {
   CONNECTION_CODE_TTL_SECONDS,
+  type Connection,
   type ConnectionCode,
   type CreateConnectionCodeRequest,
   type ExtensionConnectionInfo,
@@ -18,12 +19,14 @@ import {
   findConsumedCodeGrant,
   findGrant,
   findGrantByAccessToken,
+  findGrantOfUser,
   findRefreshToken,
   findRefreshTokenById,
   insertAccessToken,
   insertCode,
   insertGrant,
   insertRefreshToken,
+  listGrantsForUser,
   lockGrant,
   markRefreshTokenUsed,
   revokeGrant,
@@ -58,6 +61,8 @@ export interface ExtensionAuth {
 }
 
 const DEFAULT_LABEL = 'Chrome extension'
+/** "Connected browsers" shows the most recent connections only. */
+const CONNECTION_LIST_LIMIT = 50
 
 export type ExtensionService = ReturnType<typeof createExtensionService>
 
@@ -128,6 +133,14 @@ export function createExtensionService(deps: {
         connection,
       },
     }
+  }
+
+  /** Revokes a grant under its lock, so no refresh can complete after it. */
+  async function revokeLocked(grantId: string, reason: GrantRevocationReason): Promise<void> {
+    const at = now()
+    await db.transaction(async (tx) => {
+      if (await lockGrant(tx, grantId)) await revokeGrant(tx, grantId, reason, at)
+    })
   }
 
   return {
@@ -232,13 +245,36 @@ export function createExtensionService(deps: {
       return outcome ? tokenResponse(outcome.grant, outcome.tokens) : fail('invalid-grant')
     },
 
-    /** Revokes a grant under its lock, so no refresh can complete after it. */
-    async revoke(grantId: string, reason: GrantRevocationReason): Promise<void> {
+    /** Dashboard (cookie): the caller's own connections, in every workspace. */
+    async listConnections(userId: string): Promise<Connection[]> {
       const at = now()
-      await db.transaction(async (tx) => {
-        if (await lockGrant(tx, grantId)) await revokeGrant(tx, grantId, reason, at)
-      })
+      const grants = await listGrantsForUser(db, userId, CONNECTION_LIST_LIMIT)
+      const names = new Map<string, string | undefined>()
+      for (const workspaceId of new Set(grants.map((grant) => grant.workspaceId))) {
+        names.set(workspaceId, await directories.workspaceName(userId, workspaceId))
+      }
+      return grants.map((grant) => ({
+        id: grant.id,
+        label: grant.label,
+        workspace: { id: grant.workspaceId, name: names.get(grant.workspaceId) ?? '' },
+        status: grant.revokedAt !== null ? 'revoked' : grant.expiresAt <= at ? 'expired' : 'active',
+        createdAt: grant.createdAt.toISOString(),
+        expiresAt: grant.expiresAt.toISOString(),
+        lastUsedAt: grant.lastUsedAt?.toISOString() ?? null,
+        revokedAt: grant.revokedAt?.toISOString() ?? null,
+        revokedReason: grant.revokedReason,
+      }))
     },
+
+    /** Dashboard (cookie): revokes one of the caller's connections; others are not found. */
+    async revokeConnection(userId: string, connectionId: string): Promise<Result<null>> {
+      const grant = await findGrantOfUser(db, userId, connectionId)
+      if (!grant) return fail('connection-not-found')
+      await revokeLocked(grant.id, 'dashboard')
+      return { ok: true, value: null }
+    },
+
+    revoke: revokeLocked,
 
     /**
      * Extension routes (bearer): the token must be live, its grant unrevoked

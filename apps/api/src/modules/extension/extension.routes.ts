@@ -1,5 +1,6 @@
 import {
   connectionCodeSchema,
+  connectionListSchema,
   createConnectionCodeRequestSchema,
   EXTENSION_PATHS,
   extensionConnectionInfoSchema,
@@ -39,7 +40,8 @@ const ERRORS: Record<ExtensionError, DomainErrorReply> = {
 
 /**
  * Authentication per route (ADR 0015):
- * - POST codes            dashboard session cookie + CSRF guard
+ * - POST codes, GET connections, DELETE connections/:id
+ *                         dashboard session cookie + CSRF guard
  * - POST token            credential in the body only (no cookie, no bearer);
  *                         exempt from the CSRF guard because it reads no cookie
  * - POST revoke, GET session   extension access token (bearer)
@@ -96,6 +98,32 @@ export const extensionRoutes: FastifyPluginAsyncZod<ExtensionRoutesOptions> = (a
           : await extension.refresh(body)
       return result.ok
         ? reply.send(result.value)
+        : sendDomainError(request, reply, ERRORS[result.error])
+    },
+  )
+
+  app.get(
+    EXTENSION_PATHS.connections,
+    { preHandler: requireSession, schema: { response: { 200: connectionListSchema } } },
+    async (request) => ({ items: await extension.listConnections(authOf(request).user.id) }),
+  )
+
+  app.delete(
+    `${EXTENSION_PATHS.connections}/:connectionId`,
+    {
+      preHandler: requireSession,
+      schema: {
+        params: z.object({ connectionId: z.uuid() }),
+        response: { 204: z.undefined(), ...domainErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const result = await extension.revokeConnection(
+        authOf(request).user.id,
+        request.params.connectionId,
+      )
+      return result.ok
+        ? reply.code(204).send()
         : sendDomainError(request, reply, ERRORS[result.error])
     },
   )
