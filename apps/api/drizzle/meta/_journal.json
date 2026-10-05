@@ -29,6 +29,13 @@
       "when": 1791210048103,
       "tag": "0003_protect_published_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791212996687,
+      "tag": "0004_extension_connections",
+      "breakpoints": true
     }
   ]
 }

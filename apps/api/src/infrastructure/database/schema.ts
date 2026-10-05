@@ -4,5 +4,6 @@
  */
 export * from '../../modules/applications/applications.schema.js'
 export * from '../../modules/auth/auth.schema.js'
+export * from '../../modules/extension/extension.schema.js'
 export * from '../../modules/guides/guides.schema.js'
 export * from '../../modules/workspaces/workspaces.schema.js'
