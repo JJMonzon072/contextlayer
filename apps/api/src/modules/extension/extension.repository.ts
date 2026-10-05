@@ -142,6 +142,49 @@ export async function revokeGrant(
     .where(and(eq(extensionGrants.id, grantId), isNull(extensionGrants.revokedAt)))
 }
 
+export interface RefreshTokenRow {
+  id: string
+  grantId: string
+  expiresAt: Date
+  usedAt: Date | null
+}
+
+const refreshColumns = {
+  id: extensionRefreshTokens.id,
+  grantId: extensionRefreshTokens.grantId,
+  expiresAt: extensionRefreshTokens.expiresAt,
+  usedAt: extensionRefreshTokens.usedAt,
+}
+
+export async function findRefreshToken(
+  db: DbExecutor,
+  tokenHash: Buffer,
+): Promise<RefreshTokenRow | undefined> {
+  const [row] = await db
+    .select(refreshColumns)
+    .from(extensionRefreshTokens)
+    .where(eq(extensionRefreshTokens.tokenHash, tokenHash))
+  return row
+}
+
+export async function findRefreshTokenById(
+  db: DbExecutor,
+  id: string,
+): Promise<RefreshTokenRow | undefined> {
+  const [row] = await db
+    .select(refreshColumns)
+    .from(extensionRefreshTokens)
+    .where(eq(extensionRefreshTokens.id, id))
+  return row
+}
+
+export async function markRefreshTokenUsed(db: DbExecutor, id: string, now: Date): Promise<void> {
+  await db
+    .update(extensionRefreshTokens)
+    .set({ usedAt: now })
+    .where(eq(extensionRefreshTokens.id, id))
+}
+
 export async function insertAccessToken(
   db: DbExecutor,
   values: { grantId: string; tokenHash: Buffer; createdAt: Date; expiresAt: Date },

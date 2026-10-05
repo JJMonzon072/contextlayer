@@ -8,6 +8,7 @@ import {
 } from '@contextlayer/shared'
 import type { FastifyRequest, preHandlerAsyncHookHandler } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
+import { z } from 'zod'
 
 import type { AppConfig } from '../../config/env.js'
 import {
@@ -41,7 +42,7 @@ const ERRORS: Record<ExtensionError, DomainErrorReply> = {
  * - POST codes            dashboard session cookie + CSRF guard
  * - POST token            credential in the body only (no cookie, no bearer);
  *                         exempt from the CSRF guard because it reads no cookie
- * - GET session           extension access token (bearer)
+ * - POST revoke, GET session   extension access token (bearer)
  */
 export const extensionRoutes: FastifyPluginAsyncZod<ExtensionRoutesOptions> = (app, options) => {
   const { extension, rateLimits, requireSession, requireExtensionAccess } = options
@@ -92,10 +93,23 @@ export const extensionRoutes: FastifyPluginAsyncZod<ExtensionRoutesOptions> = (a
       const result =
         body.grantType === 'authorization_code'
           ? await extension.exchangeCode(body)
-          : ({ ok: false, error: 'invalid-grant' } as const)
+          : await extension.refresh(body)
       return result.ok
         ? reply.send(result.value)
         : sendDomainError(request, reply, ERRORS[result.error])
+    },
+  )
+
+  /** The extension disconnecting itself. Bearer requests skip the CSRF guard. */
+  app.post(
+    EXTENSION_PATHS.revoke,
+    {
+      preHandler: requireExtensionAccess,
+      schema: { response: { 204: z.undefined(), ...domainErrorResponses } },
+    },
+    async (request, reply) => {
+      await extension.revoke(extensionAuthOf(request).grantId, 'disconnected')
+      return reply.code(204).send()
     },
   )
 

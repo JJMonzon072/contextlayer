@@ -5,6 +5,7 @@ import {
   type ExtensionConnectionInfo,
   type ExtensionTokenRequest,
   type ExtensionTokenResponse,
+  type GrantRevocationReason,
   type WorkspaceRole,
 } from '@contextlayer/shared'
 
@@ -17,10 +18,14 @@ import {
   findConsumedCodeGrant,
   findGrant,
   findGrantByAccessToken,
+  findRefreshToken,
+  findRefreshTokenById,
   insertAccessToken,
   insertCode,
   insertGrant,
   insertRefreshToken,
+  lockGrant,
+  markRefreshTokenUsed,
   revokeGrant,
   touchGrant,
   type GrantRow,
@@ -188,6 +193,51 @@ export function createExtensionService(deps: {
         return { grant, tokens: await issueTokens(tx, grant, null, at) }
       })
       return outcome ? tokenResponse(outcome.grant, outcome.tokens) : fail('invalid-grant')
+    },
+
+    /**
+     * Token endpoint, refresh_token: strict rotation with reuse detection and
+     * no grace window (ADR 0015). Every refresh and revocation of a grant takes
+     * its row lock, so they run one at a time: two refreshes with one token
+     * leave one rotation and a revoked grant, never two live chains, and a
+     * late refresh cannot undo a revocation. The new refresh token keeps the
+     * grant's expiry: rotating never extends the 30-day limit.
+     */
+    async refresh(
+      input: Extract<ExtensionTokenRequest, { grantType: 'refresh_token' }>,
+    ): Promise<Result<ExtensionTokenResponse>> {
+      const at = now()
+      const outcome = await db.transaction(async (tx) => {
+        const presented = await findRefreshToken(tx, hashCredential(input.refreshToken))
+        if (!presented) return undefined
+        const grant = await lockGrant(tx, presented.grantId)
+        if (grant?.revokedAt !== null || grant.expiresAt <= at) return undefined
+        // Read again under the lock: a concurrent refresh may have just used it.
+        const token = await findRefreshTokenById(tx, presented.id)
+        if (!token) return undefined
+        if (token.usedAt !== null) {
+          // Reuse: someone else holds a token from this chain. The revocation is
+          // committed: this callback returns normally instead of throwing.
+          await revokeGrant(tx, grant.id, 'refresh-reuse', at)
+          return undefined
+        }
+        if (token.expiresAt <= at) return undefined
+        if ((await directories.roleOf(grant.workspaceId, grant.userId)) === undefined) {
+          return undefined
+        }
+        await markRefreshTokenUsed(tx, token.id, at)
+        await touchGrant(tx, grant.id, at)
+        return { grant, tokens: await issueTokens(tx, grant, token.id, at) }
+      })
+      return outcome ? tokenResponse(outcome.grant, outcome.tokens) : fail('invalid-grant')
+    },
+
+    /** Revokes a grant under its lock, so no refresh can complete after it. */
+    async revoke(grantId: string, reason: GrantRevocationReason): Promise<void> {
+      const at = now()
+      await db.transaction(async (tx) => {
+        if (await lockGrant(tx, grantId)) await revokeGrant(tx, grantId, reason, at)
+      })
     },
 
     /**
