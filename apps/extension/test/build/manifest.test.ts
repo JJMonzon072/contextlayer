@@ -41,8 +41,11 @@ describe('createManifest', () => {
     expect(defaultPortManifest.host_permissions).toEqual(['https://api.contextlayer.example:443/*'])
   })
 
-  it('asks for storage, scripting and activeTab, and customer sites only at runtime', () => {
-    expect(manifest.permissions).toEqual(['storage', 'scripting', 'activeTab'])
+  it('asks for storage, scripting, activeTab and sidePanel, and customer sites only at runtime', () => {
+    expect(manifest.permissions).toEqual(['storage', 'scripting', 'activeTab', 'sidePanel'])
+    // The panel is enabled per tab from the popup, never declared for every page.
+    expect(manifest).not.toHaveProperty('side_panel')
+    expect(manifest).not.toHaveProperty('web_accessible_resources')
     expect(manifest.optional_host_permissions).toEqual(['https://*/*', 'http://*/*'])
   })
 

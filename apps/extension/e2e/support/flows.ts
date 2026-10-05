@@ -219,3 +219,33 @@ export async function evaluateInContentScript(page: Page, expression: string): P
     await session.detach()
   }
 }
+
+/** Edit Mode side panels currently open (reached through a fresh CDP connection). */
+export async function sidePanels(extensionBrowser: ExtensionBrowser): Promise<Page[]> {
+  const browser = await extensionBrowser.cdp()
+  return browser
+    .contexts()
+    .flatMap((context) => context.pages())
+    .filter((candidate) => new URL(candidate.url()).pathname === '/sidepanel.html')
+}
+
+/**
+ * Opens Edit Mode the way an author does: the real toolbar popup over `page`,
+ * then a real click on "Edit Mode", whose user gesture `sidePanel.open()`
+ * needs. Returns the side panel's page.
+ */
+export async function openEditMode(extensionBrowser: ExtensionBrowser, page: Page): Promise<Page> {
+  const popup = await openActionPopup(extensionBrowser, page)
+  await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'active')
+  await popup.getByTestId('edit-mode').click()
+  let panel: Page | undefined
+  await expect
+    .poll(async () => {
+      ;[panel] = await sidePanels(extensionBrowser)
+      return panel !== undefined
+    })
+    .toBe(true)
+  if (!panel) throw new Error('side panel not found')
+  await panel.waitForLoadState()
+  return panel
+}

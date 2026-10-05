@@ -17,6 +17,8 @@ import {
  *   and injected into tabs that were already open (ADR 0017).
  * - `activeTab`: the popup can read the address of the tab it was opened on
  *   without a permission for every site.
+ * - `sidePanel`: Edit Mode's panel (ADR 0018). No `side_panel` key: the panel
+ *   is only enabled, per tab, when the author opens Edit Mode from the popup.
  * - `host_permissions` only covers the ContextLayer API origin, so the service
  *   worker can call it without CORS. There are no static content scripts: their
  *   match patterns would grant host access too.
@@ -63,7 +65,7 @@ export function createManifest({
       default_icon: { 16: 'icons/icon-16.png', 32: 'icons/icon-32.png' },
     },
     background: { service_worker: 'background.js', type: 'module' },
-    permissions: ['storage', 'scripting', 'activeTab'],
+    permissions: ['storage', 'scripting', 'activeTab', 'sidePanel'],
     // A pattern without a port matches every port, so the port is always
     // explicit, including the scheme default that `URL.origin` would omit.
     host_permissions: [originPattern(apiBaseUrl), ...preGrantedSites.map(originPattern)],
