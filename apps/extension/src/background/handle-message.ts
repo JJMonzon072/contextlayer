@@ -5,22 +5,27 @@ import {
   failure,
   success,
   type BackgroundRequest,
+  type ConnectionStatusData,
   type MessageResult,
 } from '../messaging/protocol'
 
 /**
  * Where a runtime message comes from. Content scripts live inside arbitrary web
  * pages (a compromised renderer can forge their messages), so they are trusted
- * less than extension pages such as the popup or the future side panel.
+ * less than extension pages such as the popup.
  */
 export type SenderContext = 'extension-page' | 'content-script'
 
 /**
- * Which contexts may send each request. Privileged commands (sign-in, saving
- * guides, Edit Mode) will be restricted to `extension-page`.
+ * Which contexts may send each request. Connecting, disconnecting and every
+ * other privileged command are for extension pages only.
  */
 const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[]> = {
   'api.health.get': ['extension-page', 'content-script'],
+  'connection.status': ['extension-page'],
+  'connection.start': ['extension-page'],
+  'connection.cancel': ['extension-page'],
+  'connection.disconnect': ['extension-page'],
 }
 
 type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'>
@@ -36,6 +41,12 @@ export function classifySender(sender: Sender, extensionId: string): SenderConte
 export interface BackgroundDeps {
   extensionId: string
   fetchApiHealth: () => Promise<HealthReport>
+  connection: {
+    status(): Promise<ConnectionStatusData>
+    start(): Promise<void>
+    cancel(): Promise<void>
+    disconnect(): Promise<{ serverConfirmed: boolean }>
+  }
   onApiError?: (error: unknown) => void
 }
 
@@ -62,12 +73,23 @@ export async function handleBackgroundMessage(
     return failure('FORBIDDEN', 'This request is not allowed from this context.')
   }
 
-  // `api.health.get` is the only request in Phase 1. New request types extend
-  // the discriminated union and turn this into a `switch` on `request.data.type`.
-  try {
-    return success(await deps.fetchApiHealth())
-  } catch (error) {
-    deps.onApiError?.(error)
-    return failure('API_UNREACHABLE', 'The ContextLayer API could not be reached.')
+  switch (request.data.type) {
+    case 'api.health.get':
+      try {
+        return success(await deps.fetchApiHealth())
+      } catch (error) {
+        deps.onApiError?.(error)
+        return failure('API_UNREACHABLE', 'The ContextLayer API could not be reached.')
+      }
+    case 'connection.status':
+      return success(await deps.connection.status())
+    case 'connection.start':
+      await deps.connection.start()
+      return success(await deps.connection.status())
+    case 'connection.cancel':
+      await deps.connection.cancel()
+      return success(await deps.connection.status())
+    case 'connection.disconnect':
+      return success(await deps.connection.disconnect())
   }
 }

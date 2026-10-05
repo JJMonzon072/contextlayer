@@ -3,3 +3,6 @@ declare const __CONTEXTLAYER_API_BASE_URL__: string
 
 /** Extension version (apps/extension/package.json), injected at build time. */
 declare const __CONTEXTLAYER_VERSION__: string
+
+/** Origin of the dashboard, injected at build time from EXTENSION_DASHBOARD_URL. */
+declare const __CONTEXTLAYER_DASHBOARD_ORIGIN__: string

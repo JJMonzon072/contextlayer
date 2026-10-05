@@ -7,6 +7,7 @@ import { EXTENSION_VERSION } from '../config'
 import { requestApiHealth } from '../messaging/background-client'
 import type { MessageResult, PageInfo } from '../messaging/protocol'
 import { pingActiveTab } from './active-tab'
+import ConnectionCard from './ConnectionCard.vue'
 
 const health = shallowRef<MessageResult<HealthReport>>()
 const page = shallowRef<MessageResult<PageInfo>>()
@@ -42,7 +43,9 @@ const apiStatus = computed<{ tone: StatusTone; label: string }>(() => {
       <span class="ml-auto font-mono text-xs text-slate-500">v{{ EXTENSION_VERSION }}</span>
     </header>
 
-    <section aria-labelledby="api-heading" class="mt-4 rounded-xl border border-slate-200 p-3">
+    <ConnectionCard />
+
+    <section aria-labelledby="api-heading" class="mt-3 rounded-xl border border-slate-200 p-3">
       <div class="flex items-center justify-between" aria-live="polite">
         <h2 id="api-heading" class="font-medium text-slate-700">API</h2>
         <span data-testid="api-status">
@@ -55,7 +58,7 @@ const apiStatus = computed<{ tone: StatusTone; label: string }>(() => {
       <h2 id="page-heading" class="font-medium text-slate-700">This page</h2>
       <button
         type="button"
-        class="mt-2 w-full rounded-lg bg-brand-600 px-3 py-2 font-medium text-white transition-colors hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:opacity-60"
+        class="popup-button mt-2 w-full"
         :disabled="isCheckingPage"
         @click="checkPage"
       >

@@ -1,2 +1,12 @@
 @import 'tailwindcss';
 @import '@contextlayer/ui/theme.css';
+
+@layer components {
+  .popup-button {
+    @apply rounded-lg bg-brand-600 px-3 py-2 font-medium text-white transition-colors hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:opacity-60;
+  }
+
+  .popup-button-secondary {
+    @apply rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-800 transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:opacity-60;
+  }
+}

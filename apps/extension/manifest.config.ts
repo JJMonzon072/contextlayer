@@ -10,7 +10,8 @@ import {
  * Typed source of `dist/manifest.json`. Evaluated at build time by vite.config.ts.
  *
  * Permission policy (see docs/adr/0007-chrome-manifest-v3-extension.md):
- * - No `permissions` yet: Phase 1 needs none of the privileged APIs.
+ * - `storage`: credentials live in chrome.storage (session, and local once it
+ *   is restricted to trusted contexts; see docs/adr/0015-authentication-strategy.md).
  * - `host_permissions` only covers the ContextLayer API origin, so the service
  *   worker can call it without CORS.
  * - Content-script match patterns ALSO grant host access, so they are pinned to
@@ -22,6 +23,8 @@ import {
 interface ManifestOptions {
   version: string
   apiBaseUrl: URL
+  /** The dashboard that hands over connection codes; only its exact origin may message us. */
+  dashboardUrl: URL
   identity: ExtensionIdentity
 }
 
@@ -34,6 +37,7 @@ export const CONTENT_SCRIPT_MATCHES = ['http://localhost:5173/*', 'http://localh
 export function createManifest({
   version,
   apiBaseUrl,
+  dashboardUrl,
   identity,
 }: ManifestOptions): chrome.runtime.ManifestV3 {
   return {
@@ -56,6 +60,7 @@ export function createManifest({
       default_icon: { 16: 'icons/icon-16.png', 32: 'icons/icon-32.png' },
     },
     background: { service_worker: 'background.js', type: 'module' },
+    permissions: ['storage'],
     content_scripts: [
       {
         matches: CONTENT_SCRIPT_MATCHES,
@@ -66,6 +71,9 @@ export function createManifest({
     // A pattern without a port matches every port, so the port is always
     // explicit, including the scheme default that `URL.origin` would omit.
     host_permissions: [originPattern(apiBaseUrl)],
+    // The dashboard page and nothing else may message the extension: no other
+    // site and, since "ids" is absent, no other extension (verified in the spike).
+    externally_connectable: { matches: [originPattern(dashboardUrl)] },
   }
 }
 
@@ -106,6 +114,10 @@ export function parseServiceOrigin(name: string, raw: string | undefined, fallba
 
 export function parseApiBaseUrl(raw: string | undefined): URL {
   return parseServiceOrigin('EXTENSION_API_BASE_URL', raw, 'http://localhost:3000')
+}
+
+export function parseDashboardUrl(raw: string | undefined): URL {
+  return parseServiceOrigin('EXTENSION_DASHBOARD_URL', raw, 'http://localhost:5173')
 }
 
 export interface ExtensionIdentity {

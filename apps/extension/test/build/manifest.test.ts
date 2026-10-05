@@ -7,6 +7,7 @@ import {
   createManifest,
   originPattern,
   parseApiBaseUrl,
+  parseDashboardUrl,
   parseServiceOrigin,
   resolveExtensionIdentity,
 } from '../../manifest.config'
@@ -17,11 +18,13 @@ describe('createManifest', () => {
   const manifest = createManifest({
     version: '0.1.0',
     apiBaseUrl: new URL('https://api.contextlayer.example:8443'),
+    dashboardUrl: new URL('https://app.contextlayer.example'),
     identity,
   })
   const defaultPortManifest = createManifest({
     version: '0.1.0',
     apiBaseUrl: new URL('https://api.contextlayer.example'),
+    dashboardUrl: new URL('https://app.contextlayer.example'),
     identity,
   })
 
@@ -37,7 +40,16 @@ describe('createManifest', () => {
   it('only grants host access to the exact API origin, port included', () => {
     expect(manifest.host_permissions).toEqual(['https://api.contextlayer.example:8443/*'])
     expect(defaultPortManifest.host_permissions).toEqual(['https://api.contextlayer.example:443/*'])
-    expect(manifest.permissions).toBeUndefined()
+  })
+
+  it('only asks for storage among the privileged APIs', () => {
+    expect(manifest.permissions).toEqual(['storage'])
+  })
+
+  it('lets only the exact dashboard origin message the extension, no other extension', () => {
+    expect(manifest.externally_connectable).toEqual({
+      matches: ['https://app.contextlayer.example:443/*'],
+    })
   })
 
   it('restricts the Phase 1 content script to the local dashboard, ports pinned', () => {
@@ -79,6 +91,17 @@ describe('parseApiBaseUrl', () => {
     ]) {
       expect(() => parseApiBaseUrl(value)).toThrow(/EXTENSION_API_BASE_URL/)
     }
+  })
+})
+
+describe('parseDashboardUrl', () => {
+  it('defaults to the local dashboard and requires https elsewhere', () => {
+    expect(parseDashboardUrl(undefined).origin).toBe('http://localhost:5173')
+    expect(parseDashboardUrl('https://app.example.com').origin).toBe('https://app.example.com')
+    expect(() => parseDashboardUrl('http://app.example.com')).toThrow(/EXTENSION_DASHBOARD_URL/)
+    expect(() => parseDashboardUrl('https://app.example.com/connect')).toThrow(
+      /EXTENSION_DASHBOARD_URL/,
+    )
   })
 })
 

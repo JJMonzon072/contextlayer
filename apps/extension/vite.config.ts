@@ -8,6 +8,7 @@ import { defaultClientConditions, loadEnv, type InlineConfig, type Plugin } from
 import {
   createManifest,
   parseApiBaseUrl,
+  parseDashboardUrl,
   resolveExtensionIdentity,
   type ExtensionIdentity,
 } from './manifest.config'
@@ -32,6 +33,7 @@ interface BuildOptions {
 
 interface ExtensionEnv {
   apiBaseUrl: URL
+  dashboardUrl: URL
   identity: ExtensionIdentity
   version: string
 }
@@ -46,6 +48,7 @@ function readExtensionEnv(mode: string): ExtensionEnv {
 
   return {
     apiBaseUrl,
+    dashboardUrl: parseDashboardUrl(env.EXTENSION_DASHBOARD_URL),
     identity: resolveExtensionIdentity(env),
     version: packageJson.version,
   }
@@ -61,6 +64,7 @@ function baseConfig({ mode, watch }: BuildOptions, env: ExtensionEnv): InlineCon
     resolve: { conditions: ['@contextlayer/source', ...defaultClientConditions] },
     define: {
       __CONTEXTLAYER_API_BASE_URL__: JSON.stringify(env.apiBaseUrl.origin),
+      __CONTEXTLAYER_DASHBOARD_ORIGIN__: JSON.stringify(env.dashboardUrl.origin),
       __CONTEXTLAYER_VERSION__: JSON.stringify(env.version),
     },
     build: {
@@ -81,6 +85,7 @@ function manifestPlugin(env: ExtensionEnv): Plugin {
       const manifest = createManifest({
         version: env.version,
         apiBaseUrl: env.apiBaseUrl,
+        dashboardUrl: env.dashboardUrl,
         identity: env.identity,
       })
       this.emitFile({

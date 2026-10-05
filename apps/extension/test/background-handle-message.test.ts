@@ -20,9 +20,34 @@ const contentScriptSender = {
   tab: { id: 7 } as chrome.tabs.Tab,
 }
 
+const status = {
+  state: 'disconnected',
+  connection: null,
+  attemptPending: false,
+  persistent: true,
+  api: 'ok',
+} as const
+
 function deps(fetchApiHealth = vi.fn(() => Promise.resolve(report))) {
-  return { extensionId: EXTENSION_ID, fetchApiHealth, onApiError: vi.fn() }
+  return {
+    extensionId: EXTENSION_ID,
+    fetchApiHealth,
+    onApiError: vi.fn(),
+    connection: {
+      status: vi.fn(() => Promise.resolve(status)),
+      start: vi.fn(() => Promise.resolve()),
+      cancel: vi.fn(() => Promise.resolve()),
+      disconnect: vi.fn(() => Promise.resolve({ serverConfirmed: true })),
+    },
+  }
 }
+
+const PRIVILEGED = [
+  'connection.status',
+  'connection.start',
+  'connection.cancel',
+  'connection.disconnect',
+] as const
 
 describe('classifySender', () => {
   it('recognises extension pages by their own origin, even when opened in a tab', () => {
@@ -78,6 +103,41 @@ describe('handleBackgroundMessage', () => {
 
   it('rejects unknown or malformed messages', async () => {
     const result = await handleBackgroundMessage({ type: 'guides.delete' }, popupSender, deps())
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('runs connection commands for extension pages', async () => {
+    const handlers = deps()
+
+    expect(
+      await handleBackgroundMessage({ type: 'connection.start' }, popupSender, handlers),
+    ).toEqual({ ok: true, data: status })
+    expect(
+      await handleBackgroundMessage({ type: 'connection.disconnect' }, popupSender, handlers),
+    ).toEqual({ ok: true, data: { serverConfirmed: true } })
+    expect(handlers.connection.start).toHaveBeenCalledOnce()
+    expect(handlers.connection.disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('never runs privileged commands for content scripts', async () => {
+    const handlers = deps()
+
+    for (const type of PRIVILEGED) {
+      const result = await handleBackgroundMessage({ type }, contentScriptSender, handlers)
+      expect(result).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
+    }
+    for (const command of Object.values(handlers.connection)) {
+      expect(command).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rejects extra fields instead of ignoring them', async () => {
+    const result = await handleBackgroundMessage(
+      { type: 'connection.start', url: 'https://evil.example/' },
+      popupSender,
+      deps(),
+    )
 
     expect(result).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
   })
