@@ -96,7 +96,7 @@ Then:
 
 ### Connect it to a workspace and turn on a site
 
-1. In the popup, click **Connect to ContextLayer**. A dashboard tab opens: sign in if asked, choose a workspace, review what the extension will be able to read, and click **Connect**. The popup then shows your name and the workspace. **Connected browsers** in the dashboard lists the connection and can revoke it; **Switch workspace** in the popup runs the same flow again and revokes the previous connection.
+1. In the popup, click **Connect to ContextLayer**. A dashboard tab opens: sign in if asked, choose a workspace, review what the extension will be able to read, and click **Connect**. The popup then shows your name, the workspace and its applications. **Connected browsers** in the dashboard lists the connection and can revoke it; **Switch workspace** in the popup runs the same flow again and revokes the previous connection.
 2. Register the web application you want guides on (dashboard → **Applications**, with its exact origin, for example `http://localhost:8080`) and publish a guide for it.
 3. Open that application, open the popup and click **Turn on for this site**. Chrome asks to allow access to that one site; after **Allow**, the popup lists the site's published guides (playing them arrives in Phase 6). **Turn off for this site** stops ContextLayer there and gives the access back.
 
