@@ -341,15 +341,10 @@ function backToApplication() {
             >Unsaved changes</span
           >
           <template v-if="!readOnly">
-            <AppButton
-              :variant="dirty ? 'primary' : 'secondary'"
-              :disabled="!dirty"
-              :loading="saving"
-              @click="save"
+            <AppButton variant="secondary" :disabled="!dirty" :loading="saving" @click="save"
               >Save draft</AppButton
             >
             <AppButton
-              :variant="dirty ? 'secondary' : 'primary'"
               :disabled="!canPublish"
               :loading="publishing"
               data-testid="publish"
