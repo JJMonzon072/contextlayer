@@ -500,21 +500,18 @@ test('switching tabs keeps Edit Mode bound to the tab it was opened on', async (
   const panel = await openEditMode(extensionBrowser, page)
   await createGuide(panel, 'Two tabs')
   const step = await addStep(panel, 'Start a new customer')
+  await expect(panel.getByTestId('save-state')).toContainText('kept in this browser session')
+  await step.getByRole('button', { name: 'Select element for step 1' }).click()
+  await expect.poll(async () => (await overlayParts(page)).parts.banner?.display).toBe('block')
 
   const other = await context.newPage()
   await other.goto(DEMO)
   await other.bringToFront()
-  await step.getByRole('button', { name: 'Select element for step 1' }).click()
-  await expect(step.getByTestId('target-capturing')).toBeVisible()
 
-  // The selection runs in the bound tab only.
-  await expect.poll(async () => (await overlayParts(page)).parts.banner?.display).toBe('block')
+  // Nothing happens in the other tab, and the panel is not enabled there.
   expect((await overlayParts(other)).hosts).toBe(0)
   await other.getByTestId('new-customer').click()
   await expect(other.getByTestId('page-clicks')).toHaveText('1')
-  await expect(step.getByTestId('target-capturing')).toBeVisible()
-
-  // The panel is enabled for its own tab only.
   const worker = await extensionWorker(context)
   const enabled = await worker.evaluate(
     async ({ first, second }) => {
@@ -529,7 +526,21 @@ test('switching tabs keeps Edit Mode bound to the tab it was opened on', async (
   expect(enabled).toEqual([true, false])
 
   await page.bringToFront()
-  await page.getByTestId('new-customer').click()
-  await expect(step.getByRole('button', { name: 'Use this element' })).toBeVisible()
+  if (!panel.isClosed()) {
+    // macOS (measured): the panel's document survives, the selection goes on in its tab.
+    await page.getByTestId('new-customer').click()
+    await expect(step.getByRole('button', { name: 'Use this element' })).toBeVisible()
+    await expectPageUntouched(page)
+    return
+  }
+  // Linux CI (measured): Chrome closed the hidden panel's page. Its session ended with
+  // it, nothing is left on the page, and the unsaved step is offered back.
+  await expect.poll(async () => (await overlayParts(page)).hosts).toBe(0)
+  for (const stale of await sidePanels(extensionBrowser)) await stale.close()
+  const again = await openEditMode(extensionBrowser, page)
+  await again.getByRole('button', { name: /Two tabs/ }).click()
+  await expect(again.getByTestId('recovery')).toBeVisible()
+  await again.getByRole('button', { name: 'Restore them' }).click()
+  await expect(again.getByTestId('step').getByLabel('Title')).toHaveValue('Start a new customer')
   await expectPageUntouched(page)
 })

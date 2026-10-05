@@ -118,7 +118,7 @@ What to expect:
 - Text is typed in the side panel only, never in the page. The panel lists every value a target stores; personal data in visible text is redacted heuristically (emails, long numbers), not guaranteed: review it before saving.
 - Unsaved changes are kept in the browser session until you save, and offered back when you reopen the guide; they are lost when the browser closes or the extension is updated or reloaded (Chrome clears `storage.session` then). A guide changed elsewhere is never overwritten: Edit Mode explains the conflict and offers to load the latest version.
 - A preview needs the element selected on the current page; steps loaded from the server are not looked up on the page until the player exists (Phase 6).
-- Reloading the page pauses selection until you click **Continue on this page**. After changing extension code, click the reload icon on the extension card (Developer mode must stay on, or Chrome disables an unpacked extension on reload); enabled sites are re-injected into open tabs automatically.
+- Reloading the page pauses selection until you click **Continue on this page**. On some platforms Chrome closes the panel when you switch to another tab; open Edit Mode again and restore the changes it kept. After changing extension code, click the reload icon on the extension card (Developer mode must stay on, or Chrome disables an unpacked extension on reload); enabled sites are re-injected into open tabs automatically.
 
 ## Scripts
 
