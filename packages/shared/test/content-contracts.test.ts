@@ -7,6 +7,7 @@ import {
   guideListQuerySchema,
   guideSnapshotSchema,
   originListSchema,
+  originMatchPattern,
   parseOrigin,
   replaceStepsRequestSchema,
   richTextSchema,
@@ -60,6 +61,18 @@ describe('parseOrigin', () => {
     const result = parseOrigin(input)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatch(message)
+  })
+})
+
+describe('originMatchPattern', () => {
+  it('pins the port, including scheme defaults, so other ports never match', () => {
+    expect(originMatchPattern('https://crm.acme.test')).toBe('https://crm.acme.test:443/*')
+    expect(originMatchPattern('http://localhost:4179')).toBe('http://localhost:4179/*')
+    expect(originMatchPattern('http://intranet.test')).toBe('http://intranet.test:80/*')
+    expect(originMatchPattern(new URL('https://crm.acme.test:8443/path?q=1'))).toBe(
+      'https://crm.acme.test:8443/*',
+    )
+    expect(() => originMatchPattern('crm.acme.test')).toThrow(TypeError)
   })
 })
 

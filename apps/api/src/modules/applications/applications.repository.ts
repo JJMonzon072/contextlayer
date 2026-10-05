@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from 'drizzle-orm'
+import { and, arrayContains, desc, eq, lt } from 'drizzle-orm'
 
 import { isForeignKeyViolation, type DbExecutor } from '../../infrastructure/database/client.js'
 import { applications } from './applications.schema.js'
@@ -41,6 +41,21 @@ export function listApplications(
     )
     .orderBy(desc(applications.id))
     .limit(page.limit + 1)
+}
+
+/** Applications of the workspace that list this exact origin (GIN-indexed `@>`). */
+export async function findApplicationIdsByOrigin(
+  db: DbExecutor,
+  workspaceId: string,
+  origin: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(eq(applications.workspaceId, workspaceId), arrayContains(applications.origins, [origin])),
+    )
+  return rows.map((row) => row.id)
 }
 
 export async function findApplication(

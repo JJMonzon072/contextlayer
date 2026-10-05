@@ -58,6 +58,12 @@ export function testRouter() {
       },
       { path: '/workspaces/:workspaceId/guides/:guideId', name: 'guide', component: Empty },
       {
+        path: '/workspaces/:workspaceId/connected-browsers',
+        name: 'connected-browsers',
+        component: Empty,
+      },
+      { path: '/extension/connect', name: 'extension-connect', component: Empty },
+      {
         path: '/workspaces/:workspaceId/guides/:guideId/versions/:version',
         name: 'guide-version',
         component: Empty,

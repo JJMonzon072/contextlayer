@@ -1,6 +1,6 @@
 # API
 
-> **Status.** **Implemented (Phase 1):** `GET /health` and `GET /health/live`, the `ApiError` envelope, request ids, security headers, and zod validation and serialization. **Implemented (Phase 2):** the `auth` and `workspaces` modules under `/v1` ([section 3.2](#32-phase-2-auth-and-workspaces)), dashboard sessions, the CSRF guard and auth rate limits ([ADR 0015](adr/0015-authentication-strategy.md), Accepted for the dashboard). **Implemented (Phase 3):** the `applications` and `guides` modules ([section 3.3](#33-phase-3-applications-guides-and-publishing)), cursor pagination and immutable published versions ([ADR 0016](adr/0016-immutable-published-guide-versions.md)). Every other endpoint is **Planned** for the phase shown.
+> **Status.** **Implemented (Phase 1):** `GET /health` and `GET /health/live`, the `ApiError` envelope, request ids, security headers, and zod validation and serialization. **Implemented (Phase 2):** the `auth` and `workspaces` modules under `/v1` ([section 3.2](#32-phase-2-auth-and-workspaces)), dashboard sessions, the CSRF guard and auth rate limits ([ADR 0015](adr/0015-authentication-strategy.md)). **Implemented (Phase 3):** the `applications` and `guides` modules ([section 3.3](#33-phase-3-applications-guides-and-publishing)), cursor pagination and immutable published versions ([ADR 0016](adr/0016-immutable-published-guide-versions.md)). **Implemented (Phase 4):** the `extension` module ([section 3.4](#34-phase-4-extension-connection-and-published-guides)): connection codes, token exchange with strict refresh rotation, revocation, connected browsers and published guides by origin ([ADR 0015](adr/0015-authentication-strategy.md), now Accepted for the extension too). Every other endpoint is **Planned** for the phase shown.
 
 Related: [architecture](architecture.md), [data model](data-model.md), [ADR 0002](adr/0002-modular-monolith-backend.md), [ADR 0003](adr/0003-fastify-http-framework.md), [ADR 0010](adr/0010-runtime-validated-shared-contracts.md), [ADR 0012](adr/0012-service-worker-api-gateway.md), [deployment](deployment.md).
 
@@ -64,18 +64,19 @@ An unmapped 4xx keeps its real HTTP status and uses `BAD_REQUEST`. The 503 from 
 - `DELETE …/guides/:guideId` (archive) and `POST …/restore` are idempotent (Phase 3).
 - `PUT …/steps` is a full replacement guarded by `expectedRevision`: replaying it after a lost response gets 409, and the client reloads the draft instead of overwriting newer work.
 - `POST /v1/analytics/events`: each event carries a `clientEventId`. Duplicates are acknowledged but stored once, and the response is `{ accepted, duplicates }` (Phase 7, [data model 3.7](data-model.md#37-idempotent-event-ingestion)).
-- Refresh-token rotation has a short reuse grace window, because the service worker can stop between the server rotating a token and the extension storing the new one (Phase 4).
+- `POST /v1/extension/token` is deliberately **not** idempotent for refresh tokens (Implemented, Phase 4): a refresh token works once, and presenting it again revokes the grant, with no grace window. A refresh answer lost after the server rotated therefore ends the connection, and the user connects again ([ADR 0015](adr/0015-authentication-strategy.md)).
 - Other creates are not idempotent; the dashboard prevents double submission. No generic `Idempotency-Key` header is planned.
 
 ### 1.6 Rate limiting (Implemented, Phase 2)
 
 `@fastify/rate-limit` 11, registered with `global: false`: only routes that opt in are limited.
 
-| Route                      | Key               | Default limit (env)                       |
-| -------------------------- | ----------------- | ----------------------------------------- |
-| `POST /v1/auth/login`      | client IP + email | 10 per 15 min (`LOGIN_RATE_LIMIT_MAX`)    |
-| `POST /v1/auth/register`   | client IP         | 20 per 15 min (`REGISTER_RATE_LIMIT_MAX`) |
-| `POST /v1/extension/token` | client IP         | Planned (Phase 4)                         |
+| Route                      | Key               | Default limit (env)                               |
+| -------------------------- | ----------------- | ------------------------------------------------- |
+| `POST /v1/auth/login`      | client IP + email | 10 per 15 min (`LOGIN_RATE_LIMIT_MAX`)            |
+| `POST /v1/auth/register`   | client IP         | 20 per 15 min (`REGISTER_RATE_LIMIT_MAX`)         |
+| `POST /v1/extension/codes` | client IP         | 30 per 15 min (`EXTENSION_CODE_RATE_LIMIT_MAX`)   |
+| `POST /v1/extension/token` | client IP         | 120 per 15 min (`EXTENSION_TOKEN_RATE_LIMIT_MAX`) |
 
 - The window is `AUTH_RATE_LIMIT_WINDOW_SECONDS` (900). The login key is computed in a `preHandler`, after body validation, and the email is lower-cased, so changing its case does not reset the count.
 - Responses are `429 RATE_LIMITED` with `retry-after`. An `errorResponseBuilder` turns the plugin's rejection into an error with status 429, so the shared error handler builds the envelope like any other error.
@@ -91,26 +92,26 @@ An unmapped 4xx keeps its real HTTP status and uses `BAD_REQUEST`. The 503 from 
 
 ## 2. Clients and authentication
 
-| Client                             | Reaches the API                                                                                                                                                                                                                                                                              | Credential                                                                                     | Status                                            |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Dashboard                          | same origin `/api/*`; the prefix is stripped by the Vite dev (5173) and preview (4173) proxy, and by a reverse proxy in production. No CORS.                                                                                                                                                 | opaque session cookie: HttpOnly, Secure, SameSite=Strict, `__Host-` in production. CSRF guard. | Implemented (Phase 2)                             |
-| Extension service worker           | `EXTENSION_API_BASE_URL` directly. `host_permissions` pins that exact origin, port included, so no CORS while the grant is active. If the user withholds site access, the bypass disappears (R-12); CORS for the pinned `chrome-extension://<id>` origin is the Proposed fallback (Phase 4). | `Authorization: Bearer <opaque token>`, `credentials: 'omit'`                                  | health call Implemented; tokens Planned (Phase 4) |
-| Content scripts, popup, side panel | never; they message the service worker ([ADR 0012](adr/0012-service-worker-api-gateway.md))                                                                                                                                                                                                  | none                                                                                           | Implemented rule                                  |
-| Probes                             | `/health`, `/health/live`                                                                                                                                                                                                                                                                    | none                                                                                           | Implemented                                       |
+| Client                             | Reaches the API                                                                                                                                                                                                                                                                                      | Credential                                                                                     | Status                |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------- |
+| Dashboard                          | same origin `/api/*`; the prefix is stripped by the Vite dev (5173) and preview (4173) proxy, and by a reverse proxy in production. No CORS.                                                                                                                                                         | opaque session cookie: HttpOnly, Secure, SameSite=Strict, `__Host-` in production. CSRF guard. | Implemented (Phase 2) |
+| Extension service worker           | `EXTENSION_API_BASE_URL` directly. `host_permissions` pins that exact origin, port included, so no CORS while the grant is active. If the user withholds site access, requests fail; the worker detects it and the popup explains it (Phase 4). CORS for the pinned extension origin stays Proposed. | `Authorization: Bearer <opaque token>`, `credentials: 'omit'`, `redirect: 'error'`             | Implemented (Phase 4) |
+| Content scripts, popup, side panel | never; they message the service worker ([ADR 0012](adr/0012-service-worker-api-gateway.md))                                                                                                                                                                                                          | none                                                                                           | Implemented rule      |
+| Probes                             | `/health`, `/health/live`                                                                                                                                                                                                                                                                            | none                                                                                           | Implemented           |
 
-Rules ([ADR 0015](adr/0015-authentication-strategy.md); Implemented for the dashboard in Phase 2, bearer tokens Planned for Phase 4):
+Rules ([ADR 0015](adr/0015-authentication-strategy.md); Implemented for the dashboard in Phase 2 and for the extension in Phase 4):
 
-- A bearer request is authenticated by its token alone, and cookies are ignored. Until Phase 4 there are no bearer tokens, so a request with `Authorization: Bearer` gets 401 even if it also carries a valid cookie. The extension also omits cookies, because cookies are [not isolated by port](https://www.rfc-editor.org/rfc/rfc6265#section-8.5): in development, a cookie set through `localhost:5173` also reaches `localhost:3000`.
-- Chrome reportedly sends service-worker requests with no `Origin` header and with `Sec-Fetch-Site: none` (medium confidence). The API cannot recognize the extension by origin, so the extension has its own tokens.
-- A bearer token is bound to one workspace through its grant. Any other `:workspaceId` returns 404.
+- Every route accepts exactly one kind of credential. Cookie routes refuse any `Authorization` header with 401, even with a valid cookie; bearer routes never read cookies, and an invalid or missing token never falls back to one. The extension also omits cookies, because cookies are [not isolated by port](https://www.rfc-editor.org/rfc/rfc6265#section-8.5): in development, a cookie set through `localhost:5173` also reaches `localhost:3000`.
+- Measured in Chromium 153 (Phase 4 spike): service-worker POSTs carry `Origin: chrome-extension://<id>` and `Sec-Fetch-Site: none`, GETs no `Origin`. The API cannot recognize the extension by origin, so the extension has its own tokens.
+- A bearer token is bound to one workspace through its grant: extension routes take the workspace from the grant, never from the request.
 - No credential → 401. Not a member → 404, identical to a workspace that does not exist (same code and message). A member with an insufficient role → 403. An integration test runs this matrix for every workspace route.
 
-CSRF guard for unsafe methods (Implemented, Phase 2: `apps/api/src/http/csrf-guard.ts`, an `onRequest` hook, so it runs before body parsing and before any route work). Web pages send `Origin` on every non-GET/HEAD request (as `null` from opaque origins, which the guard rejects). Extension service-worker fetches are the reported exception (see above), and they carry a bearer token, so they skip the guard.
+CSRF guard for unsafe methods (Implemented, Phase 2: `apps/api/src/http/csrf-guard.ts`, an `onRequest` hook, so it runs before body parsing and before any route work). Web pages send `Origin` on every non-GET/HEAD request (as `null` from opaque origins, which the guard rejects). Bearer requests skip the guard; a made-up bearer gains nothing on a cookie route, which refuses any `Authorization` header. `POST /v1/extension/token` is exempt by route configuration (`config.csrf: false`) because it reads no cookie and authenticates with the credential in its body.
 
 | Request                                                | Result                                  |
 | ------------------------------------------------------ | --------------------------------------- |
 | `GET`, `HEAD`, `OPTIONS`                               | pass                                    |
-| `Authorization: Bearer …`                              | guard skipped; cookies ignored          |
+| `Authorization: Bearer …`                              | guard skipped; cookie routes answer 401 |
 | `Origin` in the `DASHBOARD_ORIGIN` allow-list          | pass                                    |
 | `Origin` present but not allowed                       | 403 `FORBIDDEN`                         |
 | no `Origin`, `Sec-Fetch-Site: same-origin`             | pass                                    |
@@ -119,21 +120,7 @@ CSRF guard for unsafe methods (Implemented, Phase 2: `apps/api/src/http/csrf-gua
 
 In development the allow-list holds `http://localhost:5173` and `http://localhost:4173` (preview); in production `DASHBOARD_ORIGIN` is required. The guard never compares `Origin` with `Host`, because the Vite proxy's `changeOrigin` rewrites `Host` to the API while `Origin` stays the dashboard's (in Vite 8.3.2, http-proxy-3 only sets `Host`; Vite rewrites `Origin` only for WebSocket upgrades with `rewriteWsOrigin`). The Playwright suite exercises this through the real preview proxy: every dashboard write passes the guard.
 
-Extension connection (Planned, Phase 4):
-
-```mermaid
-sequenceDiagram
-  participant SW as Service worker
-  participant D as Dashboard tab
-  participant API
-  SW->>D: open /extension/connect?state&code_challenge
-  D->>API: POST /v1/extension/codes (session cookie, via /api)
-  API-->>D: one-time code (60 s, single use)
-  D->>SW: sendMessage(EXTENSION_ID, {code, state}) via externally_connectable
-  SW->>SW: check sender.origin and state
-  SW->>API: POST /v1/extension/token (code + PKCE verifier)
-  API-->>SW: short-lived access token + rotating refresh token
-```
+The extension connection flow (one-time code + PKCE through `externally_connectable`) is described in [ADR 0015](adr/0015-authentication-strategy.md); its endpoints are in [section 3.4](#34-phase-4-extension-connection-and-published-guides).
 
 ## 3. Implemented endpoints
 
@@ -228,7 +215,7 @@ Contracts: `packages/shared/src/{applications,guides,origins,rich-text,target-de
 | `DELETE /guides/:guideId`                |                                                                 | 204, guide archived                         | 403 role, 404                                      |
 | `POST /guides/:guideId/restore`          |                                                                 | 200 `Guide`                                 | 403 role, 404                                      |
 
-- **Roles.** Any member reads applications. `admin` and `owner` create, change and delete them. Guides are authoring data: every guide route needs `editor` or above, and `member` gets 403. Learners will receive published versions through the extension (Phase 4). A non-member gets the same 404 as a workspace that does not exist; an id from another workspace inside your own workspace's URL gets the same 404 as a random id. Both are verified by a matrix test over every route.
+- **Roles.** Any member reads applications. `admin` and `owner` create, change and delete them. Guides are authoring data: every guide route needs `editor` or above, and `member` gets 403. Learners receive published versions through the extension ([section 3.4](#34-phase-4-extension-connection-and-published-guides)). A non-member gets the same 404 as a workspace that does not exist; an id from another workspace inside your own workspace's URL gets the same 404 as a random id. Both are verified by a matrix test over every route.
 - **Origins.** Exactly scheme, host and optional port; `http` or `https`; up to 20, no duplicates. They are stored the way browsers serialize `location.origin`: lower case, default port and trailing slash removed, punycode host. Paths, query strings, fragments, credentials, wildcards and other schemes get 400. A database CHECK repeats the essentials.
 - **Shapes.**
   - `GuideSummary` has `revision`, `stepCount`, `latestVersion` (or `null`), `hasUnpublishedChanges` and `archivedAt`.
@@ -243,6 +230,28 @@ Contracts: `packages/shared/src/{applications,guides,origins,rich-text,target-de
 - **Publishing.** Freezes the draft into the next version under the guide's row lock. Versions cannot be changed or deleted through the API, and the database rejects deleting them and any update other than clearing the publisher (`published_by = NULL`, used when an account is deleted) ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
 - **Content.** `body` is the restricted rich-text v1 document: at most 20 blocks, 2000 characters and 200 text runs; links only `https:`. Unknown versions and unknown keys get 400, for bodies and descriptors alike.
 
+### 3.4 Phase 4: extension connection and published guides
+
+Contracts: `packages/shared/src/extension.ts`. Code: `apps/api/src/modules/extension/`. Paths are under `/v1/extension`.
+
+| Endpoint                  | Auth                   | Request                                                                                                               | Success                                                               | Errors (besides 401)                             |
+| ------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------ |
+| `POST /codes`             | session + CSRF guard   | `{ workspaceId, codeChallenge, codeChallengeMethod: "S256", label? }`                                                 | 201 `{ code, expiresAt }` (60 s, single use)                          | 400, 403 CSRF, 404 workspace (not a member), 429 |
+| `POST /token`             | credential in the body | `{ grantType: "authorization_code", code, codeVerifier, clientId }` or `{ grantType: "refresh_token", refreshToken }` | 200 `{ accessToken, accessTokenExpiresAt, refreshToken, connection }` | 400 invalid, expired or used code/token, 429     |
+| `POST /revoke`            | bearer                 | optional `{ reason: "disconnected" \| "replaced" }`                                                                   | 204                                                                   | 400 reason                                       |
+| `GET /session`            | bearer                 |                                                                                                                       | 200 `connection` (user, workspace, label, dates)                      | 404                                              |
+| `GET /connections`        | session                |                                                                                                                       | 200 `{ items: Connection[] }` (the caller's, every workspace)         |                                                  |
+| `DELETE /connections/:id` | session + CSRF guard   |                                                                                                                       | 204                                                                   | 403 CSRF, 404 (not yours, or unknown)            |
+| `GET /applications`       | bearer                 |                                                                                                                       | 200 `{ items: [{ id, name, origins }] }` (at most 100)                |                                                  |
+| `GET /guides`             | bearer                 | `?origin&limit&cursor`                                                                                                | 200 `{ items: PublishedGuideSummary[], nextCursor }`                  | 400 origin or cursor                             |
+| `GET /guides/:guideId`    | bearer                 |                                                                                                                       | 200 `{ guideId, applicationId, version, publishedAt, snapshot }`      | 404                                              |
+
+- **Bearer failures.** 401 with `WWW-Authenticate: Bearer realm="contextlayer-extension"`, plus `error="invalid_token"` when a token was sent (unknown, expired, revoked, or the user left the workspace).
+- **Codes.** Bound to the user, the workspace, the S256 challenge and, at exchange, the `clientId` (the extension id; `EXTENSION_ID` is required in production). A wrong verifier, an expired code or another client id gets 400. Presenting a consumed code again also revokes the grant it created (`code-replay`).
+- **Rotation.** Each refresh returns a new refresh token; a used one revokes the grant (`refresh-reuse`); the grant's 30-day end is never extended. Concurrent refreshes with the same token: one wins, the grant is revoked as a reuse.
+- **Connections.** `status` is `active`, `expired` or `revoked`; `revokedReason` is `disconnected`, `dashboard`, `replaced`, `refresh-reuse` or `code-replay`. `label` is a short browser name chosen by the dashboard ("Chrome on macOS").
+- **Published guides.** By exact origin (normalized like application origins): only guides of applications of the grant's workspace that list that origin, only the latest published version, never archived guides; title, description and step count come from the immutable snapshot, never from the draft. The detail returns the snapshot. Any member may read them. Two workspaces registering the same origin never see each other's guides.
+
 #### Unknown routes
 
 All of these return **404** with `{ "error": { "code": "NOT_FOUND", "message": "Route not found", "requestId": "…" } }`:
@@ -253,31 +262,26 @@ All of these return **404** with `{ "error": { "code": "NOT_FOUND", "message": "
 
 ## 4. Modules and planned endpoints
 
-API paths are listed as the API sees them; the dashboard adds the `/api` prefix. Roles (Implemented, Phase 2): `owner` > `admin` > `editor` > `member`, where "editor+" means `editor` or above. "Session" is the dashboard cookie and "bearer" is the extension token. The Phase 2 and 3 endpoints are in sections [3.2](#32-phase-2-auth-and-workspaces) and [3.3](#33-phase-3-applications-guides-and-publishing); from Phase 4, reads of applications and guides also accept a bearer token bound to that workspace.
+API paths are listed as the API sees them; the dashboard adds the `/api` prefix. Roles (Implemented, Phase 2): `owner` > `admin` > `editor` > `member`, where "editor+" means `editor` or above. "Session" is the dashboard cookie and "bearer" is the extension token. The Phase 2, 3 and 4 endpoints are in sections [3.2](#32-phase-2-auth-and-workspaces), [3.3](#33-phase-3-applications-guides-and-publishing) and [3.4](#34-phase-4-extension-connection-and-published-guides); workspace routes never accept a bearer token.
 
-| Module         | Owns                                      | Phase                 |
-| -------------- | ----------------------------------------- | --------------------- |
-| `health`       | none                                      | Implemented (Phase 1) |
-| `auth`         | `users`, `sessions`                       | Implemented (Phase 2) |
-| `workspaces`   | `workspaces`, `workspace_members`         | Implemented (Phase 2) |
-| `applications` | `applications`                            | Implemented (Phase 3) |
-| `guides`       | `guides`, `guide_steps`, `guide_versions` | Implemented (Phase 3) |
-| `extension`    | `extension_grants` and both token tables  | Planned (Phase 4)     |
-| `analytics`    | `guide_runs`, `guide_events`              | Planned (Phase 7)     |
+| Module         | Owns                                         | Phase                 |
+| -------------- | -------------------------------------------- | --------------------- |
+| `health`       | none                                         | Implemented (Phase 1) |
+| `auth`         | `users`, `sessions`                          | Implemented (Phase 2) |
+| `workspaces`   | `workspaces`, `workspace_members`            | Implemented (Phase 2) |
+| `applications` | `applications`                               | Implemented (Phase 3) |
+| `guides`       | `guides`, `guide_steps`, `guide_versions`    | Implemented (Phase 3) |
+| `extension`    | `extension_grants`, codes, both token tables | Implemented (Phase 4) |
+| `analytics`    | `guide_runs`, `guide_events`                 | Planned (Phase 7)     |
 
-| Endpoint                                                    | Purpose                                         | Auth                             | Phase |
-| ----------------------------------------------------------- | ----------------------------------------------- | -------------------------------- | ----- |
-| `POST /v1/extension/codes`                                  | session → one-time code                         | session, CSRF guard              | 4     |
-| `POST /v1/extension/token`                                  | code + PKCE verifier, or refresh token → tokens | credential in body; rate-limited | 4     |
-| `POST /v1/extension/revoke`                                 | revoke the calling grant                        | bearer                           | 4     |
-| `GET /v1/workspaces/:workspaceId/extension-grants`          | my connected browsers                           | session                          | 4     |
-| `GET /v1/extension/guides?url=`                             | published guides for a page, grant's workspace  | bearer                           | 4     |
-| `POST /v1/analytics/events`                                 | batched, idempotent ingestion                   | bearer                           | 7     |
-| `GET /v1/workspaces/:workspaceId/analytics/guides/:guideId` | runs, completion, per-step drop-off per version | editor+; session                 | 7     |
+| Endpoint                                                    | Purpose                                         | Auth             | Phase |
+| ----------------------------------------------------------- | ----------------------------------------------- | ---------------- | ----- |
+| `POST /v1/analytics/events`                                 | batched, idempotent ingestion                   | bearer           | 7     |
+| `GET /v1/workspaces/:workspaceId/analytics/guides/:guideId` | runs, completion, per-step drop-off per version | editor+; session | 7     |
 
 Members (learners) never read drafts: they consume published versions through `GET /v1/extension/guides`. Whether members may see aggregates is open ([product](product.md)).
 
-**Proposed refinement:** `GET /v1/extension/guides` should take `?origin=` instead of `?url=`. Query strings are logged, and full customer URLs can contain record ids. The server only needs the origin to match `applications.origins`, and the extension can then evaluate URLPatterns natively (Node 22 has no `URLPattern`).
+`GET /v1/extension/guides` takes `?origin=`, not `?url=` (Implemented, Phase 4): query strings are logged, and full customer URLs can contain record ids. The server only needs the origin to match `applications.origins`; the extension evaluates a guide's URL patterns itself (Phase 6).
 
 ## 5. Contracts
 

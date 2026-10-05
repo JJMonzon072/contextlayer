@@ -7,6 +7,7 @@ export default defineProject({
   resolve: { conditions: ['@contextlayer/source', ...defaultClientConditions] },
   define: {
     __CONTEXTLAYER_API_BASE_URL__: JSON.stringify('http://api.test'),
+    __CONTEXTLAYER_DASHBOARD_ORIGIN__: JSON.stringify('http://dashboard.test'),
     __CONTEXTLAYER_VERSION__: JSON.stringify('0.0.0-test'),
   },
   test: {

@@ -9,6 +9,8 @@ import {
   type GuideSummary,
   type GuideVersion,
   type GuideVersionSummary,
+  type PublishedGuide,
+  type PublishedGuideSummary,
   type PublishGuideResponse,
   type ReplaceStepsRequest,
   type UpdateGuideRequest,
@@ -24,8 +26,10 @@ import {
 import type { MembershipDirectory } from '../applications/applications.service.js'
 import {
   findLatestVersion,
+  findPublished,
   findVersion,
   insertVersion,
+  listPublished,
   listVersions,
   type VersionRow,
 } from './guide-versions.repository.js'
@@ -70,6 +74,7 @@ const fail = (error: GuideError): { ok: false; error: GuideError } => ({ ok: fal
 /** What this module needs from the applications module (wired in app.ts). */
 export interface ApplicationDirectory {
   exists(workspaceId: string, applicationId: string): Promise<boolean>
+  applicationIdsForOrigin(workspaceId: string, origin: string): Promise<string[]>
 }
 
 /** What this module needs from the auth module: names of the people who published. */
@@ -400,6 +405,38 @@ export function createGuidesService(deps: {
         ok: true,
         value: { ...(await toVersionSummary(row)), guideId, snapshot: row.snapshot },
       }
+    },
+
+    /**
+     * For the extension module: published guides for an exact origin in the
+     * grant's workspace, latest version only, as light summaries.
+     */
+    async listPublishedForOrigin(
+      workspaceId: string,
+      origin: string,
+      page: { limit: number; afterId: string | undefined },
+    ): Promise<{ items: PublishedGuideSummary[]; nextCursor: string | null }> {
+      const applicationIds = await applications.applicationIdsForOrigin(workspaceId, origin)
+      const rows = await listPublished(db, workspaceId, applicationIds, page)
+      return toPage(
+        rows.map((row) => ({ ...row, id: row.guideId })),
+        page.limit,
+        ({ id: _id, ...row }) => ({ ...row, publishedAt: row.publishedAt.toISOString() }),
+      )
+    },
+
+    /** For the extension module: the latest published snapshot, never the draft. */
+    async getPublished(workspaceId: string, guideId: string): Promise<PublishedGuide | undefined> {
+      const row = await findPublished(db, workspaceId, guideId)
+      return (
+        row && {
+          guideId: row.guideId,
+          applicationId: row.applicationId,
+          version: row.version,
+          publishedAt: row.publishedAt.toISOString(),
+          snapshot: row.snapshot,
+        }
+      )
     },
 
     /** Archiving hides the guide from players; versions are kept and it can be restored. */

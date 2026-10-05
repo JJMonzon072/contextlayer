@@ -5,25 +5,40 @@ import {
   failure,
   success,
   type BackgroundRequest,
+  type ApplicationListData,
+  type ConnectionStatusData,
   type MessageResult,
+  type SiteStatusData,
 } from '../messaging/protocol'
+import type { HelloResult, PageSender } from './site-access'
 
 /**
  * Where a runtime message comes from. Content scripts live inside arbitrary web
  * pages (a compromised renderer can forge their messages), so they are trusted
- * less than extension pages such as the popup or the future side panel.
+ * less than extension pages such as the popup.
  */
 export type SenderContext = 'extension-page' | 'content-script'
 
 /**
- * Which contexts may send each request. Privileged commands (sign-in, saving
- * guides, Edit Mode) will be restricted to `extension-page`.
+ * Which contexts may send each request. Every command that reads or changes
+ * the connection or site access is for extension pages only; a content script
+ * may only ask whether it may run on its own page.
  */
 const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[]> = {
-  'api.health.get': ['extension-page', 'content-script'],
+  'api.health.get': ['extension-page'],
+  'connection.status': ['extension-page'],
+  'connection.start': ['extension-page'],
+  'connection.cancel': ['extension-page'],
+  'connection.disconnect': ['extension-page'],
+  'applications.list': ['extension-page'],
+  'site.status': ['extension-page'],
+  'site.requestActivation': ['extension-page'],
+  'site.cancelActivation': ['extension-page'],
+  'site.disable': ['extension-page'],
+  'page.hello': ['content-script'],
 }
 
-type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'>
+type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'> & PageSender
 
 export function classifySender(sender: Sender, extensionId: string): SenderContext | undefined {
   if (sender.id !== extensionId) return undefined
@@ -36,6 +51,20 @@ export function classifySender(sender: Sender, extensionId: string): SenderConte
 export interface BackgroundDeps {
   extensionId: string
   fetchApiHealth: () => Promise<HealthReport>
+  connection: {
+    status(): Promise<ConnectionStatusData>
+    start(): Promise<void>
+    cancel(): Promise<void>
+    disconnect(): Promise<{ serverConfirmed: boolean }>
+  }
+  site: {
+    applications(): Promise<ApplicationListData>
+    status(tabId: number): Promise<SiteStatusData>
+    requestActivation(tabId: number): Promise<{ intentId: string | null }>
+    cancelActivation(intentId: string): Promise<{ cancelled: boolean }>
+    disable(tabId: number): Promise<SiteStatusData>
+    hello(sender: PageSender): Promise<HelloResult>
+  }
   onApiError?: (error: unknown) => void
 }
 
@@ -62,12 +91,35 @@ export async function handleBackgroundMessage(
     return failure('FORBIDDEN', 'This request is not allowed from this context.')
   }
 
-  // `api.health.get` is the only request in Phase 1. New request types extend
-  // the discriminated union and turn this into a `switch` on `request.data.type`.
-  try {
-    return success(await deps.fetchApiHealth())
-  } catch (error) {
-    deps.onApiError?.(error)
-    return failure('API_UNREACHABLE', 'The ContextLayer API could not be reached.')
+  switch (request.data.type) {
+    case 'api.health.get':
+      try {
+        return success(await deps.fetchApiHealth())
+      } catch (error) {
+        deps.onApiError?.(error)
+        return failure('API_UNREACHABLE', 'The ContextLayer API could not be reached.')
+      }
+    case 'connection.status':
+      return success(await deps.connection.status())
+    case 'connection.start':
+      await deps.connection.start()
+      return success(await deps.connection.status())
+    case 'connection.cancel':
+      await deps.connection.cancel()
+      return success(await deps.connection.status())
+    case 'connection.disconnect':
+      return success(await deps.connection.disconnect())
+    case 'applications.list':
+      return success(await deps.site.applications())
+    case 'site.status':
+      return success(await deps.site.status(request.data.tabId))
+    case 'site.requestActivation':
+      return success(await deps.site.requestActivation(request.data.tabId))
+    case 'site.cancelActivation':
+      return success(await deps.site.cancelActivation(request.data.intentId))
+    case 'site.disable':
+      return success(await deps.site.disable(request.data.tabId))
+    case 'page.hello':
+      return success(await deps.site.hello(sender))
   }
 }

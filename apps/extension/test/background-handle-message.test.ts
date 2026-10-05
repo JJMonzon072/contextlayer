@@ -20,9 +20,50 @@ const contentScriptSender = {
   tab: { id: 7 } as chrome.tabs.Tab,
 }
 
+const status = {
+  state: 'disconnected',
+  connection: null,
+  attemptPending: false,
+  persistent: true,
+  api: 'ok',
+} as const
+
 function deps(fetchApiHealth = vi.fn(() => Promise.resolve(report))) {
-  return { extensionId: EXTENSION_ID, fetchApiHealth, onApiError: vi.fn() }
+  return {
+    extensionId: EXTENSION_ID,
+    fetchApiHealth,
+    onApiError: vi.fn(),
+    connection: {
+      status: vi.fn(() => Promise.resolve(status)),
+      start: vi.fn(() => Promise.resolve()),
+      cancel: vi.fn(() => Promise.resolve()),
+      disconnect: vi.fn(() => Promise.resolve({ serverConfirmed: true })),
+    },
+    site: {
+      applications: vi.fn(() => Promise.resolve({ applications: [] })),
+      status: vi.fn(() => Promise.resolve(siteStatus)),
+      requestActivation: vi.fn(() => Promise.resolve({ intentId: 'intent-1' })),
+      cancelActivation: vi.fn(() => Promise.resolve({ cancelled: true })),
+      disable: vi.fn(() => Promise.resolve(siteStatus)),
+      hello: vi.fn(() => Promise.resolve({ active: true })),
+    },
+  }
 }
+
+const siteStatus = { state: 'unsupported' } as const
+
+const PRIVILEGED = [
+  { type: 'api.health.get' },
+  { type: 'connection.status' },
+  { type: 'connection.start' },
+  { type: 'connection.cancel' },
+  { type: 'connection.disconnect' },
+  { type: 'applications.list' },
+  { type: 'site.status', tabId: 7 },
+  { type: 'site.requestActivation', tabId: 7 },
+  { type: 'site.cancelActivation', intentId: 'intent-1' },
+  { type: 'site.disable', tabId: 7 },
+] as const
 
 describe('classifySender', () => {
   it('recognises extension pages by their own origin, even when opened in a tab', () => {
@@ -45,12 +86,10 @@ describe('classifySender', () => {
 })
 
 describe('handleBackgroundMessage', () => {
-  it('returns the API health report to the popup and to content scripts', async () => {
-    for (const sender of [popupSender, contentScriptSender]) {
-      const result = await handleBackgroundMessage({ type: 'api.health.get' }, sender, deps())
+  it('returns the API health report to the popup', async () => {
+    const result = await handleBackgroundMessage({ type: 'api.health.get' }, popupSender, deps())
 
-      expect(result).toEqual({ ok: true, data: report })
-    }
+    expect(result).toEqual({ ok: true, data: report })
   })
 
   it('maps API failures to API_UNREACHABLE and reports them', async () => {
@@ -78,6 +117,85 @@ describe('handleBackgroundMessage', () => {
 
   it('rejects unknown or malformed messages', async () => {
     const result = await handleBackgroundMessage({ type: 'guides.delete' }, popupSender, deps())
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('runs connection commands for extension pages', async () => {
+    const handlers = deps()
+
+    expect(
+      await handleBackgroundMessage({ type: 'connection.start' }, popupSender, handlers),
+    ).toEqual({ ok: true, data: status })
+    expect(
+      await handleBackgroundMessage({ type: 'connection.disconnect' }, popupSender, handlers),
+    ).toEqual({ ok: true, data: { serverConfirmed: true } })
+    expect(handlers.connection.start).toHaveBeenCalledOnce()
+    expect(handlers.connection.disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('never runs privileged commands for content scripts', async () => {
+    const handlers = deps()
+
+    for (const request of PRIVILEGED) {
+      const result = await handleBackgroundMessage(request, contentScriptSender, handlers)
+      expect(result).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
+    }
+    for (const command of [
+      handlers.fetchApiHealth,
+      ...Object.values(handlers.connection),
+      ...Object.values(handlers.site),
+    ]) {
+      expect(command).not.toHaveBeenCalled()
+    }
+  })
+
+  it('lets a content script ask about its own page only, with the sender Chrome reports', async () => {
+    const handlers = deps()
+
+    expect(
+      await handleBackgroundMessage({ type: 'page.hello' }, contentScriptSender, handlers),
+    ).toEqual({ ok: true, data: { active: true } })
+    expect(handlers.site.hello).toHaveBeenCalledWith(contentScriptSender)
+    // A forged tab id or origin in the message is not part of the contract.
+    expect(
+      await handleBackgroundMessage(
+        { type: 'page.hello', origin: 'https://other.example' },
+        contentScriptSender,
+        handlers,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+    // The popup has no page to ask about.
+    expect(
+      await handleBackgroundMessage({ type: 'page.hello' }, popupSender, handlers),
+    ).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
+  })
+
+  it('routes site commands from the popup with the tab it names', async () => {
+    const handlers = deps()
+
+    await handleBackgroundMessage(
+      { type: 'site.requestActivation', tabId: 12 },
+      popupSender,
+      handlers,
+    )
+
+    expect(handlers.site.requestActivation).toHaveBeenCalledWith(12)
+    expect(
+      await handleBackgroundMessage(
+        { type: 'site.requestActivation', tabId: -1 },
+        popupSender,
+        handlers,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('rejects extra fields instead of ignoring them', async () => {
+    const result = await handleBackgroundMessage(
+      { type: 'connection.start', url: 'https://evil.example/' },
+      popupSender,
+      deps(),
+    )
 
     expect(result).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
   })

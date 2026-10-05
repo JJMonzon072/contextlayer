@@ -93,7 +93,7 @@ Precondition: the application is registered (Phase 3); the author's extension is
 | Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1) |
 | Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2) |
 | Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3) |
-| Extension connected to a workspace; per-application site access                                | Planned (Phase 4)     |
+| Extension connected to a workspace; per-application site access                                | Implemented (Phase 4) |
 | Edit Mode: element picking, target capture, instructions, save                                 | Planned (Phase 5)     |
 | Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Planned (Phase 6)     |
 | Events (start, progress, completion, abandonment, target not found); basic dashboard analytics | Planned (Phase 7)     |

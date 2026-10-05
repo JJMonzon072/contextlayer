@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { check, index, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 
 import { workspaces } from '../workspaces/workspaces.schema.js'
 
@@ -29,6 +29,8 @@ export const applications = pgTable(
   (table) => [
     // Target of the composite FK from guides, and the index of the per-workspace list.
     unique('applications_workspace_id_id_key').on(table.workspaceId, table.id),
+    // Origin lookups for the extension: `origins @> array[$origin]`.
+    index('applications_origins_gin').using('gin', table.origins),
     check(
       'applications_origins_check',
       sql`cardinality(${table.origins}) between 1 and 20

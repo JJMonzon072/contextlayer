@@ -19,6 +19,9 @@ import { applicationRoutes } from './modules/applications/applications.routes.js
 import { createApplicationsService } from './modules/applications/applications.service.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
+import { extensionRoutes } from './modules/extension/extension.routes.js'
+import { createExtensionService } from './modules/extension/extension.service.js'
+import { createRequireExtensionAccess } from './modules/extension/require-extension-access.js'
 import { guideRoutes } from './modules/guides/guides.routes.js'
 import { createGuidesService } from './modules/guides/guides.service.js'
 import { createRequireSession } from './modules/auth/require-session.js'
@@ -65,6 +68,7 @@ export async function buildApp({
   const app = fastify.withTypeProvider<ZodTypeProvider>()
 
   app.decorateRequest('auth', null)
+  app.decorateRequest('extensionAuth', null)
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id)
   })
@@ -113,7 +117,30 @@ export async function buildApp({
     applications,
     publishers: auth,
   })
+  const extension = createExtensionService({
+    db: database.db,
+    config: config.extension,
+    now,
+    directories: {
+      roleOf: (workspaceId, userId) => workspaces.roleOf(workspaceId, userId),
+      workspaceName: async (userId, workspaceId) => {
+        const result = await workspaces.get(userId, workspaceId)
+        return result.ok ? result.value.name : undefined
+      },
+      profileOf: async (userId) => {
+        const profile = (await auth.getProfiles([userId])).get(userId)
+        return profile && { displayName: profile.displayName, email: profile.email }
+      },
+    },
+    content: {
+      listApplications: (workspaceId) => applications.listForWorkspace(workspaceId, 100),
+      listPublished: (workspaceId, origin, page) =>
+        guides.listPublishedForOrigin(workspaceId, origin, page),
+      getPublished: (workspaceId, guideId) => guides.getPublished(workspaceId, guideId),
+    },
+  })
   const requireSession = createRequireSession(auth, config.session.cookieName)
+  const requireExtensionAccess = createRequireExtensionAccess(extension)
 
   // Versioned product API: authenticated data must never sit in a cache.
   await app.register(async (v1) => {
@@ -129,6 +156,12 @@ export async function buildApp({
     await v1.register(workspaceRoutes, { workspaces, requireSession })
     await v1.register(applicationRoutes, { applications, requireSession })
     await v1.register(guideRoutes, { guides, requireSession })
+    await v1.register(extensionRoutes, {
+      extension,
+      rateLimits: config.rateLimits,
+      requireSession,
+      requireExtensionAccess,
+    })
   })
 
   return app

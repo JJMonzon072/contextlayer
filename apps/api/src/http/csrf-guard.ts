@@ -2,6 +2,17 @@ import type { FastifyInstance } from 'fastify'
 
 import { errorBody } from './error-handler.js'
 
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /**
+     * `false` only for routes that never read cookies and authenticate with a
+     * credential in the request itself (POST /v1/extension/token): a forged
+     * cross-site request carries nothing the attacker does not already know.
+     */
+    csrf?: boolean
+  }
+}
+
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 export interface CsrfRequest {
@@ -39,6 +50,7 @@ export function registerCsrfGuard(app: FastifyInstance, dashboardOrigins: readon
   const allowed = new Set(dashboardOrigins)
 
   app.addHook('onRequest', async (request, reply) => {
+    if (request.routeOptions.config.csrf === false) return
     const crossSite = isCrossSiteRequest(
       {
         method: request.method,

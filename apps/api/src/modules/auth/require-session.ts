@@ -20,9 +20,10 @@ class UnauthorizedError extends Error {
  */
 export function createRequireSession(auth: AuthService, cookieName: string) {
   return async function requireSession(request: FastifyRequest, reply: FastifyReply) {
-    // A bearer request authenticates by its token alone and cookies are ignored
-    // (ADR 0015). Bearer tokens arrive in Phase 4; until then they are rejected.
-    if (request.headers.authorization?.toLowerCase().startsWith('bearer ')) {
+    // Cookie routes never accept an Authorization header: a request carrying
+    // one (an extension bearer token, valid or not) is refused instead of
+    // silently falling back to a session cookie it may also carry (ADR 0015).
+    if (request.headers.authorization !== undefined) {
       throw new UnauthorizedError('Authentication required')
     }
     const token = request.cookies[cookieName]

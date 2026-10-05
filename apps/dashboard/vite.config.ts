@@ -16,6 +16,15 @@ function readProxyTarget(value: string | undefined): string {
   return target
 }
 
+/** The extension the dashboard hands codes to; empty means the development key's id. */
+function readExtensionId(value: string | undefined): string {
+  const id = value?.trim() ?? ''
+  if (id !== '' && !/^[a-p]{32}$/.test(id)) {
+    throw new Error(`EXTENSION_ID must be a Chrome extension id (32 letters a-p), got "${id}"`)
+  }
+  return id
+}
+
 export default defineConfig(({ mode }) => {
   // The monorepo keeps a single `.env` at its root.
   const env = loadEnv(mode, workspaceRoot, '')
@@ -35,6 +44,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue(), tailwindcss()],
     envDir: workspaceRoot,
+    define: {
+      __CONTEXTLAYER_EXTENSION_ID__: JSON.stringify(readExtensionId(env.EXTENSION_ID)),
+    },
     resolve: {
       // Consume workspace packages from source (see docs/adr/0011-source-first-workspace-packages.md).
       conditions: ['@contextlayer/source', ...defaultClientConditions],

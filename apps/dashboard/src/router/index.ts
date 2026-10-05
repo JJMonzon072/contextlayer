@@ -112,11 +112,23 @@ export function createAppRouter(store: SessionStore, history: RouterHistory = cr
             component: () => import('../features/guides/GuideVersionPage.vue'),
           },
           {
+            path: 'connected-browsers',
+            name: 'connected-browsers',
+            component: () => import('../features/extension/ConnectedBrowsersPage.vue'),
+          },
+          {
             path: 'members',
             name: 'members',
             component: () => import('../features/workspaces/MembersPage.vue'),
           },
         ],
+      },
+      {
+        // Opened by the extension ("Connect to ContextLayer"); login keeps the query.
+        path: '/extension/connect',
+        name: 'extension-connect',
+        meta: { requiresAuth: true },
+        component: () => import('../features/extension/ExtensionConnectPage.vue'),
       },
       {
         path: '/status',

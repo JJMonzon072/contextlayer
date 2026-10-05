@@ -119,7 +119,15 @@ describe('CSRF guard (cookie-authenticated unsafe methods)', () => {
 describe('auth rate limits', () => {
   it('limits login attempts per client and account, then answers 429 with retry-after', async () => {
     app = await buildTestApp({
-      config: { rateLimits: { windowMs: 60_000, loginMax: 3, registerMax: 20 } },
+      config: {
+        rateLimits: {
+          windowMs: 60_000,
+          loginMax: 3,
+          registerMax: 20,
+          extensionTokenMax: 120,
+          extensionCodeMax: 30,
+        },
+      },
     })
     await register(app, 'alice@example.com')
     const attempt = (target: TestApp, email: string, password: string) =>
@@ -141,7 +149,15 @@ describe('auth rate limits', () => {
 
   it('limits registrations per client', async () => {
     app = await buildTestApp({
-      config: { rateLimits: { windowMs: 60_000, loginMax: 10, registerMax: 2 } },
+      config: {
+        rateLimits: {
+          windowMs: 60_000,
+          loginMax: 10,
+          registerMax: 2,
+          extensionTokenMax: 120,
+          extensionCodeMax: 30,
+        },
+      },
     })
 
     await register(app, 'one@example.com')

@@ -5,12 +5,12 @@
   "description": "ContextLayer Chrome extension (Manifest V3): service worker, content script and popup.",
   "type": "module",
   "scripts": {
-    "dev": "tsx scripts/build.ts --watch",
-    "build": "tsx scripts/build.ts",
+    "dev": "tsx --conditions=@contextlayer/source scripts/build.ts --watch",
+    "build": "tsx --conditions=@contextlayer/source scripts/build.ts",
     "typecheck": "vue-tsc --build --force",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "tsx --conditions=@contextlayer/source scripts/build.ts --e2e && playwright test"
   },
   "dependencies": {
     "@contextlayer/shared": "workspace:*",
@@ -19,6 +19,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@contextlayer/config": "workspace:*",
     "@playwright/test": "catalog:",
     "@tailwindcss/vite": "catalog:",

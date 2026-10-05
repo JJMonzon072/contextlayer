@@ -1,3 +1,4 @@
+import { DEVELOPMENT_EXTENSION_ID, EXTENSION_ID_PATTERN } from '@contextlayer/shared'
 import { z } from 'zod'
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const
@@ -32,6 +33,15 @@ const envSchema = z.object({
   AUTH_RATE_LIMIT_WINDOW_SECONDS: positiveInt().default(900),
   LOGIN_RATE_LIMIT_MAX: positiveInt().default(10),
   REGISTER_RATE_LIMIT_MAX: positiveInt().default(20),
+  // Extension connections (ADR 0015). The id is the one the extension is built
+  // with (EXTENSION_PUBLIC_KEY → id); required in production.
+  EXTENSION_ID: z.string().regex(EXTENSION_ID_PATTERN).optional(),
+  EXTENSION_ACCESS_TOKEN_MINUTES: positiveInt().max(60).default(15),
+  // Hard limit of a connection; refreshes never extend it.
+  EXTENSION_GRANT_DAYS: positiveInt().max(30).default(30),
+  // Per client IP and window: code exchanges and refreshes, and code issuance.
+  EXTENSION_TOKEN_RATE_LIMIT_MAX: positiveInt().default(120),
+  EXTENSION_CODE_RATE_LIMIT_MAX: positiveInt().default(30),
 })
 
 export interface AppConfig {
@@ -52,7 +62,19 @@ export interface AppConfig {
     loginMax: number
     /** Per client IP: bulk account creation. */
     registerMax: number
+    /** Per client IP: POST /v1/extension/token (code exchanges and refreshes). */
+    extensionTokenMax: number
+    /** Per client IP: connection codes issued by the dashboard. */
+    extensionCodeMax: number
   }
+  extension: ExtensionConfig
+}
+
+export interface ExtensionConfig {
+  /** The only client connection codes are issued to. */
+  id: string
+  accessTokenTtlMs: number
+  grantTtlMs: number
 }
 
 export interface SessionConfig {
@@ -102,8 +124,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       windowMs: values.AUTH_RATE_LIMIT_WINDOW_SECONDS * 1000,
       loginMax: values.LOGIN_RATE_LIMIT_MAX,
       registerMax: values.REGISTER_RATE_LIMIT_MAX,
+      extensionTokenMax: values.EXTENSION_TOKEN_RATE_LIMIT_MAX,
+      extensionCodeMax: values.EXTENSION_CODE_RATE_LIMIT_MAX,
+    },
+    extension: {
+      id: extensionId(values.EXTENSION_ID, values.NODE_ENV),
+      accessTokenTtlMs: values.EXTENSION_ACCESS_TOKEN_MINUTES * 60_000,
+      grantTtlMs: values.EXTENSION_GRANT_DAYS * 86_400_000,
     },
   }
+}
+
+/** Development uses the committed development key's id; production must name its own. */
+function extensionId(value: string | undefined, env: AppConfig['env']): string {
+  if (value !== undefined) return value
+  if (env === 'production') {
+    throw new ConfigError(
+      'Invalid environment configuration:\nEXTENSION_ID is required in production.',
+    )
+  }
+  return DEVELOPMENT_EXTENSION_ID
 }
 
 function splitList(value: string | undefined): string[] {

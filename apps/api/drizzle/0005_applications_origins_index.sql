@@ -1,0 +1,1 @@
+CREATE INDEX "applications_origins_gin" ON "applications" USING gin ("origins");

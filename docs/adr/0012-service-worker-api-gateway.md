@@ -26,18 +26,19 @@ flowchart LR
 
 - **One client.** `apps/extension/src/background/api-client.ts` is the only code that fetches the API. It builds URLs from the build-time `API_BASE_URL` and known paths (`HEALTH_PATH`), sends `credentials: 'omit'`, aborts after 5 s, accepts only 200 and 503, and parses the body with the shared `healthReportSchema`.
 - **No CORS needed.** `host_permissions` is the exact API origin with its port, so the worker's requests bypass CORS. The API registers no CORS plugin.
-- **Callers send messages.** The popup and content script call `requestApiHealth()` (`src/messaging/background-client.ts`), which sends `{ type: 'api.health.get' }` and validates the reply. A dead worker or an orphaned script becomes an `INTERNAL_ERROR` result, not an exception.
+- **Callers send messages.** The popup calls helpers in `src/messaging/background-client.ts` (`requestApiHealth`, `requestConnectionStatus`, `requestSiteStatus`…), which send a typed request and validate the reply. A dead worker or an orphaned script becomes an `INTERNAL_ERROR` result, not an exception.
 - **A pure router** in `src/background/handle-message.ts` runs these checks in order:
   1. `classifySender`: `sender.id` must equal the extension id. A sender whose `sender.url` is under `chrome-extension://<id>/` is an `extension-page`. A sender with `sender.tab` is a `content-script`. Any other sender gets `FORBIDDEN`. Chrome sets these fields, not the sender.
   2. `backgroundRequestSchema.safeParse`. A failure gets `BAD_REQUEST`.
-  3. The `ALLOWED_SENDERS` allow-list for the request type. A context not on the list gets `FORBIDDEN`. `api.health.get` allows both contexts.
+  3. The `ALLOWED_SENDERS` allow-list for the request type. A context not on the list gets `FORBIDDEN`. Since Phase 4 every request (health, `connection.*`, `site.*`) is for extension pages only, except `page.hello`, the one question a content script may ask ([ADR 0017](0017-per-application-site-access.md)); request bodies are strict objects, so extra fields are refused.
   4. The handler. An API failure becomes `API_UNREACHABLE`, and details go only to the log.
 - **Lifecycle rules** (`src/background/index.ts`). Listeners are registered synchronously at top level. Async replies use `return true` plus `sendResponse`, because Promise-returning listeners only began a gradual rollout in Chrome 148. The worker keeps no state in module variables and uses no dynamic `import()`.
 - **The content script takes orders only from the extension.** Its listener ignores senders other than `chrome.runtime.id`. There is no `window.postMessage` listener, because any page script can forge one.
 
-**Planned (Phase 4 onward)**, under the same rules:
+**Implemented (Phase 4)**, under the same rules:
 
-- Tokens live only where the service worker can read them ([ADR 0015](0015-authentication-strategy.md)). There is never a "get token" message, and content scripts never receive credentials or data about other origins.
+- Tokens live only where the service worker can read them ([ADR 0015](0015-authentication-strategy.md)). There is never a "get token" message; the popup receives public connection facts, and content scripts receive only whether they may run. A content script that tries a privileged command gets `FORBIDDEN`, and `chrome.storage` is closed to it (both verified in real Chromium).
+- `onMessageExternal` accepts only the dashboard's handoff, after checking the sender Chrome reports (exact origin, top frame, the tab the attempt opened) and the attempt's `state` ([ADR 0015](0015-authentication-strategy.md)). There is no generic fetch proxy: each capability is its own message type.
 - Privileged commands (sign-in, sign-out, save guide, start Edit Mode) are allowed only for `extension-page`.
 - Content scripts may only ask for published guides for `sender.origin` (top frame, `sender.tab` present; never a URL from the payload) and send analytics events. The worker calls known endpoints only, so it is never an open proxy.
 - Phase 7: writes carry client-generated ids (`clientEventId`) and are queued in `chrome.storage.local`, so a worker stopped mid-request can safely retry ([R-12](../technical-risks.md)).
@@ -58,19 +59,18 @@ flowchart LR
 
 - Auth, timeouts, response validation and error mapping live in one module. A compromised page cannot read tokens it never sees.
 - The API stays CORS-free: the dashboard is same-origin through `/api`, and the extension uses host permissions.
-- The router is pure and unit-tested (`apps/extension/test/background-handle-message.test.ts`). The e2e suite exercises popup → worker → API and content script → worker → API.
+- The router is pure and unit-tested (`apps/extension/test/background-handle-message.test.ts`). The e2e suites exercise popup → worker → API, dashboard → worker → API and content script → worker.
 
 ### Negative and trade-offs
 
 - An extra message hop per call, and each new capability needs a message type, a schema and an allow-list entry. Payloads are plain JSON (`Date`, `Map` and `undefined` do not survive).
 - The worker's lifetime limits shape the client: short timeouts, idempotent writes, no in-memory queues.
-- If a user withholds the extension's site access, the API grant is withheld too, and worker requests become ordinary CORS requests that fail (Chromium source, medium-high confidence).
+- If a user withholds the extension's site access, the API grant is withheld too, and worker requests fail (measured in the Phase 4 spike). The worker detects it with `chrome.permissions.contains` and the popup explains it instead of reporting a revoked connection.
 
 ### Follow-ups
 
-- **Planned (Phase 4):** bearer tokens, an `onMessageExternal` handler that checks `sender.origin` ([ADR 0015](0015-authentication-strategy.md)), and frame checks on content-script requests.
-- **Planned (Phase 6):** `frameId`/`documentId` targeting for `tabs.sendMessage`.
-- **Proposed:** allow CORS for the pinned `chrome-extension://<id>` origin as a fallback when site access is withheld, or detect it with `chrome.permissions.contains` and prompt.
+- **Implemented (Phase 4):** bearer tokens, the `onMessageExternal` handoff, frame and document checks on `page.hello`, and `documentId` targeting when the worker tells a page to stop.
+- **Proposed:** allow CORS for the pinned `chrome-extension://<id>` origin as a fallback when site access is withheld (today the popup explains how to give it back).
 
 ## References
 

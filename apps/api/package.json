@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "e2e:server": "tsx scripts/e2e-server.ts",
     "db:generate": "pnpm --filter @contextlayer/shared run build && drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "pnpm --filter @contextlayer/shared run build && drizzle-kit check"

@@ -22,6 +22,7 @@ const tabs = [
 /** Application and guide pages live under the Applications tab. */
 const activeTab = computed(() => {
   const name = String(route.name)
+  if (name === 'connected-browsers') return undefined
   return name === 'workspace' || name === 'members' ? name : 'applications'
 })
 
@@ -65,6 +66,14 @@ async function signOut() {
             <p class="font-medium">{{ session.user.value?.displayName }}</p>
             <p class="text-slate-600">{{ session.user.value?.email }}</p>
           </div>
+          <RouterLink
+            v-if="workspace"
+            :to="{ name: 'connected-browsers', params: { workspaceId: workspace.id } }"
+            class="rounded-md px-2 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            active-class="bg-slate-100 text-slate-900"
+          >
+            Connected browsers
+          </RouterLink>
           <AppButton variant="secondary" :loading="signingOut" @click="signOut">Sign out</AppButton>
         </div>
       </div>

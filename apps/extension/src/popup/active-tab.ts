@@ -6,28 +6,31 @@ import {
   type PageInfo,
 } from '../messaging/protocol'
 
-const NOT_AVAILABLE = failure(
+const NOT_RUNNING = failure(
   'NOT_AVAILABLE',
-  'ContextLayer is not running on this page. In Phase 1 it only runs on the local dashboard (localhost:5173 and :4173).',
+  'ContextLayer is not running in this tab yet. Reload the page and try again.',
 )
 
-/**
- * Pings the content script of the active tab. A missing receiver (restricted
- * page, non-matching URL, tab opened before the extension was installed) is an
- * expected state, not an error.
- */
-export async function pingActiveTab(): Promise<MessageResult<PageInfo>> {
+/** The tab the popup was opened on, if Chrome lets the extension see it. */
+export async function activeTabId(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (tab?.id === undefined) return NOT_AVAILABLE
+  return tab?.id
+}
 
+/**
+ * Pings the content script of a tab. A missing or inactive receiver (the page
+ * was open before the site was enabled and could not be injected, or it was
+ * refused) is an expected state, not an error.
+ */
+export async function pingTab(tabId: number): Promise<MessageResult<PageInfo>> {
   try {
     const response: unknown = await chrome.tabs.sendMessage(
-      tab.id,
+      tabId,
       contentRequestSchema.parse({ type: 'page.ping' }),
     )
     const parsed = pageInfoResultSchema.safeParse(response)
-    return parsed.success ? parsed.data : NOT_AVAILABLE
+    return parsed.success ? parsed.data : NOT_RUNNING
   } catch {
-    return NOT_AVAILABLE
+    return NOT_RUNNING
   }
 }

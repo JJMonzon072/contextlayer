@@ -18,6 +18,7 @@ import tseslint from 'typescript-eslint'
 
 const ignores = globalIgnores([
   '**/dist/**',
+  '**/dist-e2e/**',
   '**/coverage/**',
   '**/playwright-report/**',
   '**/test-results/**',

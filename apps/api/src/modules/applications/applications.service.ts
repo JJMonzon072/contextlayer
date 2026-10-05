@@ -12,6 +12,7 @@ import type { DrizzleDatabase } from '../../infrastructure/database/client.js'
 import {
   deleteApplication,
   findApplication,
+  findApplicationIdsByOrigin,
   insertApplication,
   listApplications,
   updateApplication,
@@ -69,6 +70,17 @@ export function createApplicationsService(deps: {
     /** For the guides module: does this application belong to this workspace? */
     async exists(workspaceId: string, applicationId: string): Promise<boolean> {
       return (await findApplication(db, workspaceId, applicationId)) !== undefined
+    },
+
+    /** For the extension module: the grant's workspace, no user check (the grant is the check). */
+    async listForWorkspace(workspaceId: string, limit: number): Promise<Application[]> {
+      const rows = await listApplications(db, workspaceId, { limit, afterId: undefined })
+      return rows.slice(0, limit).map(toApplication)
+    },
+
+    /** For the guides module: which applications of the workspace serve this origin. */
+    applicationIdsForOrigin(workspaceId: string, origin: string): Promise<string[]> {
+      return findApplicationIdsByOrigin(db, workspaceId, origin)
     },
 
     async list(
