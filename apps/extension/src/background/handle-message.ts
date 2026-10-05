@@ -32,7 +32,8 @@ const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[
   'connection.disconnect': ['extension-page'],
   'applications.list': ['extension-page'],
   'site.status': ['extension-page'],
-  'site.enable': ['extension-page'],
+  'site.requestActivation': ['extension-page'],
+  'site.cancelActivation': ['extension-page'],
   'site.disable': ['extension-page'],
   'page.hello': ['content-script'],
 }
@@ -59,7 +60,8 @@ export interface BackgroundDeps {
   site: {
     applications(): Promise<ApplicationListData>
     status(tabId: number): Promise<SiteStatusData>
-    enable(tabId: number): Promise<SiteStatusData>
+    requestActivation(tabId: number): Promise<{ intentId: string | null }>
+    cancelActivation(intentId: string): Promise<{ cancelled: boolean }>
     disable(tabId: number): Promise<SiteStatusData>
     hello(sender: PageSender): Promise<HelloResult>
   }
@@ -111,8 +113,10 @@ export async function handleBackgroundMessage(
       return success(await deps.site.applications())
     case 'site.status':
       return success(await deps.site.status(request.data.tabId))
-    case 'site.enable':
-      return success(await deps.site.enable(request.data.tabId))
+    case 'site.requestActivation':
+      return success(await deps.site.requestActivation(request.data.tabId))
+    case 'site.cancelActivation':
+      return success(await deps.site.cancelActivation(request.data.intentId))
     case 'site.disable':
       return success(await deps.site.disable(request.data.tabId))
     case 'page.hello':

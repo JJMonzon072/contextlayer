@@ -58,7 +58,12 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('connection.disconnect') }),
   z.strictObject({ type: z.literal('applications.list') }),
   z.strictObject({ type: z.literal('site.status'), tabId: z.number().int().nonnegative() }),
-  z.strictObject({ type: z.literal('site.enable'), tabId: z.number().int().nonnegative() }),
+  // "Turn on": sent from the click, before Chrome's prompt; the worker completes it.
+  z.strictObject({
+    type: z.literal('site.requestActivation'),
+    tabId: z.number().int().nonnegative(),
+  }),
+  z.strictObject({ type: z.literal('site.cancelActivation'), intentId: z.string().min(1) }),
   z.strictObject({ type: z.literal('site.disable'), tabId: z.number().int().nonnegative() }),
   // The only request a content script may send: "may I run on this page?"
   z.strictObject({ type: z.literal('page.hello') }),
@@ -129,6 +134,15 @@ export type SiteStatusData = z.infer<typeof siteStatusSchema>
 export const siteStatusResultSchema = messageResultSchema(siteStatusSchema)
 
 export const helloResultSchema = messageResultSchema(z.object({ active: z.boolean() }))
+
+/** `intentId` is null when nothing could be requested (no connection, no http(s) page). */
+export const activationRequestResultSchema = messageResultSchema(
+  z.object({ intentId: z.string().nullable() }),
+)
+
+export const activationCancelResultSchema = messageResultSchema(
+  z.object({ cancelled: z.boolean() }),
+)
 
 /** The connection's applications, each origin marked on when ContextLayer runs there. */
 export const applicationListSchema = z.object({

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { ApiUnreachableError } from '../src/background/api-client'
 import { createAuth } from '../src/background/auth'
 import {
+  ACTIVATION_TTL_MS,
   createSiteAccess,
   scriptId,
   SCRIPT_ID_PREFIX,
@@ -104,6 +105,7 @@ async function setup(
   } = {},
 ) {
   let apps = options.apps ?? [app('Acme CRM', [CRM])]
+  let clock = NOW
   const storage = memoryStorage()
   const vault = createVault(storage)
   const { api, calls } = fakeApi((call) => {
@@ -120,7 +122,7 @@ async function setup(
     vault,
     api,
     lifecycle,
-    now: () => NOW,
+    now: () => clock,
     onEnded: () => Promise.resolve(),
   })
   if (options.connected ?? true) await auth.save(tokenResponse())
@@ -128,9 +130,10 @@ async function setup(
   const site = createSiteAccess({
     vault,
     auth,
+    lifecycle,
     chrome: fake.chrome,
     apiPattern: API_PATTERN,
-    now: () => NOW,
+    now: () => clock,
   })
   return {
     ...fake,
@@ -138,6 +141,12 @@ async function setup(
     vault,
     auth,
     calls,
+    tick: (ms: number) => (clock += ms),
+    /** "Turn on" as the popup does it, then the status it shows. */
+    turnOn: async (tabId: number) => {
+      await site.requestActivation(tabId)
+      return site.status(tabId)
+    },
     setApps: (next: ExtensionApplication[]) => {
       apps = next
     },
@@ -214,18 +223,18 @@ describe('site status', () => {
 
 describe('enabling a site', () => {
   it('needs Chrome access: without it nothing is recorded or registered', async () => {
-    const { site, vault, ours } = await setup()
+    const { turnOn, vault, ours } = await setup()
 
-    expect(await site.enable(CRM_TAB)).toMatchObject({ state: 'available', permission: 'missing' })
+    expect(await turnOn(CRM_TAB)).toMatchObject({ state: 'available', permission: 'missing' })
     expect(await vault.readSites('01a10a2e-864b-75bc-8800-aa3f01a05314')).toEqual([])
     expect(ours()).toEqual([])
   })
 
   it('registers the exact origin, injects into its open tabs and lists its published guides', async () => {
-    const { site, granted, ours, injected, calls } = await setup()
+    const { turnOn, granted, ours, injected, calls } = await setup()
     granted.add(CRM_PATTERN)
 
-    expect(await site.enable(CRM_TAB)).toEqual({
+    expect(await turnOn(CRM_TAB)).toEqual({
       state: 'active',
       origin: CRM,
       pattern: CRM_PATTERN,
@@ -241,17 +250,17 @@ describe('enabling a site', () => {
   })
 
   it('refuses an origin that is not a registered application', async () => {
-    const { site, granted, ours } = await setup()
+    const { turnOn, granted, ours } = await setup()
     granted.add(originMatchPattern(WIKI))
 
-    expect(await site.enable(WIKI_TAB)).toMatchObject({ state: 'not-registered' })
+    expect(await turnOn(WIKI_TAB)).toMatchObject({ state: 'not-registered' })
     expect(ours()).toEqual([])
   })
 
   it('reconciles idempotently and never touches registrations that are not its own', async () => {
-    const { site, granted, registered, injected } = await setup()
+    const { site, turnOn, granted, registered, injected } = await setup()
     granted.add(CRM_PATTERN)
-    await site.enable(CRM_TAB)
+    await turnOn(CRM_TAB)
     injected.length = 0
 
     await site.reconcile()
@@ -263,9 +272,9 @@ describe('enabling a site', () => {
   })
 
   it('re-injects every enabled site after install, update or browser start', async () => {
-    const { site, granted, injected } = await setup()
+    const { site, turnOn, granted, injected } = await setup()
     granted.add(CRM_PATTERN)
-    await site.enable(CRM_TAB)
+    await turnOn(CRM_TAB)
     injected.length = 0
 
     await site.reconcile({ injectAll: true })
@@ -274,13 +283,140 @@ describe('enabling a site', () => {
   })
 })
 
+describe('a "Turn on" request outlives the popup', () => {
+  // These tests drive Chrome's grant with a fake: they show what the worker
+  // does with a pending request, not how Chrome's own prompt behaves.
+
+  it('completes when Chrome grants the origin later, without any call from the popup', async () => {
+    const { site, granted, ours, injected, vault } = await setup()
+
+    expect(await site.requestActivation(CRM_TAB)).toEqual({
+      intentId: expect.any(String) as string,
+    })
+    // The popup closed while Chrome's prompt was open: nobody calls back.
+    expect(ours()).toEqual([])
+    granted.add(CRM_PATTERN)
+    await site.reconcile() // what permissions.onAdded does
+
+    expect(ours()).toEqual([CRM_PATTERN])
+    expect(injected.sort()).toEqual([CRM_TAB, CRM_TAB_2])
+    expect(await vault.readSiteIntent()).toBeUndefined()
+    expect(await site.status(CRM_TAB)).toMatchObject({ state: 'active' })
+  })
+
+  it('completes at once when the origin was already granted', async () => {
+    const { site, granted, ours } = await setup()
+    granted.add(CRM_PATTERN)
+
+    await site.requestActivation(CRM_TAB)
+
+    expect(ours()).toEqual([CRM_PATTERN])
+  })
+
+  it('a grant nobody asked ContextLayer for turns nothing on', async () => {
+    const { site, granted, ours, injected } = await setup()
+
+    granted.add(CRM_PATTERN)
+    await site.reconcile()
+
+    expect(ours()).toEqual([])
+    expect(injected).toEqual([])
+    expect(await site.status(CRM_TAB)).toMatchObject({ state: 'available', permission: 'granted' })
+  })
+
+  it('a refused request turns nothing on and injects nothing, and the popup cancels it', async () => {
+    const { site, ours, injected, vault } = await setup()
+
+    const { intentId } = await site.requestActivation(CRM_TAB)
+    await site.reconcile()
+    expect(ours()).toEqual([])
+    expect(injected).toEqual([])
+
+    expect(await site.cancelActivation(intentId ?? '')).toEqual({ cancelled: true })
+    expect(await vault.readSiteIntent()).toBeUndefined()
+    expect(await site.cancelActivation(intentId ?? '')).toEqual({ cancelled: false })
+  })
+
+  it('a request that lapsed turns nothing on, even if Chrome grants it afterwards', async () => {
+    const { site, granted, ours, tick, vault } = await setup()
+
+    await site.requestActivation(CRM_TAB)
+    tick(ACTIVATION_TTL_MS)
+    granted.add(CRM_PATTERN)
+    await site.reconcile()
+
+    expect(ours()).toEqual([])
+    expect(await vault.readSiteIntent()).toBeUndefined()
+  })
+
+  it('a request made under an earlier connection turns nothing on in the new one', async () => {
+    const { site, granted, ours, auth, vault } = await setup()
+
+    await site.requestActivation(CRM_TAB)
+    // Reconnected to the same workspace: a new grant.
+    await auth.save(tokenResponse({ grantId: '01a10a2e-864b-75bc-8800-aa3f01a05399' }))
+    granted.add(CRM_PATTERN)
+    await site.reconcile()
+
+    expect(ours()).toEqual([])
+    expect(await vault.readSites('01a10a2e-864b-75bc-8800-aa3f01a05314')).toEqual([])
+  })
+
+  it('Disconnect drops the pending request', async () => {
+    const { site, vault } = await setup()
+
+    await site.requestActivation(CRM_TAB)
+    await vault.clearConnection(false, NOW)
+
+    expect(await vault.readSiteIntent()).toBeUndefined()
+  })
+
+  it('a tab that navigated to another origin meanwhile turns neither origin on', async () => {
+    const { site, granted, ours, tabs, vault } = await setup({
+      apps: [app('Acme CRM', [CRM]), app('Acme Wiki', [WIKI])],
+    })
+
+    await site.requestActivation(CRM_TAB)
+    tabs.set(CRM_TAB, `${WIKI}/home`)
+    granted.add(CRM_PATTERN)
+    granted.add(originMatchPattern(WIKI))
+    await site.reconcile()
+
+    expect(ours()).toEqual([])
+    expect(await vault.readSiteIntent()).toBeUndefined()
+  })
+
+  it('two equivalent events complete it once: one registration, one injection per tab', async () => {
+    const { site, granted, registered, injected } = await setup()
+
+    await site.requestActivation(CRM_TAB)
+    granted.add(CRM_PATTERN)
+    await Promise.all([site.reconcile(), site.reconcile(), site.status(CRM_TAB)])
+
+    expect([...registered.keys()].filter((id) => id.startsWith(SCRIPT_ID_PREFIX))).toHaveLength(1)
+    expect(injected.sort()).toEqual([CRM_TAB, CRM_TAB_2])
+  })
+
+  it('turning the site off drops a request still waiting for it', async () => {
+    const { site, granted, ours, vault } = await setup()
+
+    await site.requestActivation(CRM_TAB)
+    await site.disable(CRM_TAB)
+    granted.add(CRM_PATTERN)
+    await site.reconcile()
+
+    expect(ours()).toEqual([])
+    expect(await vault.readSiteIntent()).toBeUndefined()
+  })
+})
+
 describe("the connection's applications", () => {
   it('lists every application with its origins, on where ContextLayer runs', async () => {
-    const { site, granted } = await setup({
+    const { site, turnOn, granted } = await setup({
       apps: [app('Acme CRM', [CRM]), app('Acme Wiki', [WIKI, 'https://wiki.acme.test'])],
     })
     granted.add(CRM_PATTERN)
-    await site.enable(CRM_TAB)
+    await turnOn(CRM_TAB)
 
     expect(await site.applications()).toEqual({
       applications: [
@@ -312,17 +448,17 @@ describe("the connection's applications", () => {
 
 describe('pages asking to run (page.hello)', () => {
   it('authorizes the top frame of an enabled, registered and granted site', async () => {
-    const { site, granted } = await setup()
+    const { site, turnOn, granted } = await setup()
     granted.add(CRM_PATTERN)
-    await site.enable(CRM_TAB)
+    await turnOn(CRM_TAB)
 
     expect(await site.hello(sender(CRM_TAB, `${CRM}/customers`))).toEqual({ active: true })
   })
 
   it('refuses subframes, missing documents, mismatched origins and other sites', async () => {
-    const { site, granted } = await setup()
+    const { site, turnOn, granted } = await setup()
     granted.add(CRM_PATTERN)
-    await site.enable(CRM_TAB)
+    await turnOn(CRM_TAB)
 
     for (const refused of [
       sender(CRM_TAB, `${CRM}/customers`, { frameId: 4 }),
@@ -337,9 +473,9 @@ describe('pages asking to run (page.hello)', () => {
   })
 
   it('refuses every page once disconnected', async () => {
-    const { site, granted, vault } = await setup()
+    const { site, turnOn, granted, vault } = await setup()
     granted.add(CRM_PATTERN)
-    await site.enable(CRM_TAB)
+    await turnOn(CRM_TAB)
     await vault.clearConnection(false, NOW)
 
     expect(await site.hello(sender(CRM_TAB, `${CRM}/customers`))).toEqual({ active: false })
@@ -350,7 +486,7 @@ describe('losing access', () => {
   async function enabledWithPage() {
     const context = await setup()
     context.granted.add(CRM_PATTERN)
-    await context.site.enable(CRM_TAB)
+    await context.turnOn(CRM_TAB)
     await context.site.hello(sender(CRM_TAB, `${CRM}/customers`))
     return context
   }
@@ -428,7 +564,7 @@ describe('when the API cannot be reached', () => {
       api: () => (offline ? Promise.reject(new ApiUnreachableError('offline')) : undefined),
     })
     context.granted.add(CRM_PATTERN)
-    await context.site.enable(CRM_TAB)
+    await context.turnOn(CRM_TAB)
     offline = true
 
     expect(await context.site.status(CRM_TAB)).toMatchObject({ state: 'active', guides: null })
@@ -448,7 +584,7 @@ describe('when the API cannot be reached', () => {
     let revoked = false
     const context = await setup({ api: () => (revoked ? json(401) : undefined) })
     context.granted.add(CRM_PATTERN)
-    await context.site.enable(CRM_TAB)
+    await context.turnOn(CRM_TAB)
     revoked = true
 
     expect(await context.site.status(CRM_TAB)).toEqual({ state: 'disconnected', origin: CRM })

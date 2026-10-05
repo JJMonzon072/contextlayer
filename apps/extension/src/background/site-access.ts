@@ -10,7 +10,9 @@ import {
 import type { ApplicationListData, SiteStatusData } from '../messaging/protocol'
 import { ApiUnreachableError } from './api-client'
 import { ConnectionEndedError, NotConnectedError, type Auth } from './auth'
-import type { ConnectionRecord, Vault } from './vault'
+import type { Lifecycle } from './lifecycle'
+import { randomToken } from './pkce'
+import type { ConnectionRecord, SiteIntent, Vault } from './vault'
 
 /**
  * Per-application site access (ADR 0017). ContextLayer runs on a page only
@@ -31,6 +33,8 @@ import type { ConnectionRecord, Vault } from './vault'
 export const SCRIPT_ID_PREFIX = 'cl-site-'
 /** How long the cached application list is trusted when a page asks. */
 const APPLICATIONS_TTL_MS = 10 * 60_000
+/** How long a "Turn on" request waits for Chrome's grant before it lapses. */
+export const ACTIVATION_TTL_MS = 3 * 60_000
 
 /** The few Chrome calls site access needs, so the logic can be tested without Chrome. */
 export interface SiteChrome {
@@ -80,12 +84,13 @@ export type SiteAccess = ReturnType<typeof createSiteAccess>
 export function createSiteAccess(deps: {
   vault: Vault
   auth: Auth
+  lifecycle: Lifecycle
   chrome: SiteChrome
   /** Match pattern of the ContextLayer API, to tell when its access is withheld. */
   apiPattern: string
   now: () => number
 }) {
-  const { vault, auth, chrome, apiPattern, now } = deps
+  const { vault, auth, lifecycle, chrome, apiPattern, now } = deps
   let queue: Promise<void> = Promise.resolve()
 
   async function fetchApplications(connection: ConnectionRecord) {
@@ -119,7 +124,52 @@ export function createSiteAccess(deps: {
     return siteOrigin(await chrome.tabUrl(tabId))
   }
 
+  /**
+   * What a pending "Turn on" request deserves now. It never activates anything
+   * but the exact origin the user asked for, in the connection they asked it in,
+   * and only once Chrome granted that origin and it is still registered.
+   */
+  async function judgeIntent(intent: SiteIntent): Promise<'activate' | 'wait' | 'drop'> {
+    if (intent.expiresAt <= now()) return 'drop'
+    const connection = await vault.readConnection()
+    if (connection?.id !== intent.grantId || connection.workspace.id !== intent.workspaceId) {
+      return 'drop'
+    }
+    // The tab navigated elsewhere (or closed) while Chrome's prompt was open.
+    if ((await originOfTab(intent.tabId)) !== intent.origin) return 'drop'
+    if (!(await chrome.hasHostAccess(intent.pattern))) return 'wait'
+    let apps: ExtensionApplication[] | undefined
+    try {
+      apps = await applications(connection, false)
+    } catch {
+      return 'drop'
+    }
+    if (apps === undefined) return 'wait'
+    return apps.some((app) => app.origins.includes(intent.origin)) ? 'activate' : 'drop'
+  }
+
+  /** Completes or drops the pending request, at most once (idempotent). */
+  async function settleIntent(): Promise<void> {
+    const intent = await vault.readSiteIntent()
+    if (!intent) return
+    const verdict = await judgeIntent(intent)
+    if (verdict === 'wait') return
+    await lifecycle.exclusive(async () => {
+      // Consumed, cancelled or replaced meanwhile: nothing to do.
+      if ((await vault.readSiteIntent())?.id !== intent.id) return
+      await vault.clearSiteIntent()
+      if (verdict !== 'activate') return
+      // Re-checked in the transition: Disconnect cannot slip in before the write.
+      if ((await vault.readConnection())?.id !== intent.grantId) return
+      const sites = await vault.readSites(intent.workspaceId)
+      if (!sites.includes(intent.origin)) {
+        await vault.writeSites(intent.workspaceId, [...sites, intent.origin])
+      }
+    })
+  }
+
   async function runReconcile(injectAll: boolean): Promise<void> {
+    await settleIntent()
     const connection = await vault.readConnection()
     const current = (await chrome.registeredScripts()).filter((script) =>
       script.id.startsWith(SCRIPT_ID_PREFIX),
@@ -277,40 +327,67 @@ export function createSiteAccess(deps: {
     },
 
     /**
-     * Turns ContextLayer on for the tab's site. The popup asked Chrome for the
-     * host permission first, inside the user's click; this only records the
-     * choice when the site is registered and Chrome did grant access.
+     * "Turn on" for the tab's site, sent by the popup from the user's click just
+     * before it asks Chrome for the origin. Stored as a pending request bound to
+     * the connection, the exact origin and the tab, so it completes when Chrome
+     * grants the origin (here at once if it already did, or on
+     * `permissions.onAdded` through `reconcile`) even if the popup is gone.
+     * A grant without such a request activates nothing.
      */
-    async enable(tabId: number): Promise<SiteStatus> {
+    async requestActivation(tabId: number): Promise<{ intentId: string | null }> {
       const origin = await originOfTab(tabId)
-      const connection = await vault.readConnection()
-      if (origin !== undefined && connection) {
-        const apps = (await applications(connection, true)) ?? []
-        const registered = apps.some((app) => app.origins.includes(origin))
-        if (registered && (await chrome.hasHostAccess(originMatchPattern(origin)))) {
-          const sites = await vault.readSites(connection.workspace.id)
-          if (!sites.includes(origin)) {
-            await vault.writeSites(connection.workspace.id, [...sites, origin])
-          }
-          await reconcile()
+      if (origin === undefined) return { intentId: null }
+      const intent = await lifecycle.exclusive(async () => {
+        const connection = await vault.readConnection()
+        if (!connection) return undefined
+        const createdAt = now()
+        const request: SiteIntent = {
+          id: randomToken(),
+          grantId: connection.id,
+          workspaceId: connection.workspace.id,
+          origin,
+          pattern: originMatchPattern(origin),
+          tabId,
+          createdAt,
+          expiresAt: createdAt + ACTIVATION_TTL_MS,
         }
-      }
-      return status(tabId)
+        // One request at a time: a newer one replaces any earlier one.
+        await vault.writeSiteIntent(request)
+        return request
+      })
+      if (!intent) return { intentId: null }
+      await reconcile()
+      return { intentId: intent.id }
     },
+
+    /** Chrome refused, or the user gave up: the request is dropped. */
+    cancelActivation: (intentId: string): Promise<{ cancelled: boolean }> =>
+      lifecycle.exclusive(async () => {
+        if ((await vault.readSiteIntent())?.id !== intentId) return { cancelled: false }
+        await vault.clearSiteIntent()
+        return { cancelled: true }
+      }),
 
     /** Turns ContextLayer off for the tab's site and gives Chrome's access back. */
     async disable(tabId: number): Promise<SiteStatus> {
       const origin = await originOfTab(tabId)
-      const connection = await vault.readConnection()
-      if (origin !== undefined && connection) {
-        const sites = await vault.readSites(connection.workspace.id)
-        await vault.writeSites(
-          connection.workspace.id,
-          sites.filter((site) => site !== origin),
-        )
-        const pattern = originMatchPattern(origin)
-        if (pattern !== apiPattern) await chrome.removeHostAccess(pattern)
-        await reconcile()
+      if (origin !== undefined) {
+        const changed = await lifecycle.exclusive(async () => {
+          const connection = await vault.readConnection()
+          if (!connection) return false
+          if ((await vault.readSiteIntent())?.origin === origin) await vault.clearSiteIntent()
+          const sites = await vault.readSites(connection.workspace.id)
+          await vault.writeSites(
+            connection.workspace.id,
+            sites.filter((site) => site !== origin),
+          )
+          return true
+        })
+        if (changed) {
+          const pattern = originMatchPattern(origin)
+          if (pattern !== apiPattern) await chrome.removeHostAccess(pattern)
+          await reconcile()
+        }
       }
       return status(tabId)
     },

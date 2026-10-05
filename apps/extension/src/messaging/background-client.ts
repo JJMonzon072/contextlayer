@@ -2,6 +2,8 @@ import type { HealthReport } from '@contextlayer/shared'
 import type { z } from 'zod'
 
 import {
+  activationCancelResultSchema,
+  activationRequestResultSchema,
   apiHealthResultSchema,
   applicationListResultSchema,
   connectionStatusResultSchema,
@@ -63,8 +65,20 @@ export function requestSiteStatus(tabId: number): Promise<MessageResult<SiteStat
   return sendToBackground({ type: 'site.status', tabId }, siteStatusResultSchema)
 }
 
-export function enableSite(tabId: number): Promise<MessageResult<SiteStatusData>> {
-  return sendToBackground({ type: 'site.enable', tabId }, siteStatusResultSchema)
+/**
+ * Asks the worker to turn ContextLayer on for the tab's site once Chrome grants
+ * it. `chrome.runtime.sendMessage` is called synchronously here (before the
+ * first await), so a caller can send this and then call
+ * `chrome.permissions.request()` in the same task as the user's click.
+ */
+export function requestActivation(
+  tabId: number,
+): Promise<MessageResult<{ intentId: string | null }>> {
+  return sendToBackground({ type: 'site.requestActivation', tabId }, activationRequestResultSchema)
+}
+
+export function cancelActivation(intentId: string): Promise<MessageResult<{ cancelled: boolean }>> {
+  return sendToBackground({ type: 'site.cancelActivation', intentId }, activationCancelResultSchema)
 }
 
 export function disableSite(tabId: number): Promise<MessageResult<SiteStatusData>> {

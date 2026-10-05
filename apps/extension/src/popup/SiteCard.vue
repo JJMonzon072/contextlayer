@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, shallowRef } from 'vue'
 
-import { disableSite, enableSite, requestSiteStatus } from '../messaging/background-client'
+import {
+  cancelActivation,
+  disableSite,
+  requestActivation,
+  requestSiteStatus,
+} from '../messaging/background-client'
 import { CONNECTION_CHANGED, type MessageResult, type SiteStatusData } from '../messaging/protocol'
 import { activeTabId, pingTab } from './active-tab'
 
@@ -33,23 +38,43 @@ async function load() {
   apply(await requestSiteStatus(tabId.value))
 }
 
-async function enable() {
+/**
+ * "Turn on" (ADR 0017). Both calls happen synchronously in the click's task:
+ * 1. the worker is told first, without waiting for its answer, so the request
+ *    survives this popup closing while Chrome's prompt is open;
+ * 2. Chrome is asked for this one origin while the click's user activation is
+ *    still valid (awaiting a message first would spend it: it expires after a
+ *    few seconds).
+ * The worker turns the site on once Chrome grants it; this popup, if it is
+ * still open, only reports the outcome.
+ */
+function enable() {
   const current = status.value
-  if (tabId.value === undefined || current === undefined || !('pattern' in current)) return
+  const tab = tabId.value
+  if (tab === undefined || current === undefined || !('pattern' in current)) return
   busy.value = true
   notice.value = undefined
+  const request = requestActivation(tab)
+  const permission = chrome.permissions.request({ origins: [current.pattern] }).catch(() => false)
+  void report(tab, current.origin, request, permission)
+}
+
+async function report(
+  tab: number,
+  origin: string,
+  request: ReturnType<typeof requestActivation>,
+  permission: Promise<boolean>,
+) {
   try {
-    // Requested first, inside the click: Chrome only prompts for a user gesture.
-    // An origin the user already granted resolves at once, without a prompt.
-    const granted = await chrome.permissions
-      .request({ origins: [current.pattern] })
-      .catch(() => false)
+    const [requested, granted] = await Promise.all([request, permission])
     if (!granted) {
-      notice.value = `Chrome did not allow access to ${current.origin}. ContextLayer stays off on this site.`
-      await load()
-      return
+      if (requested.ok && requested.data.intentId !== null) {
+        await cancelActivation(requested.data.intentId)
+      }
+      notice.value = `Chrome did not allow access to ${origin}. ContextLayer stays off on this site.`
     }
-    apply(await enableSite(tabId.value))
+    // Asking for the status lets the worker complete a granted request now.
+    apply(await requestSiteStatus(tab))
   } finally {
     busy.value = false
   }

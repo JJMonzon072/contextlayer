@@ -288,6 +288,93 @@ test('withdrawing site access in chrome://extensions pauses ContextLayer until i
   await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'active')
 })
 
+test('turning a site on completes even if the popup closes right after the click', async ({
+  context,
+  extensionBrowser,
+}) => {
+  // GRANTED_SITE is pre-granted, so Chrome answers at once and shows no prompt:
+  // this shows that the worker, not the popup, completes the request. It is not
+  // a test of Chrome's own prompt (manual check in ADR 0017).
+  await acme(context)
+  const page = await openSite(context, '/customers')
+  const popup = await openActionPopup(extensionBrowser, page)
+  await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'available')
+
+  await popup.getByRole('button', { name: 'Turn on for this site' }).click()
+  await popup.close()
+
+  await expectState(page, 'active')
+  const again = await openActionPopup(extensionBrowser, page)
+  await expect(again.getByTestId('site')).toHaveAttribute('data-state', 'active')
+})
+
+test('access granted in chrome://extensions turns no site on by itself', async ({
+  context,
+  extensionBrowser,
+}) => {
+  await acme(context)
+  const page = await openSite(context, '/customers')
+  const worker = await extensionWorker(context)
+  const settings = await context.newPage()
+  await settings.goto(`chrome://extensions/?id=${new URL(worker.url()).host}`)
+  const siteAccess = settings.locator(
+    '#hostAccessToggle:visible, #allHostsToggle:visible, cr-toggle[aria-label*="Automatically allow"]:visible',
+  )
+  const granted = () =>
+    worker.evaluate(
+      (origin) => chrome.permissions.contains({ origins: [`${origin}/*`] }),
+      GRANTED_SITE,
+    )
+
+  // Real permission events: onRemoved, then onAdded for the site.
+  await siteAccess.first().click()
+  await expect.poll(granted).toBe(false)
+  await siteAccess.first().click()
+  await expect.poll(granted).toBe(true)
+
+  await page.reload()
+  expect(await contentScriptState(page)).toBeNull()
+  expect(await worker.evaluate(() => chrome.scripting.getRegisteredContentScripts())).toEqual([])
+  const popup = await openActionPopup(extensionBrowser, page)
+  await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'available')
+})
+
+test("platform check: Chrome needs the click's activation, and a message sent first keeps it", async ({
+  context,
+}) => {
+  // Measures the assumption SiteCard.enable() relies on, in this Chromium.
+  // User activation is simulated with CDP (`userGesture`), not a real click,
+  // and the prompt Chrome opens for UNGRANTED_SITE is never answered.
+  const worker = await extensionWorker(context)
+  const page = await context.newPage()
+  await page.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`)
+  const session = await context.newCDPSession(page)
+  const run = async (expression: string, userGesture: boolean) => {
+    const { result } = await session.send('Runtime.evaluate', {
+      expression,
+      userGesture,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    return result.value as unknown
+  }
+  const request = `Promise.race([
+    chrome.permissions.request({ origins: ['${UNGRANTED_SITE}/*'] }).then(String, (error) => error.message),
+    new Promise((resolve) => setTimeout(() => resolve('prompt shown'), 1500)),
+  ])`
+
+  // Without activation Chrome refuses to ask.
+  expect(await run(request, false)).toContain('must be called during a user gesture')
+  // With activation, sending the worker message first (not awaited) and asking
+  // in the same task still reaches Chrome's prompt.
+  expect(
+    await run(
+      `(() => { void chrome.runtime.sendMessage({ type: 'site.requestActivation', tabId: 0 }); return ${request} })()`,
+      true,
+    ),
+  ).toBe('prompt shown')
+})
+
 test('switching workspace removes the sites of the previous one', async ({
   context,
   extensionBrowser,

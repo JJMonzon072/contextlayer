@@ -15,6 +15,7 @@ const KEYS = {
   connection: 'cl.connection',
   ended: 'cl.ended',
   sites: 'cl.sites',
+  siteIntent: 'cl.siteIntent',
   applications: 'cl.applications',
   pages: 'cl.pages',
 } as const
@@ -45,6 +46,25 @@ export const connectionRecordSchema = z.object({
 /** Origins the user turned ContextLayer on for, in one workspace. */
 const sitesSchema = z.object({ workspaceId: z.string(), origins: z.array(z.string()) })
 
+/**
+ * The user asked to turn ContextLayer on for one origin and Chrome's prompt may
+ * still be open: the worker completes the activation once Chrome grants the
+ * origin, even if the popup that asked is gone (ADR 0017).
+ */
+export const siteIntentSchema = z.object({
+  id: z.string(),
+  /** The connection and workspace the request belongs to. */
+  grantId: z.string(),
+  workspaceId: z.string(),
+  /** The exact origin and the pattern Chrome was asked for. */
+  origin: z.string(),
+  pattern: z.string(),
+  /** The tab the popup was opened on: it must still show that origin. */
+  tabId: z.number().int(),
+  createdAt: z.number(),
+  expiresAt: z.number(),
+})
+
 /** The connection's registered applications, cached for this browser session. */
 const applicationsCacheSchema = z.object({
   grantId: z.string(),
@@ -64,6 +84,7 @@ export type RefreshRecord = z.infer<typeof refreshSchema>
 export type ConnectionRecord = z.infer<typeof connectionRecordSchema>
 export type ApplicationsCache = z.infer<typeof applicationsCacheSchema>
 export type PageRecords = z.infer<typeof pagesSchema>
+export type SiteIntent = z.infer<typeof siteIntentSchema>
 
 async function read<T>(
   area: StorageArea,
@@ -113,6 +134,10 @@ export function createVault(storage: ExtensionStorage) {
       await (await persistentArea()).set({ [KEYS.sites]: { workspaceId, origins } })
     },
 
+    readSiteIntent: () => read(storage.session, KEYS.siteIntent, siteIntentSchema),
+    writeSiteIntent: (intent: SiteIntent) => storage.session.set({ [KEYS.siteIntent]: intent }),
+    clearSiteIntent: () => storage.session.remove(KEYS.siteIntent),
+
     readApplications: () => read(storage.session, KEYS.applications, applicationsCacheSchema),
     writeApplications: (cache: ApplicationsCache) =>
       storage.session.set({ [KEYS.applications]: cache }),
@@ -136,7 +161,13 @@ export function createVault(storage: ExtensionStorage) {
     async clearConnection(ended: boolean, at: number): Promise<void> {
       await storage.session.remove(KEYS.access)
       await storage.local.remove([KEYS.refresh, KEYS.connection, KEYS.sites])
-      await storage.session.remove([KEYS.refresh, KEYS.connection, KEYS.sites, KEYS.applications])
+      await storage.session.remove([
+        KEYS.refresh,
+        KEYS.connection,
+        KEYS.sites,
+        KEYS.siteIntent,
+        KEYS.applications,
+      ])
       if (ended) await storage.session.set({ [KEYS.ended]: { reason: 'ended', at } })
       else await storage.session.remove(KEYS.ended)
     },

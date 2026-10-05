@@ -42,7 +42,8 @@ function deps(fetchApiHealth = vi.fn(() => Promise.resolve(report))) {
     site: {
       applications: vi.fn(() => Promise.resolve({ applications: [] })),
       status: vi.fn(() => Promise.resolve(siteStatus)),
-      enable: vi.fn(() => Promise.resolve(siteStatus)),
+      requestActivation: vi.fn(() => Promise.resolve({ intentId: 'intent-1' })),
+      cancelActivation: vi.fn(() => Promise.resolve({ cancelled: true })),
       disable: vi.fn(() => Promise.resolve(siteStatus)),
       hello: vi.fn(() => Promise.resolve({ active: true })),
     },
@@ -59,7 +60,8 @@ const PRIVILEGED = [
   { type: 'connection.disconnect' },
   { type: 'applications.list' },
   { type: 'site.status', tabId: 7 },
-  { type: 'site.enable', tabId: 7 },
+  { type: 'site.requestActivation', tabId: 7 },
+  { type: 'site.cancelActivation', intentId: 'intent-1' },
   { type: 'site.disable', tabId: 7 },
 ] as const
 
@@ -172,11 +174,19 @@ describe('handleBackgroundMessage', () => {
   it('routes site commands from the popup with the tab it names', async () => {
     const handlers = deps()
 
-    await handleBackgroundMessage({ type: 'site.enable', tabId: 12 }, popupSender, handlers)
+    await handleBackgroundMessage(
+      { type: 'site.requestActivation', tabId: 12 },
+      popupSender,
+      handlers,
+    )
 
-    expect(handlers.site.enable).toHaveBeenCalledWith(12)
+    expect(handlers.site.requestActivation).toHaveBeenCalledWith(12)
     expect(
-      await handleBackgroundMessage({ type: 'site.enable', tabId: -1 }, popupSender, handlers),
+      await handleBackgroundMessage(
+        { type: 'site.requestActivation', tabId: -1 },
+        popupSender,
+        handlers,
+      ),
     ).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
   })
 

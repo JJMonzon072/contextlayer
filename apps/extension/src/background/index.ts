@@ -71,7 +71,7 @@ const onConnectionChanged = () => {
   reconcileSites()
   return Promise.resolve()
 }
-const { vault, auth, connection } = createWorkerCore({
+const { vault, lifecycle, auth, connection } = createWorkerCore({
   storage: chromeStorage(),
   api,
   now,
@@ -81,7 +81,7 @@ const { vault, auth, connection } = createWorkerCore({
   extensionId: chrome.runtime.id,
   onChanged: onConnectionChanged,
 })
-const site = createSiteAccess({ vault, auth, chrome: siteChrome, apiPattern, now })
+const site = createSiteAccess({ vault, auth, lifecycle, chrome: siteChrome, apiPattern, now })
 
 // Restrict chrome.storage.local before anything can write a credential to it.
 void vault.ready().then((restricted) => {
@@ -101,7 +101,9 @@ chrome.runtime.onStartup.addListener(() => {
 })
 
 // The user (or Chrome) granted or withdrew host access, including from
-// chrome://extensions: scripts follow the grant, and the popup is refreshed.
+// chrome://extensions: scripts follow the grant, a pending "Turn on" request
+// for the granted origin completes (and nothing else is turned on), and the
+// popup is refreshed.
 chrome.permissions.onAdded.addListener(() => {
   reconcileSites()
   broadcastChange()
