@@ -12,6 +12,8 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       idleTimeoutMs: 30 * 60_000,
       absoluteTimeoutMs: 8 * 3_600_000,
     },
+    http: { dashboardOrigins: ['http://localhost:5173', 'http://localhost:4173'], trustProxy: [] },
+    rateLimits: { windowMs: 15 * 60_000, loginMax: 10, registerMax: 20 },
     ...overrides,
   }
 }
