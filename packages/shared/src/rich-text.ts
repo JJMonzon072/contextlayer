@@ -11,6 +11,8 @@ import { hasControlCharacters, isValidHostname, parseUrl } from './url.js'
 export const RICH_TEXT_MARKS = ['bold', 'italic', 'code'] as const
 export const RICH_TEXT_MAX_BLOCKS = 20
 export const RICH_TEXT_MAX_CHARACTERS = 2000
+/** Text and link nodes per document, so the JSON stays small even with one character per node. */
+export const RICH_TEXT_MAX_NODES = 200
 
 const textValue = z
   .string()
@@ -84,6 +86,25 @@ function inlineText(inline: readonly RichTextInline[]): string {
     .join('')
 }
 
+function inlineNodeCount(inline: readonly RichTextInline[]): number {
+  return inline.reduce(
+    (total, node) => total + 1 + (node.type === 'link' ? node.children.length : 0),
+    0,
+  )
+}
+
+/** Inline nodes of the whole document (a link counts with its text runs). */
+export function richTextNodeCount(document: RichText): number {
+  return document.blocks.reduce(
+    (total, block) =>
+      total +
+      (block.type === 'paragraph'
+        ? inlineNodeCount(block.children)
+        : block.items.reduce((sum, item) => sum + inlineNodeCount(item), 0)),
+    0,
+  )
+}
+
 /** Every character of visible text, for the length limit and for previews. */
 export function richTextCharacterCount(document: RichText): number {
   return document.blocks.reduce(
@@ -106,6 +127,12 @@ export const richTextV1Schema = z
       ctx.addIssue({
         code: 'custom',
         message: `Use at most ${String(RICH_TEXT_MAX_CHARACTERS)} characters.`,
+      })
+    }
+    if (richTextNodeCount(document) > RICH_TEXT_MAX_NODES) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `Use at most ${String(RICH_TEXT_MAX_NODES)} formatted runs of text.`,
       })
     }
   })

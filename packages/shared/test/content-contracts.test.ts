@@ -152,6 +152,30 @@ describe('richTextSchema', () => {
     expect(richTextSchema.safeParse(document).success).toBe(false)
   })
 
+  it('bounds the number of text runs, so one character per node cannot bloat a body', () => {
+    const runs = (count: number) =>
+      Array.from({ length: count }, () => ({ type: 'text', text: 'x', marks: ['bold'] }))
+    expect(
+      richTextSchema.safeParse({
+        version: 1,
+        blocks: [
+          { type: 'paragraph', children: runs(100) },
+          { type: 'paragraph', children: runs(100) },
+        ],
+      }).success,
+    ).toBe(true)
+    expect(
+      richTextSchema.safeParse({
+        version: 1,
+        blocks: [
+          { type: 'paragraph', children: runs(100) },
+          { type: 'paragraph', children: runs(100) },
+          { type: 'paragraph', children: runs(1) },
+        ],
+      }).success,
+    ).toBe(false)
+  })
+
   it('bounds total length, block count, marks and control characters', () => {
     const paragraph = (text: string) => ({ type: 'paragraph', children: [{ type: 'text', text }] })
     expect(

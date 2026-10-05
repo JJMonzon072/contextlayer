@@ -54,6 +54,7 @@ const ERRORS: Record<GuideError, DomainErrorReply> = {
 }
 
 const BASE = `${WORKSPACES_PATH}/:workspaceId/guides`
+const STEPS_BODY_LIMIT = 2 * 1024 * 1024
 const workspaceParams = z.object({ workspaceId: z.uuid() })
 const guideParams = z.object({ workspaceId: z.uuid(), guideId: z.uuid() })
 const versionParams = guideParams.extend({
@@ -148,6 +149,9 @@ export const guideRoutes: FastifyPluginAsyncZod<GuideRoutesOptions> = (app, opti
   app.put(
     `${BASE}/:guideId/steps`,
     {
+      // 50 steps × (a descriptor of up to 16 KB + instructions) can pass the
+      // 1 MiB default while every field is within its contract limits.
+      bodyLimit: STEPS_BODY_LIMIT,
       schema: {
         params: guideParams,
         body: replaceStepsRequestSchema,
