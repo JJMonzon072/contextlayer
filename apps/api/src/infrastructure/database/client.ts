@@ -5,6 +5,24 @@ import * as schema from './schema.js'
 
 export type DrizzleDatabase = NodePgDatabase<typeof schema>
 
+/** The database or an open transaction: repositories accept either. */
+export type DbExecutor =
+  DrizzleDatabase | Parameters<Parameters<DrizzleDatabase['transaction']>[0]>[0]
+
+/** True when `error` (or the driver error Drizzle wraps) violates `constraint`. */
+export function isUniqueViolation(error: unknown, constraint: string): boolean {
+  const driverError: unknown =
+    error instanceof Error && error.cause !== undefined ? error.cause : error
+  return (
+    typeof driverError === 'object' &&
+    driverError !== null &&
+    'code' in driverError &&
+    driverError.code === '23505' &&
+    'constraint' in driverError &&
+    driverError.constraint === constraint
+  )
+}
+
 export interface Database {
   /** Query builder for repositories. */
   readonly db: DrizzleDatabase

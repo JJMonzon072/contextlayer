@@ -11,9 +11,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "db:generate": "pnpm --filter @contextlayer/shared run build && drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:check": "drizzle-kit check"
+    "db:check": "pnpm --filter @contextlayer/shared run build && drizzle-kit check"
   },
   "dependencies": {
     "@contextlayer/shared": "workspace:*",
