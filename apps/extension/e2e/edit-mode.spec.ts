@@ -553,13 +553,13 @@ test('switching tabs keeps Edit Mode bound to the tab it was opened on', async (
   test.info().annotations.push({ type: 'panel-after-tab-switch', description: behaviour })
   process.stdout.write(`[diagnostic] side panel after a tab switch: ${behaviour}\n`)
   if (!panel.isClosed()) {
-    // macOS (measured): the panel's document survives, the selection goes on in its tab.
+    // Seen on macOS and in most CI runs: the panel's document survives, the selection goes on.
     await page.getByTestId('new-customer').click()
     await expect(step.getByRole('button', { name: 'Use this element' })).toBeVisible()
     await expectPageUntouched(page)
     return
   }
-  // Linux CI (measured): Chrome closed the hidden panel's page. Its session ended with
+  // Seen once in Linux CI: Chrome closed the hidden panel's page. Its session ended with
   // it, nothing is left on the page, and the unsaved step is offered back.
   await expect.poll(async () => (await overlayParts(page)).hosts).toBe(0)
   for (const stale of await sidePanels(extensionBrowser)) await stale.close()

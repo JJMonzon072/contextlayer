@@ -16,7 +16,7 @@ Facts measured in a spike on 2026-10-05 (Playwright's Chromium 153, new headless
 
 - the `sidePanel` permission alone is enough; no `side_panel` manifest key is needed;
 - from a popup click, `chrome.sidePanel.setOptions({ tabId, path, enabled: true })` (not awaited) followed by `chrome.sidePanel.open({ tabId })` in the same task opens the panel; awaiting a message before `open()` risks losing the click's user activation;
-- on macOS the panel document stayed alive when another tab came to the front; on GitHub's Linux runners (same Chromium 153, seen in CI on 2026-10-05) Chrome closed the hidden panel's page instead. The panel's runtime messages carry `sender.url` = `sidepanel.html?tab=…` and no `sender.tab`;
+- on macOS the panel document stayed alive when another tab came to the front. In one CI run on GitHub's Linux runners (same Chromium 153, run 37374463326 on 2026-10-05) the hidden panel's page was closed instead, while a later Linux run (37386059205, which logs the behaviour) kept it: the behaviour is not consistent, and both are handled. The panel's runtime messages carry `sender.url` = `sidepanel.html?tab=…` and no `sender.tab`;
 - `setOptions({ tabId, enabled: false })` closes a tab's panel; the panel page is reachable from Playwright through a CDP connection made after it exists.
 
 `minimum_chrome_version` is 120: `sidePanel` exists since Chrome 114 and `open()` since 116; `sidePanel.onClosed` (Chrome 142) and `close()` (141) are newer and are only used when present.
@@ -55,7 +55,7 @@ Positive:
 Negative / trade-offs:
 
 - One Edit Mode session per browser at a time.
-- Where Chrome closes a hidden panel on a tab switch (Linux above), the switch ends the session like closing the panel: any picker is removed, and steps not yet saved come back from the local copy when Edit Mode is opened again; a selection under review is lost. The e2e scenario checks both behaviours, whichever the platform shows.
+- Where Chrome closes a hidden panel on a tab switch (seen once in CI, above), the switch ends the session like closing the panel: any picker is removed, and steps not yet saved come back from the local copy when Edit Mode is opened again; a selection under review is lost. The e2e scenario checks both behaviours, whichever the platform shows.
 - Without `sidePanel.onClosed` (Chrome < 142), closing the panel is noticed through `pagehide`, which is best effort; a picker left behind stops at its 2-minute limit or with Escape.
 - A preview needs the element selected on the current page; a step loaded from the server is never looked up (that is the Phase 6 resolver), so it asks to be selected again.
 - Opening needs a real click in the popup; there is no keyboard shortcut yet.
