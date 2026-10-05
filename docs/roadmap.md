@@ -236,6 +236,32 @@ Verification (on the final Phase 5 code, branch `JJ`):
 
 Not covered by automation (manual checks for JJ): Edit Mode in Google Chrome with the regular build on `pnpm demo:site`; opening the panel with the toolbar icon click (the e2e opens the popup with `chrome.action.openPopup`); closing the panel with Chrome's own close button in Chrome 142+ and older (`sidePanel.onClosed` versus `pagehide`); Chrome 120; a real customer application.
 
+Review fixes (after `4f81962`, PR #4 review):
+
+- **Editable content through auxiliary paths.** The text extractor checked form controls and editable regions only below its root, so the heading before a target, a label or an `aria-labelledby` reference inside an editable region, or a container named by an editable heading could put text a user typed into the descriptor. The root now goes through the same checks, editability is inherited as browsers do (including `plaintext-only`, `false` islands, `inherit` and design mode), and nodes inside an editable region are not read at all ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- **Order of the last copy and the close.** On `pagehide` the panel queued its last copy behind any copy still waiting for an answer and sent the detach at once, so the worker could end the session first and refuse the last copy; a new edit also kept showing the previous copy as kept. The close now carries the unconfirmed copy in the same message, kept and ended in one transition; copies are versioned per panel; writes and clears run inside life-cycle transitions with the ownership check ([ADR 0018](adr/0018-side-panel-edit-mode.md)).
+- Verification: the new tests were run against the code of `4f81962` first and failed for the expected reason:
+  - capture: 7 tests, the private text reached the descriptor;
+  - worker: 5 tests:
+    - a copy reappeared after Disconnect;
+    - an old clear deleted a later session's copy;
+    - an older write replaced a newer one;
+    - the closing copy was lost;
+    - a page that never answers held the session up;
+  - panel: 2 tests, "kept" was shown for a newer edit;
+  - panel-to-worker integration: 2 tests, the copy offered back was an older version, or none.
+
+  Tests added after the fix and only run with it:
+  - three more integration cases (native close first, Disconnect, Exit);
+  - a save that leaves later edits (checked failing by removing that one change);
+  - two e2e scenarios.
+
+- Verification (final review-fix code):
+  - `pnpm test`: 718 tests in 64 files (extension 290);
+  - `pnpm test:e2e`: dashboard 12/12 and extension 39/39, including a demo page with a fictitious editable note whose text never reaches the saved descriptor, and an edit typed right before the real side panel closed that is offered back;
+  - `content.js` is 26 805 bytes;
+  - `drizzle-kit check` is clean; no migration.
+
 Out of scope (unchanged): picking inside shadow roots and iframes (6c), playback and the resolver (6), hand-edited selectors, Previous/Next/Finish, analytics, screenshots.
 
 Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (strict CSP verified, `jitless`), R-11 (authoring in the side panel, bound captures), R-15 (budget). ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) capture Accepted (resolution still Proposed); [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the picker and preview; new [ADR 0018](adr/0018-side-panel-edit-mode.md); [ADR 0006](adr/0006-vue-3-frontend-framework.md): the side panel uses Vue, the in-page UI stays framework-free.
