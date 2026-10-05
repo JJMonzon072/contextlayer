@@ -356,6 +356,28 @@ test('warns about a positional-only target, ignores dynamic ids and cancels with
   await expectPageUntouched(page)
 })
 
+test('never stores text typed in an editable region next to the target', async ({
+  context,
+  extensionBrowser,
+}) => {
+  const workspace = await acme(context)
+  const page = await demoPage(context, extensionBrowser)
+  const panel = await openEditMode(extensionBrowser, page)
+  await createGuide(panel, 'Share notes')
+  const step = await addStep(panel, 'Share the notes')
+  await capture(panel, step, () => page.getByTestId('share-notes').click())
+  await step.getByRole('button', { name: 'Use this element' }).click()
+  await panel.getByTestId('save').click()
+  await expect(panel.getByTestId('save-state')).toContainText('Saved to ContextLayer at')
+
+  const [saved] = (await savedGuide(workspace, 'Share notes')).steps
+  expect(saved?.target?.element).toMatchObject({ tag: 'button', accessibleName: 'Share notes' })
+  expect(JSON.stringify(saved?.target)).not.toMatch(/renegotiate|Private note/)
+  expect(saved?.target?.anchors.some((anchor) => anchor.relation === 'precedingHeading')).toBe(
+    false,
+  )
+})
+
 test('works under a strict CSP with Trusted Types, without a single violation', async ({
   context,
   extensionBrowser,

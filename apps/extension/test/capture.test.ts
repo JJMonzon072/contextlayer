@@ -2,7 +2,7 @@ import { targetDescriptorSchema, type TargetDescriptor } from '@contextlayer/sha
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { summarizeTarget } from '../src/authoring/target-summary'
-import { accessibleName, roleOf } from '../src/content/capture/accessible'
+import { accessibleName, contentText, labelText, roleOf } from '../src/content/capture/accessible'
 import { captureTarget, countText, promote } from '../src/content/capture/descriptor'
 import { pagePattern } from '../src/content/capture/page'
 
@@ -415,5 +415,182 @@ describe('accessible name', () => {
     expect(accessibleName(element('input[type="submit"]'))).toBe('Send')
     expect(roleOf(element('a'))).toBe('link')
     expect(roleOf(element('input[type="submit"]'))).toBe('button')
+  })
+})
+
+/**
+ * Text a user may have typed (form-control values and editable regions,
+ * whether editable themselves or by inheritance) is never read, by any path
+ * that builds the descriptor. All fixtures are fictitious.
+ */
+describe('editable content', () => {
+  /** Every string a descriptor stores, in one place, to check nothing private got in. */
+  const everything = (descriptor: TargetDescriptor) => JSON.stringify(descriptor)
+
+  it('never reads an editable heading before the target', () => {
+    page(`
+      <h2 contenteditable="true">Private draft for the merger</h2>
+      <button id="save">Save</button>
+    `)
+
+    const descriptor = capture('#save')
+
+    expect(everything(descriptor)).not.toContain('Private draft')
+    expect(everything(descriptor)).not.toContain('merger')
+    expect(descriptor.anchors.some((anchor) => anchor.relation === 'precedingHeading')).toBe(false)
+    expect(descriptor.element).toMatchObject({
+      tag: 'button',
+      accessibleName: 'Save',
+      text: 'Save',
+    })
+  })
+
+  it('never reads a heading that is editable through its container', () => {
+    page(`
+      <div contenteditable="true">
+        <h2>Private notes about the acquisition</h2>
+      </div>
+      <button id="save">Save</button>
+    `)
+
+    expect(everything(capture('#save'))).not.toMatch(/Private notes|acquisition/)
+  })
+
+  it('treats plaintext-only and inherited editability as editable', () => {
+    page(`
+      <h2 contenteditable="plaintext-only">Plaintext pricing idea</h2>
+      <div contenteditable="true"><section contenteditable="inherit"><h3>Inherited board memo</h3></section></div>
+      <div contenteditable="true"><span contenteditable="false"><h4>Mention of Dana Ficticia</h4></span></div>
+      <button id="save">Save</button>
+    `)
+
+    expect(everything(capture('#save'))).not.toMatch(/pricing idea|board memo|Dana Ficticia/)
+    expect(contentText(element('h2'))).toBe('')
+    expect(contentText(element('h3'))).toBe('')
+    expect(contentText(element('h4'))).toBe('')
+  })
+
+  it('returns nothing when the extractor is given an editable root directly', () => {
+    page(`
+      <div id="editor" contenteditable="true"><p>Typed by a user</p></div>
+      <div id="island" contenteditable=""><b>Also typed</b></div>
+      <textarea id="notes">Textarea default text</textarea>
+      <p id="plain">Written by the page</p>
+    `)
+
+    expect(contentText(element('#editor'))).toBe('')
+    expect(contentText(element('#editor p'))).toBe('')
+    expect(contentText(element('#island'))).toBe('')
+    expect(contentText(element('#notes'))).toBe('')
+    expect(contentText(element('#plain'))).toBe('Written by the page')
+  })
+
+  it('never reads labels or aria-labelledby references inside an editable region', () => {
+    page(`
+      <div contenteditable="true">
+        <label for="email">Private label for Dana</label>
+        <span id="caption">Private caption about Dana</span>
+      </div>
+      <input id="email" type="email" value="dana.ficticia@example.test" placeholder="Email">
+      <button id="go" aria-labelledby="caption">Go</button>
+    `)
+    const email = capture('#email')
+    const go = capture('#go')
+
+    expect(labelText(element('#email'))).toBe('')
+    expect(everything(email)).not.toMatch(/Private label|dana\.ficticia|Dana/)
+    expect(email.element.accessibleName).toBe('Email')
+    expect(locator(email, 'label')).toBeUndefined()
+    expect(email.anchors.some((anchor) => anchor.relation === 'label')).toBe(false)
+    expect(everything(go)).not.toContain('Private caption')
+    expect(go.element.accessibleName).toBe('Go')
+  })
+
+  it('never names a container from an editable heading', () => {
+    page(`
+      <section role="region" aria-labelledby="region-title">
+        <h2 id="region-title" contenteditable="true">Private region title</h2>
+        <button id="save">Save</button>
+      </section>
+    `)
+
+    const descriptor = capture('#save')
+
+    expect(everything(descriptor)).not.toContain('Private region title')
+    expect(descriptor.container).toEqual({ kind: 'region', role: 'region' })
+  })
+
+  it('reads nothing from a node inside an editable region, not even its attributes', () => {
+    page(`
+      <div contenteditable="true">
+        <p id="typed" title="Private title" data-testid="private-note" class="note">Private paragraph</p>
+      </div>
+    `)
+
+    const descriptor = capture('#typed')
+
+    expect(everything(descriptor)).not.toMatch(/Private|private-note/)
+    expect(descriptor.element.accessibleName).toBeUndefined()
+    expect(descriptor.element.text).toBeUndefined()
+    expect(descriptor.element.attributes).toEqual({})
+    expect(descriptor.element.testIds).toEqual([])
+    // Only what was counted on the page is stored: no invented exact locator.
+    expect(descriptor.locators.map((candidate) => candidate.strategy)).toEqual(['cssPath'])
+    expect(locator(descriptor, 'cssPath')?.matchCount).toBe(1)
+  })
+
+  it('keeps the page-authored attributes of an editing host itself', () => {
+    page(
+      `<div contenteditable="true" aria-label="Comment" data-testid="comment-box">Typed text</div>`,
+    )
+
+    const descriptor = capture('[contenteditable]')
+
+    expect(everything(descriptor)).not.toContain('Typed text')
+    expect(descriptor.element.accessibleName).toBe('Comment')
+    expect(locator(descriptor, 'testId')).toMatchObject({ value: 'comment-box', matchCount: 1 })
+  })
+
+  it('does not count editable copies of a text as matches', () => {
+    page(`
+      <div contenteditable="true"><span>Save</span></div>
+      <button id="save">Save</button>
+    `)
+
+    expect(countText(document, 'Save')).toBe(1)
+    expect(locator(capture('#save'), 'text')).toMatchObject({ text: 'Save', matchCount: 1 })
+  })
+
+  it('reads nothing on a document in design mode', () => {
+    page(
+      `<h2>Heading typed in design mode</h2><button id="save">Button typed in design mode</button>`,
+    )
+    document.designMode = 'on'
+    try {
+      const descriptor = capture('#save')
+
+      expect(everything(descriptor)).not.toContain('typed in design mode')
+      expect(descriptor.locators.map((candidate) => candidate.strategy)).toEqual(['cssPath'])
+    } finally {
+      document.designMode = 'off'
+    }
+  })
+
+  it('still reads a regular heading, and never form values', () => {
+    page(`
+      <h2>Customer details</h2>
+      <label for="name">Name</label><input id="name" value="Dana Ficticia">
+      <textarea aria-label="Notes">Private notes</textarea>
+      <button id="save">Save</button>
+    `)
+    const save = capture('#save')
+
+    expect(save.anchors).toContainEqual({
+      relation: 'precedingHeading',
+      level: 2,
+      text: 'Customer details',
+    })
+    expect(everything(capture('#name'))).not.toContain('Dana')
+    expect(everything(capture('textarea'))).not.toContain('Private notes')
   })
 })

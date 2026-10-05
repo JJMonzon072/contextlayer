@@ -7,11 +7,19 @@ import { normalizeText } from './text'
  * This is a deliberately small subset of WAI-ARIA role mapping and of
  * accname 1.2, not a conforming implementation: explicit roles, the implicit
  * roles of common elements, and names from `aria-labelledby`, `aria-label`,
- * `<label>`, `alt`, element content and `title`/`placeholder`. It never
- * reads what users typed: form-control values, editable content and
- * password fields are skipped wherever the algorithm would include them. The
- * same functions are used to capture a name and to count the elements that
- * share it, so `matchCount` and the stored name follow one definition.
+ * `<label>`, `alt`, element content and `title`/`placeholder`. The same
+ * functions are used to capture a name and to count the elements that share
+ * it, so `matchCount` and the stored name follow one definition.
+ *
+ * What users typed is never read, whatever path asks for text: form controls
+ * (`input`, `textarea`, `select`) and editable content are excluded at the
+ * root of every extraction and at every node below it, including content
+ * that is editable only because an ancestor is (an editing host, a
+ * non-editable island inside one, or a document in design mode). Inside an
+ * editable region not even attributes are read, since the user may have
+ * pasted those nodes; the editing host's own attributes are the page's.
+ * This exclusion is separate from the redaction of allowed text (`text.ts`),
+ * which is a heuristic and does not find every piece of personal data.
  */
 
 const INPUT_ROLES: Record<string, string> = {
@@ -93,12 +101,47 @@ const NAME_FROM_CONTENT = new Set([
   'tooltip',
 ])
 
-/** Elements whose content a user may have typed: never read. */
+/** `contenteditable` values that make an element an editing host. */
+const EDITING_HOST_VALUES = new Set(['', 'true', 'plaintext-only'])
+
+/**
+ * The nearest element, `element` or an ancestor, that makes it editable: an
+ * editing host, or the root element of a document in design mode. Values such
+ * as `false` (a non-editable island) or `inherit` do not end the search: what
+ * sits inside an editing host is the user's content either way.
+ */
+export function editingHost(element: Element): Element | undefined {
+  const document = element.ownerDocument
+  if (document.designMode === 'on') return document.documentElement
+  for (let current: Element | null = element; current; current = current.parentElement) {
+    const value = current.getAttribute('contenteditable')
+    if (value !== null && EDITING_HOST_VALUES.has(value.trim().toLowerCase())) return current
+  }
+  return undefined
+}
+
+/** Elements whose content a user may have typed or chosen: never read. */
 export function isUserContent(element: Element): boolean {
-  if (element.localName === 'input' || element.localName === 'textarea') return true
-  if (element.localName === 'select') return true
-  const editable = element.closest('[contenteditable]')
-  return editable !== null && editable.getAttribute('contenteditable') !== 'false'
+  const tag = element.localName
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  return editingHost(element) !== undefined
+}
+
+/** A form control or an editing host by its own markup (ancestors aside). */
+function isOwnUserContent(element: Element): boolean {
+  const tag = element.localName
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  const value = element.getAttribute('contenteditable')
+  return value !== null && EDITING_HOST_VALUES.has(value.trim().toLowerCase())
+}
+
+/**
+ * Nodes inside an editable region (not its host): the user may have created
+ * them, so neither their text nor their attributes are read.
+ */
+export function isUserAuthored(element: Element): boolean {
+  const parent = element.parentElement
+  return parent !== null && editingHost(parent) !== undefined
 }
 
 function isHidden(element: Element): boolean {
@@ -115,9 +158,12 @@ function isHidden(element: Element): boolean {
 /**
  * Visible text of a subtree without user content: no form-control values, no
  * editable regions, no hidden or script nodes; images contribute their alt.
+ * The root is checked like every node below it: an editable or hidden root
+ * (unlike accname, also one referenced by `aria-labelledby`) gives ''.
  * Bounded so a huge subtree does not make one capture slow.
  */
 export function contentText(root: Element, limit = 400): string {
+  if (isHidden(root) || isUserContent(root)) return ''
   let text = ''
   const visit = (node: Node): void => {
     if (text.length > limit) return
@@ -127,7 +173,9 @@ export function contentText(root: Element, limit = 400): string {
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return
     const element = node as Element
-    if (isHidden(element) || isUserContent(element)) return
+    // The root and its ancestors passed `isUserContent`: below it, a node is
+    // user content when it, or a node the walk already skipped, is.
+    if (isHidden(element) || isOwnUserContent(element)) return
     if (element.localName === 'img') {
       text += ` ${element.getAttribute('alt') ?? ''} `
       return
@@ -163,8 +211,9 @@ export function labelText(element: Element): string {
   )
 }
 
-/** The accessible name, normalized; '' when there is none. */
+/** The accessible name, normalized; '' when there is none (always for user-authored nodes). */
 export function accessibleName(element: Element): string {
+  if (isUserAuthored(element)) return ''
   const labelledBy = element.getAttribute('aria-labelledby')
   if (labelledBy) {
     const document = element.ownerDocument

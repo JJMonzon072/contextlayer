@@ -1,6 +1,13 @@
 import type { TargetDescriptor, TargetLocator } from '@contextlayer/shared'
 
-import { accessibleName, contentText, isUserContent, labelText, roleOf } from './accessible'
+import {
+  accessibleName,
+  contentText,
+  isUserAuthored,
+  isUserContent,
+  labelText,
+  roleOf,
+} from './accessible'
 import { isGeneratedId, isRecordId, isStableClass, isStableTestId } from './identity'
 import { pagePattern } from './page'
 import {
@@ -179,6 +186,7 @@ export function countText(document: Document, text: string): number | undefined 
 }
 
 function testIdsOf(element: Element): { attr: (typeof TEST_ATTRIBUTES)[number]; value: string }[] {
+  if (isUserAuthored(element)) return []
   return TEST_ATTRIBUTES.flatMap((attr) => {
     const value = element.getAttribute(attr)
     return value !== null && isStableTestId(value) && exactText(value) === value
@@ -189,6 +197,7 @@ function testIdsOf(element: Element): { attr: (typeof TEST_ATTRIBUTES)[number]; 
 
 /** An id usable as a signal: not generated, not redacted or cut. */
 function stableId(element: Element): string | undefined {
+  if (isUserAuthored(element)) return undefined
   const id = element.getAttribute('id')
   return id !== null && !isGeneratedId(id) && exactText(id) === id ? id : undefined
 }
@@ -270,7 +279,7 @@ function anchorsOf(element: Element): TargetDescriptor['anchors'] {
       text: headingText.text,
     })
   }
-  if (['input', 'select', 'textarea'].includes(element.localName)) {
+  if (['input', 'select', 'textarea'].includes(element.localName) && !isUserAuthored(element)) {
     const label = capturedText(labelText(element))
     if (label) anchors.push({ relation: 'label', text: label.text })
   }
@@ -280,6 +289,9 @@ function anchorsOf(element: Element): TargetDescriptor['anchors'] {
 function locatorsOf(element: Element, role: string | undefined): TargetLocator[] {
   const document = element.ownerDocument
   const locators: TargetLocator[] = []
+  // A node the user may have created inside an editable region: only its
+  // position on the page describes it.
+  const authored = isUserAuthored(element)
   /** Only locators that were counted and match at least the captured element are kept. */
   const add = (count: number | undefined, locator: object) => {
     if (count === undefined || count === 0 || locators.length >= 12) return
@@ -304,15 +316,17 @@ function locatorsOf(element: Element, role: string | undefined): TargetLocator[]
   if (role && name) {
     add(countRoleName(document, role, name), { strategy: 'role', role, name, exact: true })
   }
-  if (['input', 'select', 'textarea'].includes(element.localName)) {
+  if (['input', 'select', 'textarea'].includes(element.localName) && !authored) {
     const label = exactText(labelText(element))
     if (label) add(countLabel(document, label), { strategy: 'label', text: label, exact: true })
   }
-  for (const [attr, strategy] of [
-    ['placeholder', 'placeholder'],
-    ['alt', 'altText'],
-    ['title', 'title'],
-  ] as const) {
+  for (const [attr, strategy] of authored
+    ? []
+    : ([
+        ['placeholder', 'placeholder'],
+        ['alt', 'altText'],
+        ['title', 'title'],
+      ] as const)) {
     const raw = element.getAttribute(attr)
     // Only when the attribute is stored exactly as the page has it.
     if (raw !== null && exactText(raw) === raw) {
@@ -327,8 +341,8 @@ function locatorsOf(element: Element, role: string | undefined): TargetLocator[]
     const text = exactText(contentText(element))
     if (text) add(countText(document, text), { strategy: 'text', text, exact: true })
   }
-  const classes = [...element.classList].filter(isStableClass).slice(0, 3)
-  const type = element.getAttribute('type')
+  const classes = authored ? [] : [...element.classList].filter(isStableClass).slice(0, 3)
+  const type = authored ? null : element.getAttribute('type')
   const css = [
     element.localName,
     ...classes.map((name) => `.${cssEscape(name)}`),
@@ -343,18 +357,19 @@ function locatorsOf(element: Element, role: string | undefined): TargetLocator[]
 }
 
 function elementOf(element: Element, role: string | undefined): TargetDescriptor['element'] {
+  const authored = isUserAuthored(element)
   const name = capturedText(accessibleName(element))
   const text = isUserContent(element) ? undefined : capturedText(contentText(element))
-  const rawId = element.getAttribute('id')
+  const rawId = authored ? null : element.getAttribute('id')
   // A generated id is kept as a flagged hint (ADR 0014); a record id is not kept at all.
   const id =
     rawId !== null && !isRecordId(rawId) && exactText(rawId) === rawId
       ? { value: rawId, generated: isGeneratedId(rawId) }
       : undefined
-  const classes = [...element.classList]
+  const classes = authored ? [] : [...element.classList]
   const stable = classes.filter(isStableClass).slice(0, 10)
   const attributes = Object.fromEntries(
-    DESCRIBING_ATTRIBUTES.flatMap((attr) => {
+    (authored ? [] : DESCRIBING_ATTRIBUTES).flatMap((attr) => {
       const value = element.getAttribute(attr)
       return value === null ? [] : [[attr, capturedText(value)?.text ?? null]]
     }),

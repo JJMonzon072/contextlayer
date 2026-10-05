@@ -1,3 +1,4 @@
+import { isUserAuthored } from './accessible'
 import { isGeneratedId, isStableTestId } from './identity'
 
 /** Longest selector a descriptor may store; a longer one is dropped, never cut. */
@@ -73,8 +74,9 @@ export function nthOfType(element: Element): { index: number; count: number } {
   return { index: same.indexOf(element) + 1, count: same.length }
 }
 
-/** An ancestor that can start a path: a stable, unique id or test id. */
+/** An ancestor that can start a path: a stable, unique id or test id the page wrote. */
 function pathAnchor(element: Element, document: Document): string | undefined {
+  if (isUserAuthored(element)) return undefined
   const id = element.getAttribute('id')
   if (id && !isGeneratedId(id)) {
     const selector = `${tagOf(element)}#${cssEscape(id)}`
