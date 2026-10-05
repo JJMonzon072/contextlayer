@@ -169,9 +169,9 @@ describe('workspaces and memberships', () => {
     expect(
       await insertMember(db, { workspaceId: workspace.id, userId: editor.id, role: 'member' }),
     ).toEqual({ ok: false, reason: 'already-member' })
-    expect((await listMembers(db, workspace.id)).map((m) => [m.email, m.role])).toEqual([
-      ['owner@example.com', 'owner'],
-      ['editor@example.com', 'editor'],
+    expect((await listMembers(db, workspace.id)).map((m) => [m.userId, m.role])).toEqual([
+      [owner.id, 'owner'],
+      [editor.id, 'editor'],
     ])
 
     await deleteMember(db, workspace.id, editor.id)

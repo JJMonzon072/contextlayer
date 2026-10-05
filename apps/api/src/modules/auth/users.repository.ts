@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 
 import { isUniqueViolation, type DbExecutor } from '../../infrastructure/database/client.js'
 import { users } from './auth.schema.js'
@@ -37,4 +37,12 @@ export async function findUserByEmail(
 export async function findUserById(db: DbExecutor, id: string): Promise<UserRecord | undefined> {
   const [user] = await db.select().from(users).where(eq(users.id, id))
   return user
+}
+
+export async function findUserProfiles(db: DbExecutor, ids: readonly string[]) {
+  if (ids.length === 0) return []
+  return db
+    .select({ id: users.id, email: users.email, displayName: users.displayName })
+    .from(users)
+    .where(inArray(users.id, [...ids]))
 }

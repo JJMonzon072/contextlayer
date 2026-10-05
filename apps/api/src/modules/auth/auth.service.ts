@@ -20,7 +20,12 @@ import {
   hashSessionToken,
   isWellFormedSessionToken,
 } from './session-token.js'
-import { findUserByEmail, insertUser, type UserRecord } from './users.repository.js'
+import {
+  findUserByEmail,
+  findUserProfiles,
+  insertUser,
+  type UserRecord,
+} from './users.repository.js'
 
 /** `last_seen_at` is written at most this often, not on every request. */
 const TOUCH_INTERVAL_MS = 60_000
@@ -28,6 +33,11 @@ const TOUCH_INTERVAL_MS = 60_000
 export interface AuthContext {
   sessionId: string
   user: User
+}
+
+export interface UserProfile {
+  email: string
+  displayName: string
 }
 
 export interface ClientMeta {
@@ -85,6 +95,17 @@ export function createAuthService(deps: AuthServiceDeps) {
 
   return {
     sessionBody,
+
+    /** For other modules (workspaces adds members by email). */
+    async findUserIdByEmail(email: string): Promise<string | undefined> {
+      return (await findUserByEmail(db, email))?.id
+    },
+
+    /** Public profile fields only: never the password hash. */
+    async getProfiles(userIds: readonly string[]): Promise<Map<string, UserProfile>> {
+      const rows = await findUserProfiles(db, userIds)
+      return new Map(rows.map(({ id, ...profile }) => [id, profile]))
+    },
 
     async register(input: RegisterRequest, meta: ClientMeta): Promise<RegisterResult> {
       const passwordHash = await hashPassword(input.password)
