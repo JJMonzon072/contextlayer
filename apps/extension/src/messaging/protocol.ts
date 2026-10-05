@@ -50,6 +50,13 @@ export function messageResultSchema<T extends z.ZodType>(data: T) {
 /** How long the page waits for a click once the side panel asked for a target. */
 export const PICKER_TTL_MS = 120_000
 
+/** What a step preview shows on the page: its title and its instructions as lines of text. */
+export const PREVIEW_MAX_LINES = 40
+export const previewTextSchema = {
+  title: z.string().max(120),
+  lines: z.array(z.string().max(2_000)).max(PREVIEW_MAX_LINES),
+}
+
 /** One capture request, created by the worker; a content script answers only that one. */
 export const captureIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)
 /** The side panel that owns the Edit Mode session, issued by the worker on attach. */
@@ -140,6 +147,13 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
     draft: localDraftInputSchema,
   }),
   z.strictObject({ type: z.literal('authoring.local.clear'), ...panel, guideId: z.uuid() }),
+  z.strictObject({
+    type: z.literal('authoring.preview.show'),
+    ...panel,
+    captureId: captureIdSchema,
+    ...previewTextSchema,
+  }),
+  z.strictObject({ type: z.literal('authoring.preview.hide'), ...panel }),
   z.strictObject({ type: z.literal('authoring.exit'), ...panel }),
   // Best effort from the panel's pagehide: the panel is closing.
   z.strictObject({ type: z.literal('authoring.detach'), ...panel }),
@@ -331,6 +345,8 @@ export const authoringLocalResultSchema = messageResultSchema(
   z.object({ stored: z.boolean(), reason: z.enum(['too-large', 'quota']).nullable() }),
 )
 export const authoringDoneResultSchema = messageResultSchema(z.object({ done: z.boolean() }))
+/** `shown: false`: this page no longer holds that element (reloaded, removed, never selected here). */
+export const previewResultSchema = messageResultSchema(z.object({ shown: z.boolean() }))
 
 /**
  * Worker → side panel: "the Edit Mode session changed, ask again". Data-less,
@@ -359,6 +375,13 @@ export const contentRequestSchema = z.discriminatedUnion('type', [
     ttlMs: z.number().int().min(1_000).max(PICKER_TTL_MS),
   }),
   z.strictObject({ type: z.literal('picker.stop'), captureId: captureIdSchema }),
+  // Worker only: highlight the element selected under this request, with the step's text.
+  z.strictObject({
+    type: z.literal('preview.show'),
+    captureId: captureIdSchema,
+    ...previewTextSchema,
+  }),
+  z.strictObject({ type: z.literal('preview.hide') }),
 ])
 
 export type ContentRequest = z.infer<typeof contentRequestSchema>

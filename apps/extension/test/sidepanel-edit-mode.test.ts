@@ -108,6 +108,8 @@ function fakeClient(applications = [{ id: APP, name: 'Acme CRM' }]) {
       Promise.resolve(ok({ stored: true, reason: null })),
     ),
     clearLocal: vi.fn<AuthoringClient['clearLocal']>(() => Promise.resolve(ok({ done: true }))),
+    showPreview: vi.fn<AuthoringClient['showPreview']>(() => Promise.resolve(ok({ shown: true }))),
+    hidePreview: vi.fn<AuthoringClient['hidePreview']>(() => Promise.resolve(ok({ done: true }))),
     exit: vi.fn<AuthoringClient['exit']>(() => Promise.resolve(ok({ done: true }))),
     detach: vi.fn<AuthoringClient['detach']>(),
   } satisfies AuthoringClient
@@ -522,5 +524,69 @@ describe('unsaved changes and lost answers', () => {
       expect(state.unknownSave).toBe(false)
       expect(editMode.dirty.value).toBe(false)
     })
+  })
+})
+
+describe('previewing a step', () => {
+  async function withTarget() {
+    const context = await opened()
+    const [first] = context.state.steps
+    if (!first) throw new Error('no step')
+    context.editMode.setInstructions(first.key, 'Fill in the name.\n\n- Name\n- Email')
+    await context.editMode.startCapture(first.key)
+    context.client.state.mockResolvedValueOnce(active({ id: CAPTURE, state: 'done', reason: null }))
+    await context.editMode.refresh()
+    context.editMode.acceptReview()
+    return { ...context, key: first.key }
+  }
+
+  it('shows the step on the element selected on this page, as plain lines', async () => {
+    const { editMode, client, state, key } = await withTarget()
+
+    await editMode.preview(key)
+
+    expect(client.showPreview).toHaveBeenCalledWith(PANEL, CAPTURE, 'Open the form', [
+      'Fill in the name.',
+      '• Name',
+      '• Email',
+    ])
+    expect(state.preview).toBe(key)
+    await editMode.hidePreview()
+    expect(client.hidePreview).toHaveBeenCalledWith(PANEL)
+    expect(state.preview).toBeNull()
+  })
+
+  it('asks for a new selection when the page no longer holds the element', async () => {
+    const { editMode, client, state, key } = await withTarget()
+    client.showPreview.mockResolvedValueOnce(ok({ shown: false }))
+
+    await editMode.preview(key)
+
+    expect(state.preview).toBeNull()
+    expect(state.previewNote).toEqual({
+      stepKey: key,
+      text: 'This element is no longer on the page. Select it again to preview this step.',
+    })
+  })
+
+  it('never looks up a target that was not selected on this page', async () => {
+    const client = fakeClient()
+    const saved = guide(GUIDE_A, 1, ['Saved before'])
+    client.open.mockResolvedValueOnce(
+      ok({
+        guide: { ...saved, steps: saved.steps.map((item) => ({ ...item, target: descriptor() })) },
+        local: null,
+      }),
+    )
+    const { editMode, state } = await opened(client)
+    const [first] = state.steps
+    if (!first) throw new Error('no step')
+
+    await editMode.preview(first.key)
+
+    expect(client.showPreview).not.toHaveBeenCalled()
+    expect(state.previewNote?.text).toBe(
+      'Select the element again on this page to preview this step.',
+    )
   })
 })

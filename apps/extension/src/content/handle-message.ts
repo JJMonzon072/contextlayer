@@ -20,6 +20,9 @@ export interface ContentDeps {
   startPicker: (captureId: string, ttlMs: number) => void
   /** Stops the picker if it still serves this capture request. */
   stopPicker: (captureId: string) => void
+  /** Previews a step on the element selected under this request; false when it is gone. */
+  showPreview: (captureId: string, title: string, lines: string[]) => boolean
+  hidePreview: () => void
 }
 
 export interface ContentSender {
@@ -30,14 +33,14 @@ export interface ContentSender {
 /**
  * Handles messages from the extension (popup, service worker) to the content
  * script. The content script holds no credentials and never calls the API.
- * Capture requests are accepted from the service worker only: it is the one
- * that checked the side panel's session and created the request id.
+ * Capture and preview requests are accepted from the service worker only: it
+ * is the one that checked the side panel's session and created the request id.
  */
 export function handleContentMessage(
   message: unknown,
   sender: ContentSender,
   deps: ContentDeps,
-): MessageResult<PageInfo | null> {
+): MessageResult<PageInfo | { shown: boolean } | null> {
   const request = readContentRequest(message)
   if (!request) {
     return failure('BAD_REQUEST', 'Unsupported message.')
@@ -57,6 +60,13 @@ export function handleContentMessage(
       if (!deps.isActive()) return failure('NOT_AVAILABLE', 'ContextLayer is not active here.')
       if (request.type === 'picker.start') deps.startPicker(request.captureId, request.ttlMs)
       else deps.stopPicker(request.captureId)
+      return success(null)
+    case 'preview.show':
+      if (!sender.fromWorker) return failure('FORBIDDEN', 'Only the extension may show a preview.')
+      if (!deps.isActive()) return failure('NOT_AVAILABLE', 'ContextLayer is not active here.')
+      return success({ shown: deps.showPreview(request.captureId, request.title, request.lines) })
+    case 'preview.hide':
+      deps.hidePreview()
       return success(null)
   }
 }

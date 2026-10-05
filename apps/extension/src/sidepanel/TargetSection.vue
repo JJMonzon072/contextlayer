@@ -17,6 +17,10 @@ const props = defineProps<{
   review: TargetDescriptor | null
   note: string | null
   disabled: boolean
+  /** The element was selected on this page (its preview can be shown). */
+  previewable: boolean
+  previewing: boolean
+  previewNote: string | null
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +29,8 @@ const emit = defineEmits<{
   accept: []
   discard: []
   remove: []
+  preview: []
+  hidePreview: []
 }>()
 
 const shown = computed(() => props.review ?? props.target)
@@ -83,6 +89,9 @@ const strengthClass = {
     </template>
 
     <p v-if="note && !capturing" class="mt-1 text-amber-900" role="alert">{{ note }}</p>
+    <p v-if="previewNote && !capturing" class="mt-1 text-slate-700" data-testid="preview-note">
+      {{ previewNote }}
+    </p>
 
     <div class="mt-2 flex flex-wrap gap-2">
       <template v-if="capturing">
@@ -108,6 +117,26 @@ const strengthClass = {
           @click="emit('select')"
         >
           {{ target ? 'Reselect element' : 'Select element' }}
+        </button>
+        <button
+          v-if="target && !previewing"
+          type="button"
+          class="btn-secondary"
+          :disabled="disabled"
+          :aria-label="`Preview step ${stepNumber} on the page`"
+          :title="previewable ? undefined : 'Select the element again on this page to preview it.'"
+          @click="emit('preview')"
+        >
+          Preview
+        </button>
+        <button
+          v-if="previewing"
+          type="button"
+          class="btn-secondary"
+          :aria-label="`Hide the preview of step ${stepNumber}`"
+          @click="emit('hidePreview')"
+        >
+          Hide preview
         </button>
         <button
           v-if="target"

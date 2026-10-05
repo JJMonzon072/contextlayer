@@ -11,6 +11,7 @@ function fakeOverlay(own: Element[] = []) {
     showToast: vi.fn(),
     highlight: (rect, label) => drawn.push({ rect, label }),
     banner: (text) => banners.push(text),
+    callout: vi.fn(),
     isOwn: (node) => own.some((element) => element === node || element.contains(node)),
     destroy: vi.fn(),
   }

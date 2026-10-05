@@ -54,6 +54,8 @@ const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[
   'authoring.save': ['side-panel'],
   'authoring.local.write': ['side-panel'],
   'authoring.local.clear': ['side-panel'],
+  'authoring.preview.show': ['side-panel'],
+  'authoring.preview.hide': ['side-panel'],
   'authoring.exit': ['side-panel'],
   'authoring.detach': ['side-panel'],
   // The answer to a capture request; the worker checks it against the session.
@@ -194,6 +196,15 @@ export async function handleBackgroundMessage(
       return deps.authoring.writeLocal(request.data.panelId, request.data.draft)
     case 'authoring.local.clear':
       return deps.authoring.clearLocal(request.data.panelId, request.data.guideId)
+    case 'authoring.preview.show':
+      return deps.authoring.showPreview(
+        request.data.panelId,
+        request.data.captureId,
+        request.data.title,
+        request.data.lines,
+      )
+    case 'authoring.preview.hide':
+      return deps.authoring.hidePreview(request.data.panelId)
     case 'authoring.exit':
       return deps.authoring.exit(request.data.panelId)
     case 'authoring.detach':

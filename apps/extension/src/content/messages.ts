@@ -14,10 +14,20 @@ export type ContentRequest =
   | { type: 'page.deactivate' }
   | { type: 'picker.start'; captureId: string; ttlMs: number }
   | { type: 'picker.stop'; captureId: string }
+  | { type: 'preview.show'; captureId: string; title: string; lines: string[] }
+  | { type: 'preview.hide' }
 
-/** Mirrors `PICKER_TTL_MS` and `captureIdSchema` in the protocol. */
+/** Mirrors `PICKER_TTL_MS`, `captureIdSchema` and `previewTextSchema` in the protocol. */
 const PICKER_TTL_MS = 120_000
 const CAPTURE_ID = /^[A-Za-z0-9_-]{16,64}$/
+const PREVIEW_MAX_LINES = 40
+
+const isPreviewText = (title: unknown, lines: unknown): lines is string[] =>
+  typeof title === 'string' &&
+  title.length <= 120 &&
+  Array.isArray(lines) &&
+  lines.length <= PREVIEW_MAX_LINES &&
+  lines.every((line) => typeof line === 'string' && line.length <= 2_000)
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -29,13 +39,20 @@ const hasOnlyKeys = (value: Record<string, unknown>, keys: readonly string[]) =>
 /** A request from the extension to this content script, or undefined. */
 export function readContentRequest(value: unknown): ContentRequest | undefined {
   if (!isRecord(value)) return undefined
-  const { type, captureId, ttlMs } = value
-  if (type === 'page.ping' || type === 'page.deactivate') {
+  const { type, captureId, ttlMs, title, lines } = value
+  if (type === 'page.ping' || type === 'page.deactivate' || type === 'preview.hide') {
     return hasOnlyKeys(value, ['type']) ? { type } : undefined
   }
   if (typeof captureId !== 'string' || !CAPTURE_ID.test(captureId)) return undefined
   if (type === 'picker.stop' && hasOnlyKeys(value, ['type', 'captureId'])) {
     return { type, captureId }
+  }
+  if (
+    type === 'preview.show' &&
+    hasOnlyKeys(value, ['type', 'captureId', 'title', 'lines']) &&
+    isPreviewText(title, lines)
+  ) {
+    return { type, captureId, title: title as string, lines: [...lines] }
   }
   if (
     type === 'picker.start' &&

@@ -109,10 +109,13 @@ export function createAuthoring(deps: AuthoringDeps) {
   /** One save at a time per session (in memory: a stopped worker has no save in flight). */
   let saving: string | undefined
 
-  /** Ends the session, telling its panel why and stopping a picker still on the page. */
+  /** Ends the session, telling its panel why and removing any picker or preview from the page. */
   async function end(session: AuthoringSession, reason: Reason): Promise<void> {
     await vault.clearAuthoring()
     await vault.writeAuthoringEnded({ panelId: session.panelId, reason })
+    await chrome
+      .sendToTab(session.tabId, { type: 'preview.hide' }, session.documentId)
+      .catch(() => undefined)
     if (session.capture?.state === 'pending') {
       await chrome
         .sendToTab(
@@ -544,6 +547,48 @@ export function createAuthoring(deps: AuthoringDeps) {
         )
         .catch(() => undefined)
       notify()
+      return success({ done: true })
+    },
+
+    /**
+     * Previews a step on the bound page, on the element selected there under
+     * `captureId`. The page answers `shown: false` when it no longer holds that
+     * element (reloaded, removed): the author selects it again. No lookup.
+     */
+    async showPreview(
+      panelId: string,
+      captureId: string,
+      title: string,
+      lines: string[],
+    ): Promise<MessageResult<{ shown: boolean }>> {
+      const session = await owned(panelId)
+      if (isFailure(session)) return session
+      if (session.paused) return failure('PAGE_CHANGED', 'The page changed. Continue first.')
+      if (!(await pageReady(session))) {
+        await pause(session, 'navigated')
+        return failure('PAGE_CHANGED', 'The page was reloaded or changed.')
+      }
+      const answer = await chrome
+        .sendToTab(
+          session.tabId,
+          { type: 'preview.show', captureId, title, lines },
+          session.documentId,
+        )
+        .catch(() => undefined)
+      if (!isOk(answer)) {
+        await pause(session, 'page-gone')
+        return failure('PAGE_CHANGED', 'The page could not be reached. Reload it, then continue.')
+      }
+      const shown = (answer as { data?: { shown?: unknown } }).data?.shown === true
+      return success({ shown })
+    },
+
+    async hidePreview(panelId: string): Promise<MessageResult<{ done: boolean }>> {
+      const session = await owned(panelId)
+      if (isFailure(session)) return session
+      await chrome
+        .sendToTab(session.tabId, { type: 'preview.hide' }, session.documentId)
+        .catch(() => undefined)
       return success({ done: true })
     },
 

@@ -11,6 +11,8 @@ function deps(overrides: Partial<ContentDeps> = {}): ContentDeps {
     stop: vi.fn(),
     startPicker: vi.fn(),
     stopPicker: vi.fn(),
+    showPreview: vi.fn(() => true),
+    hidePreview: vi.fn(),
     ...overrides,
   }
 }
@@ -98,5 +100,21 @@ describe('handleContentMessage', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'NOT_AVAILABLE' } })
     expect(startPicker).not.toHaveBeenCalled()
+  })
+
+  it('shows a preview for the worker only, and says when the element is gone', () => {
+    const showPreview = vi.fn(() => false)
+    const request = { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: ['Click.'] }
+
+    expect(handleContentMessage(request, POPUP, deps({ showPreview }))).toMatchObject({
+      ok: false,
+      error: { code: 'FORBIDDEN' },
+    })
+    expect(showPreview).not.toHaveBeenCalled()
+    expect(handleContentMessage(request, WORKER, deps({ showPreview }))).toEqual({
+      ok: true,
+      data: { shown: false },
+    })
+    expect(showPreview).toHaveBeenCalledWith(CAPTURE, 'Save', ['Click.'])
   })
 })

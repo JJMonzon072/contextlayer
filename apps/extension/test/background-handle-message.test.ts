@@ -78,6 +78,8 @@ function fakeAuthoring() {
     save: vi.fn(done),
     writeLocal: vi.fn(done),
     clearLocal: vi.fn(done),
+    showPreview: vi.fn(done),
+    hidePreview: vi.fn(done),
     exit: vi.fn(done),
     detach: vi.fn(done),
     panelClosed: vi.fn(() => Promise.resolve()),
@@ -114,6 +116,14 @@ const AUTHORING = [
     draft: { applicationId: APP, guideId: GUIDE, baseRevision: 3, steps: [] },
   },
   { type: 'authoring.local.clear', panelId: PANEL, guideId: GUIDE },
+  {
+    type: 'authoring.preview.show',
+    panelId: PANEL,
+    captureId: CAPTURE,
+    title: 'Save the customer',
+    lines: ['Click Save.'],
+  },
+  { type: 'authoring.preview.hide', panelId: PANEL },
   { type: 'authoring.exit', panelId: PANEL },
   { type: 'authoring.detach', panelId: PANEL },
 ] as const

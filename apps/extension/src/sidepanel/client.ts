@@ -11,6 +11,7 @@ import {
   authoringLocalResultSchema,
   authoringSaveResultSchema,
   authoringStateResultSchema,
+  previewResultSchema,
   type AuthoringAttachData,
   type AuthoringCaptureData,
   type AuthoringStateData,
@@ -53,6 +54,13 @@ export interface AuthoringClient {
     draft: LocalDraftInput,
   ): Promise<MessageResult<{ stored: boolean; reason: 'too-large' | 'quota' | null }>>
   clearLocal(panelId: string, guideId: string): Promise<MessageResult<{ done: boolean }>>
+  showPreview(
+    panelId: string,
+    captureId: string,
+    title: string,
+    lines: string[],
+  ): Promise<MessageResult<{ shown: boolean }>>
+  hidePreview(panelId: string): Promise<MessageResult<{ done: boolean }>>
   exit(panelId: string): Promise<MessageResult<{ done: boolean }>>
   /** Fire and forget, from `pagehide`: the panel may be gone before an answer. */
   detach(panelId: string): void
@@ -120,6 +128,13 @@ export const chromeAuthoringClient: AuthoringClient = {
       { type: 'authoring.local.clear', panelId, guideId },
       authoringDoneResultSchema,
     ),
+  showPreview: (panelId, captureId, title, lines) =>
+    sendToBackground(
+      { type: 'authoring.preview.show', panelId, captureId, title, lines: [...lines] },
+      previewResultSchema,
+    ),
+  hidePreview: (panelId) =>
+    sendToBackground({ type: 'authoring.preview.hide', panelId }, authoringDoneResultSchema),
   exit: (panelId) =>
     sendToBackground({ type: 'authoring.exit', panelId }, authoringDoneResultSchema),
   detach: (panelId) => {

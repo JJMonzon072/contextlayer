@@ -5,10 +5,12 @@ import {
   richTextToPlainText,
   type Guide,
   type GuideStep,
+  type RichText,
+  type RichTextInline,
   type StepInput,
 } from '@contextlayer/shared'
 
-import type { DraftStep, LocalDraft } from '../messaging/protocol'
+import { PREVIEW_MAX_LINES, type DraftStep, type LocalDraft } from '../messaging/protocol'
 
 /**
  * The side panel's working copy of a guide's steps. Pure functions over plain
@@ -178,4 +180,20 @@ export function sameSteps(server: readonly GuideStep[], sent: readonly StepInput
       )
     })
   )
+}
+
+const inlineText = (nodes: readonly RichTextInline[]): string =>
+  nodes.map((node) => (node.type === 'text' ? node.text : inlineText(node.children))).join('')
+
+/** The instructions as lines of plain text for the on-page preview (links shown as their text). */
+export function richTextLines(document: RichText): string[] {
+  return document.blocks
+    .flatMap((block) =>
+      block.type === 'paragraph'
+        ? [inlineText(block.children)]
+        : block.items.map(
+            (item, index) => `${block.ordered ? `${String(index + 1)}.` : '•'} ${inlineText(item)}`,
+          ),
+    )
+    .slice(0, PREVIEW_MAX_LINES)
 }

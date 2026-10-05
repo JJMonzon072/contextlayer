@@ -14,6 +14,7 @@ import {
   fromLocal,
   move,
   newStep,
+  richTextLines,
   sameSteps,
   stepProblems,
   toDraft,
@@ -85,6 +86,9 @@ export interface EditModeState {
   recovery: LocalDraft | null
   /** A save was sent, its answer was lost, and the server could not be checked yet. */
   unknownSave: boolean
+  /** The step previewed on the page. */
+  preview: string | null
+  previewNote: { stepKey: string; text: string } | null
 }
 
 export function createEditMode(deps: EditModeDeps) {
@@ -119,6 +123,8 @@ export function createEditMode(deps: EditModeDeps) {
     local: 'none',
     recovery: null,
     unknownSave: false,
+    preview: null,
+    previewNote: null,
   })
 
   let panelId: string | undefined
@@ -464,6 +470,9 @@ export function createEditMode(deps: EditModeDeps) {
     async startCapture(key: string) {
       if (!panelId || !step(key)) return
       if (state.capture) await cancelCapture()
+      // The page hides a preview when a selection starts.
+      state.preview = null
+      state.previewNote = null
       state.review = null
       state.captureNote = null
       const result = await client.startCapture(panelId)
@@ -477,6 +486,52 @@ export function createEditMode(deps: EditModeDeps) {
     },
 
     cancelCapture,
+
+    /**
+     * Shows the step on the page, on the element selected there for it. A
+     * step whose element was not selected on this page (loaded from the
+     * server, or the page reloaded since) cannot be previewed: it is never
+     * looked up, the author selects it again.
+     */
+    async preview(key: string) {
+      const current = step(key)
+      if (!panelId || !current) return
+      state.previewNote = null
+      if (!current.target || !current.captureId) {
+        state.previewNote = {
+          stepKey: key,
+          text: 'Select the element again on this page to preview this step.',
+        }
+        return
+      }
+      if (state.capture) await cancelCapture()
+      const result = await client.showPreview(
+        panelId,
+        current.captureId,
+        current.title,
+        richTextLines(current.body),
+      )
+      if (!result.ok) {
+        state.previewNote = { stepKey: key, text: result.error.message }
+        if (result.error.code === 'PAGE_CHANGED' || result.error.code === 'STALE') await refresh()
+        return
+      }
+      if (!result.data.shown) {
+        state.preview = null
+        state.previewNote = {
+          stepKey: key,
+          text: 'This element is no longer on the page. Select it again to preview this step.',
+        }
+        return
+      }
+      state.preview = key
+      state.status = 'Previewing the step on the page.'
+    },
+
+    async hidePreview() {
+      state.preview = null
+      if (panelId) await client.hidePreview(panelId)
+    },
 
     /** The author accepts the reviewed element for its step (still unsaved). */
     acceptReview() {

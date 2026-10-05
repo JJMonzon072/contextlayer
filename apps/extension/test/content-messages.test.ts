@@ -39,6 +39,19 @@ const requests: unknown[] = [
   { type: 'picker.stop' },
   { type: 'picker.result', captureId: CAPTURE },
   { type: 'page.ping', captureId: CAPTURE },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: ['Click Save.'] },
+  { type: 'preview.show', captureId: CAPTURE, title: '', lines: [] },
+  { type: 'preview.show', captureId: CAPTURE, title: 'x'.repeat(121), lines: [] },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: ['x'.repeat(2_001)] },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: Array(41).fill('a') },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: [1] },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: 'Click' },
+  { type: 'preview.show', captureId: CAPTURE, title: 7, lines: [] },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save' },
+  { type: 'preview.show', captureId: CAPTURE, title: 'Save', lines: [], html: '<b>x</b>' },
+  { type: 'preview.show', title: 'Save', lines: [] },
+  { type: 'preview.hide' },
+  { type: 'preview.hide', captureId: CAPTURE },
 ]
 
 const helloAnswers: unknown[] = [

@@ -454,6 +454,13 @@ onBeforeUnmount(() => {
                 :review="state.review?.stepKey === item.key ? state.review.descriptor : null"
                 :note="state.captureNote?.stepKey === item.key ? state.captureNote.text : null"
                 :disabled="busy || state.paused !== null"
+                :previewable="item.captureId !== null"
+                :previewing="state.preview === item.key"
+                :preview-note="
+                  state.previewNote?.stepKey === item.key ? state.previewNote.text : null
+                "
+                @preview="editMode.preview(item.key)"
+                @hide-preview="editMode.hidePreview()"
                 @select="editMode.startCapture(item.key)"
                 @cancel="editMode.cancelCapture()"
                 @accept="editMode.acceptReview()"

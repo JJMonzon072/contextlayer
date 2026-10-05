@@ -25,6 +25,7 @@ import { handleContentMessage } from './handle-message'
 import { askWorker, readHelloAnswer } from './messages'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
 import { startPicker, type Picker } from './picker'
+import { showPreview, type Preview } from './preview'
 
 type ContentState = 'starting' | 'active' | 'inactive' | 'stopped'
 
@@ -82,9 +83,35 @@ function start(instance: ContentInstance): void {
 
   /** `inactive`: refused by the worker; `stopped`: told to stop or orphaned. Both are silent. */
   let picker: { captureId: string; instance: Picker } | undefined
+  let preview: Preview | undefined
   const remembered = new Map<string, WeakRef<Element>>()
 
+  function hidePreview() {
+    preview?.stop()
+    preview = undefined
+  }
+
+  /** The element selected under this request, if this page still holds it. */
+  function previewStep(captureId: string, title: string, lines: string[]): boolean {
+    hidePreview()
+    stopCapture()
+    const element = remembered.get(captureId)?.deref()
+    if (!element) return false
+    preview = showPreview({
+      window,
+      overlay,
+      element,
+      title,
+      lines,
+      onClose: () => {
+        preview = undefined
+      },
+    })
+    return preview !== undefined
+  }
+
   function startCapture(captureId: string, ttlMs: number) {
+    hidePreview()
     picker?.instance.stop()
     const instance = startPicker({
       window,
@@ -132,6 +159,7 @@ function start(instance: ContentInstance): void {
     if (instance.state === 'stopped' || instance.state === 'inactive') return
     instance.state = state
     stopCapture()
+    hidePreview()
     remembered.clear()
     overlay.destroy()
     document.removeEventListener('visibilitychange', checkContext)
@@ -169,6 +197,8 @@ function start(instance: ContentInstance): void {
           },
           startPicker: startCapture,
           stopPicker: stopCapture,
+          showPreview: previewStep,
+          hidePreview,
         },
       )
     } catch {

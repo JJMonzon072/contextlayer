@@ -110,6 +110,7 @@ async function setup(options: { route?: Route; maxLocalDraftChars?: number } = {
     documentId: string
   }[] = []
   let pageAnswers = true
+  let answer = (_message: { type: string }): unknown => ({ ok: true, data: null })
   const closePanel = vi.fn(() => Promise.resolve())
   const chrome: AuthoringChrome = {
     hasHostAccess: (pattern) => Promise.resolve(granted.has(pattern)),
@@ -117,7 +118,7 @@ async function setup(options: { route?: Route; maxLocalDraftChars?: number } = {
     sendToTab: (tabId, message, documentId) => {
       sent.push({ tabId, message: message as { type: string }, documentId })
       return pageAnswers
-        ? Promise.resolve({ ok: true, data: null })
+        ? Promise.resolve(answer(message as { type: string }))
         : Promise.reject(new Error('No document'))
     },
     closePanel,
@@ -181,6 +182,9 @@ async function setup(options: { route?: Route; maxLocalDraftChars?: number } = {
     },
     pageGone: () => {
       pageAnswers = false
+    },
+    answerWith: (next: (message: { type: string }) => unknown) => {
+      answer = next
     },
     /** Disconnect as the connection manager does it: credentials cleared in one transition. */
     disconnect: () =>
@@ -779,5 +783,61 @@ describe('the local copy of unsaved steps', () => {
       }),
     )
     expect(JSON.stringify(draft(longest)).length).toBeLessThan(MAX_LOCAL_DRAFT_CHARS)
+  })
+})
+
+describe('previewing a step', () => {
+  it('asks the bound document to preview the element it kept for that capture', async () => {
+    const { authoring, panelId, captureId, sent, answerWith } = await capturing()
+    answerWith((message) =>
+      message.type === 'preview.show'
+        ? { ok: true, data: { shown: true } }
+        : { ok: true, data: null },
+    )
+
+    expect(
+      await authoring.showPreview(panelId, captureId, 'Save the customer', ['Click Save.']),
+    ).toEqual({ ok: true, data: { shown: true } })
+    expect(sent.at(-1)).toEqual({
+      tabId: TAB,
+      documentId: DOC,
+      message: {
+        type: 'preview.show',
+        captureId,
+        title: 'Save the customer',
+        lines: ['Click Save.'],
+      },
+    })
+  })
+
+  it('reports an element the page no longer holds, without looking for another one', async () => {
+    const { authoring, panelId, captureId, answerWith } = await capturing()
+    answerWith(() => ({ ok: true, data: { shown: false } }))
+
+    expect(await authoring.showPreview(panelId, captureId, 'Save', [])).toEqual({
+      ok: true,
+      data: { shown: false },
+    })
+  })
+
+  it('previews nothing on a page that changed, or for another panel', async () => {
+    const { authoring, vault, panelId, captureId } = await capturing()
+    await vault.writePages({ [String(TAB)]: { origin: CRM, documentId: 'doc-2' } })
+
+    expect(await authoring.showPreview(panelId, captureId, 'Save', [])).toMatchObject({
+      ok: false,
+      error: { code: 'PAGE_CHANGED' },
+    })
+    expect(
+      await authoring.showPreview('Pn1_other-panel-0123456789ab', captureId, 'Save', []),
+    ).toMatchObject({ ok: false, error: { code: 'STALE' } })
+  })
+
+  it('removes a preview when the session ends', async () => {
+    const { authoring, panelId, sent } = await editing()
+
+    await authoring.detach(panelId)
+
+    expect(sent.some((entry) => entry.message.type === 'preview.hide')).toBe(true)
   })
 })
