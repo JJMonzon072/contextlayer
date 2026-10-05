@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-04: **Phases 1 and 2 are done; Phases 3–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-05: **Phases 1–3 are done; Phases 4–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -13,7 +13,7 @@ Status on 2026-10-04: **Phases 1 and 2 are done; Phases 3–8 are Planned.** A p
 | ----- | ------------------------- | ------- | ----------------------------------------------- |
 | 1     | Foundation                | Done    | none                                            |
 | 2     | Identity and workspaces   | Done    | 2a API + CI, 2b dashboard                       |
-| 3     | Guides API and management | Planned | 3a API, 3b dashboard                            |
+| 3     | Guides API and management | Done    | 3a API, 3b dashboard                            |
 | 4     | Extension connection      | Planned | 4a auth handoff, 4b site access                 |
 | 5     | Edit Mode (guide builder) | Planned | none                                            |
 | 6     | Guide player              | Planned | 6a playback, 6b dynamic pages, 6c shadow/frames |
@@ -89,31 +89,60 @@ Risks addressed: R-13 (dashboard half), R-17 (workspace membership), R-18 (CI ga
 
 ## Phase 3 — Guides API and management
 
-**Planned (Phase 3).** Depends on Phase 2. Goal: guides become tenant-owned data with ordered draft steps and immutable published versions, managed from the dashboard.
+**Done (Implemented, Phase 3).** Goal: guides become tenant-owned data with ordered draft steps and immutable published versions, managed from the dashboard.
 
 3a — API:
 
-- [ ] Migration: `applications`, `guides`, `guide_steps`, `guide_versions`.
-- [ ] `applications` module; `origins` validated as exact origins (scheme, host, port).
-- [ ] `guides` module: CRUD; `PUT .../steps` replaces the ordered list in one transaction (deferrable unique position); `POST .../publish` freezes guide + steps into a snapshot.
-- [ ] `TargetDescriptor` v1 and the restricted rich-text body as zod schemas in `packages/shared` (versioned, unknown versions rejected, lengths capped).
-- [ ] Cursor pagination; role checks as in [API](api.md#4-modules-and-planned-endpoints) (Proposed: `member` reads applications; `editor` and above read and write guides; `admin` and above manage applications; learners receive published versions through the extension, Phase 4).
+- [x] Migrations `0001_content` (generated) and `0002_content_constraints` (custom): `applications`, `guides`, `guide_steps`, `guide_versions`.
+  - Origins are checked by a database CHECK.
+  - The composite foreign key `guides (workspace_id, application_id)` stops a guide from using another workspace's application.
+  - Step positions are unique per guide, `DEFERRABLE INITIALLY DEFERRED`.
+  - A trigger makes versions immutable.
+  - RESTRICT protects history.
+- [x] `applications` module: list, create, read, update and delete (409 while guides exist). Origins must be exact (scheme, host, port) and are stored normalized.
+- [x] `guides` module:
+  - Draft CRUD; DELETE archives, with a restore.
+  - `PUT …/steps` replaces the ordered list atomically, keeping step ids.
+  - `POST …/publish` freezes the draft into the next immutable version ([ADR 0016](adr/0016-immutable-published-guide-versions.md)).
+  - `GET …/versions[/:n]` lists and reads versions.
+- [x] `TargetDescriptor` v1 and the restricted rich-text body as zod schemas in `packages/shared` (versioned, unknown versions and keys rejected, strings, arrays and node counts capped).
+- [x] Cursor pagination (opaque, newest first by UUIDv7 id). Roles:
+  - any member reads applications;
+  - `admin` and above manage them;
+  - `editor` and above read, write and publish guides;
+  - members get 403 on guides, non-members 404.
 
 3b — Dashboard:
 
-- [ ] Application and guide lists, guide detail, metadata and step-text editing, publish; `vue/no-v-html` raised from `warn` (already on through `flat/recommended`) to `error`, so `pnpm lint` fails on it.
+- [x] Applications tab: list, register, edit, delete; origins validated line by line.
+- [x] Application page with its guides (status, latest version, unpublished changes, archived filter).
+- [x] Guide editor: details; steps added, removed, edited and moved with buttons; save with conflict handling; publish; version history.
+- [x] Read-only version page.
+- [x] `vue/no-v-html` is an error, and instructions render through text nodes only.
 
-Out of scope: target capture (Phase 5), playback (Phase 6), WYSIWYG editing, audience targeting.
+Changed from the plan:
 
-Exit criteria:
+- **`guide_steps.target` is nullable.** Phase 3 creates steps before Edit Mode can capture elements (Phase 5). A placeholder descriptor would be fabricated data that the player would later try to resolve. `null` means "not captured yet" and also allows unanchored steps ([data model](data-model.md) open question 3, resolved).
+- **`guides.revision` and `guide_versions.guide_revision`** were added. They drive "unpublished changes", optimistic concurrency (`expectedRevision`, 409) and idempotent publishing ([data model](data-model.md) open question 7, resolved).
+- **Lists are ordered by UUIDv7 id (newest first)**, not by `updated_at`: an immutable key cannot skip or repeat rows while guides are edited during paging.
+- **Guide routes are flat:** `/v1/workspaces/:workspaceId/guides?applicationId=…`, as in [API](api.md).
+- **Not yet built:** the GIN index on `applications.origins` arrives with the extension's origin lookup (Phase 4).
+- **Editors can publish:** answers [product](product.md) open question 7 for now.
+- **Rich text is edited as plain text:** blank lines make paragraphs, `- ` lines make lists. Formatting the editor cannot express is kept and shown read-only.
 
-- Contract tests validate every `/v1` request and response against `packages/shared`.
-- Isolation matrix: for every route, a member of workspace A gets 404 on workspace B's IDs.
-- Reordering is atomic: a failed `PUT .../steps` keeps the old order.
-- Publishing twice yields versions 1 and 2; later draft edits leave both snapshots unchanged.
-- Playwright: create application → create guide → edit steps → publish.
+Verification (at commit `8c9afbb`):
 
-Risks: R-04 (versioned descriptor contract), R-11 (content validated on write), R-17. ADRs: accept the storage shape in [ADR 0014](adr/0014-element-targeting-strategy.md); revisit [ADR 0002](adr/0002-modular-monolith-backend.md) as modules multiply; new ADR: mutable drafts with immutable published snapshots.
+- `pnpm format:check`, `pnpm typecheck` and `pnpm lint` pass.
+- `pnpm test` runs 356 tests in 37 files:
+  - 69 shared contract tests;
+  - 128 API integration tests on PostgreSQL 18.6, including a 7-actor × 11-operation isolation matrix, a forced mid-transaction failure that leaves the previous order intact, and five racing publishes that create exactly one version;
+  - 90 dashboard tests.
+- `pnpm test:e2e` passes dashboard 9/9 (application → guide → 3 steps → v1 → edit → v2 → v1 unchanged, another tenant gets 404; axe: 0 violations) and extension 6/6.
+- Migrations apply to an empty database and `drizzle-kit check` is clean.
+
+Out of scope (unchanged): target capture (Phase 5), playback (Phase 6), WYSIWYG editing, audience targeting, rollback to an older version.
+
+Risks addressed: R-04 (versioned descriptor contract), R-11 (content validated on write, rendered as text), R-17 (content isolation matrix). ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) storage shape Accepted; new [ADR 0016](adr/0016-immutable-published-guide-versions.md).
 
 ## Phase 4 — Extension connection
 
