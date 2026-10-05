@@ -11,6 +11,7 @@ const props = defineProps<{
   maxlength?: number
   monospace?: boolean
   required?: boolean
+  readonly?: boolean
 }>()
 
 const id = useId()
@@ -31,6 +32,7 @@ const describedBy = computed(() => {
       :rows="rows ?? 4"
       :maxlength="maxlength"
       :required="required"
+      :readonly="readonly"
       :aria-invalid="error ? 'true' : undefined"
       :aria-describedby="describedBy"
       class="mt-1.5 block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-xs transition-colors placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-brand-600"
