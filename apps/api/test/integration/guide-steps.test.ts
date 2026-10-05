@@ -265,4 +265,45 @@ describe('replacing the ordered steps', () => {
     await call(app, 'DELETE', guidePath(workspace.id, guide.id), editor)
     expect((await replace(editor, workspace.id, guide.id, 2, [])).statusCode).toBe(409)
   })
+
+  it('accepts a full guide of 50 steps at their size limits (over the 1 MiB default)', async () => {
+    const { workspace, editor, guide } = await setup()
+    const target = targetDescriptor()
+    const part = 'p'.repeat(240)
+    // 20 paragraphs × 10 runs of 10 characters: 2000 characters and 200 runs, the maximum.
+    const body = {
+      version: 1,
+      blocks: Array.from({ length: 20 }, () => ({
+        type: 'paragraph',
+        children: Array.from({ length: 10 }, () => ({
+          type: 'text',
+          text: 'x'.repeat(10),
+          marks: ['bold', 'italic', 'code'],
+        })),
+      })),
+    }
+    const steps = Array.from({ length: 50 }, (_, index) => ({
+      title: `Step ${String(index + 1)}`,
+      body,
+      target: {
+        ...target,
+        locators: Array.from({ length: 12 }, () => ({
+          strategy: 'xpath',
+          expression: 'x'.repeat(500),
+          scope: 'root',
+          matchCount: 1,
+        })),
+        framePath: Array.from({ length: 5 }, () => ({
+          urlPattern: { hostname: part, pathname: `/${part}`, search: part, hash: part },
+        })),
+      },
+    }))
+    const payload = { expectedRevision: 1, steps }
+    expect(JSON.stringify(payload).length).toBeGreaterThan(1024 * 1024)
+
+    const response = await call(app, 'PUT', stepsPath(workspace.id, guide.id), editor, payload)
+
+    expect(response.statusCode, response.body.slice(0, 300)).toBe(200)
+    expect(guideSchema.parse(response.json()).stepCount).toBe(50)
+  })
 })
