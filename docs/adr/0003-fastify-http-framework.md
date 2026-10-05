@@ -45,7 +45,7 @@ Negative / trade-offs:
 Follow-ups:
 
 - **Planned (Phase 2):** `@fastify/cookie`, `@fastify/rate-limit` on the auth endpoints, and the CSRF `onRequest` guard ([ADR 0015](0015-authentication-strategy.md)).
-- **Planned (Phase 2):** `trustProxy` naming the reverse proxy, together with `@fastify/rate-limit`, so that `request.ip` (the default rate-limit key) is the client address; the API must be reachable only through the proxy ([deployment](../deployment.md)).
+- **Implemented (Phase 2):** `trustProxy` set from `TRUST_PROXY` (off by default), together with `@fastify/rate-limit`, so that `request.ip` (the default rate-limit key) is the client address; the API must be reachable only through the proxy ([deployment](../deployment.md)).
 - **Proposed:** an OpenAPI document through `@fastify/swagger` and the provider's `jsonSchemaTransform`, for the Phase 3 contract tests.
 
 ## References

@@ -78,7 +78,7 @@ Supporting rules:
 
 ### Follow-ups
 
-- **Planned (Phase 2):** the CI pipeline runs `pnpm build` before the e2e suites, as `pnpm test:e2e` already does locally.
+- **Implemented (Phase 2):** the CI pipeline runs `pnpm build` before the e2e suites, as `pnpm test:e2e` already does locally.
 - **Proposed:** a small check that every Vite and Vitest config includes the condition, if more packages adopt it.
 - **Planned (Phase 8):** reconsider bundling the API when the production image is built.
 

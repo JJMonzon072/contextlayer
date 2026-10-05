@@ -91,7 +91,7 @@ Precondition: the application is registered (Phase 3); the author's extension is
 | Capability                                                                                     | Phase                 |
 | ---------------------------------------------------------------------------------------------- | --------------------- |
 | Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1) |
-| Registration, login, sessions; workspaces and members                                          | Planned (Phase 2)     |
+| Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2) |
 | Applications; guide CRUD with ordered steps; publish to versions                               | Planned (Phase 3)     |
 | Extension connected to a workspace; per-application site access                                | Planned (Phase 4)     |
 | Edit Mode: element picking, target capture, instructions, save                                 | Planned (Phase 5)     |

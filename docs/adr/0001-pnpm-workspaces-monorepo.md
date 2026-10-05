@@ -62,7 +62,7 @@ Negative / trade-offs:
 
 Follow-ups:
 
-- **Planned (Phase 2):** CI running `pnpm install --frozen-lockfile`, typecheck, lint, test, build and e2e ([roadmap](../roadmap.md)).
+- **Implemented (Phase 2):** CI running `pnpm install --frozen-lockfile`, typecheck, lint, test, build and e2e ([.github/workflows/ci.yml](../../.github/workflows/ci.yml)).
 - **Proposed:** `catalogMode: strict`, so that `pnpm add` refuses versions outside the catalog.
 - **Proposed:** adopt Turborepo or Nx only when CI duration justifies it, in a new ADR.
 
