@@ -92,6 +92,16 @@ export function createAppRouter(store: SessionStore, history: RouterHistory = cr
             component: () => import('../features/workspaces/WorkspaceOverviewPage.vue'),
           },
           {
+            path: 'applications',
+            name: 'applications',
+            component: () => import('../features/applications/ApplicationsPage.vue'),
+          },
+          {
+            path: 'applications/:applicationId',
+            name: 'application',
+            component: () => import('../features/applications/ApplicationPage.vue'),
+          },
+          {
             path: 'members',
             name: 'members',
             component: () => import('../features/workspaces/MembersPage.vue'),
