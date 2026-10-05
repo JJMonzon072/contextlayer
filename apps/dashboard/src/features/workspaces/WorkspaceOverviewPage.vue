@@ -44,14 +44,19 @@ const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
         </RouterLink>
       </section>
       <section
-        class="rounded-xl border border-dashed border-slate-300 bg-white/60 p-5"
-        aria-labelledby="guides-heading"
+        class="rounded-xl border border-slate-200 bg-white p-5"
+        aria-labelledby="applications-heading"
       >
-        <h2 id="guides-heading" class="text-sm font-semibold">Guides</h2>
+        <h2 id="applications-heading" class="text-sm font-semibold">Applications and guides</h2>
         <p class="mt-2 text-sm text-slate-600">
-          Guide authoring arrives next: build step-by-step walkthroughs with the ContextLayer
-          extension and publish them here.
+          Register the web applications your team uses and write step-by-step guides for them.
         </p>
+        <RouterLink
+          :to="{ name: 'applications', params: { workspaceId: workspace.id } }"
+          class="mt-3 inline-block text-sm font-medium text-brand-700 hover:underline"
+        >
+          Open applications
+        </RouterLink>
       </section>
     </div>
   </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef } from 'vue'
+import { computed, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppButton from '../../components/AppButton.vue'
@@ -15,8 +15,15 @@ const signingOut = shallowRef(false)
 
 const tabs = [
   { name: 'workspace', label: 'Overview' },
+  { name: 'applications', label: 'Applications' },
   { name: 'members', label: 'Members' },
 ] as const
+
+/** Application and guide pages live under the Applications tab. */
+const activeTab = computed(() => {
+  const name = String(route.name)
+  return name === 'workspace' || name === 'members' ? name : 'applications'
+})
 
 async function signOut() {
   signingOut.value = true
@@ -46,8 +53,9 @@ async function signOut() {
             v-for="tab in tabs"
             :key="tab.name"
             :to="{ name: tab.name, params: { workspaceId: workspace.id } }"
-            class="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-            exact-active-class="bg-slate-100 text-slate-900"
+            class="rounded-md px-3 py-1.5 text-sm font-medium hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            :class="activeTab === tab.name ? 'bg-slate-100 text-slate-900' : 'text-slate-600'"
+            :aria-current="activeTab === tab.name ? 'page' : undefined"
           >
             {{ tab.label }}
           </RouterLink>
