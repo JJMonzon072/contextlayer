@@ -62,6 +62,6 @@ export function connectTestDatabase(): Database {
 /** Empties every table between tests (files run sequentially, see the Vitest config). */
 export async function resetTestDatabase(database: Database): Promise<void> {
   await database.db.execute(
-    sql`truncate table workspace_members, sessions, workspaces, users cascade`,
+    sql`truncate table guide_versions, guide_steps, guides, applications, workspace_members, sessions, workspaces, users cascade`,
   )
 }
