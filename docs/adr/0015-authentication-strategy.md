@@ -1,6 +1,6 @@
 # ADR 0015: Cookie sessions for the dashboard, handed-off tokens for the extension
 
-- Status: Proposed
+- Status: Accepted for the dashboard (implemented in Phase 2); Proposed for the extension (Phase 4)
 - Date: 2026-10-04
 - Deciders: JJ
 
@@ -15,17 +15,17 @@ Constraints: no paid identity provider ([ADR 0008](0008-local-first-development.
 
 ## Decision
 
-**Proposed.** Separate credentials per client, one user and workspace model.
+Separate credentials per client, one user and workspace model. The dashboard half is **Accepted** and implemented; the extension half stays **Proposed** until its spike (items 1 and 4–6 below).
 
-### Dashboard: opaque server-side sessions (Planned, Phase 2)
+### Dashboard: opaque server-side sessions (Implemented, Phase 2)
 
-- **Token.** 32 random bytes (base64url) in a cookie. Only its SHA-256 hash is stored (`sessions.token_hash`); a slow hash adds nothing for a 256-bit random value. A new token is issued on login and privilege change; logout sets `revoked_at`.
+- **Token.** 32 random bytes (base64url) in a cookie. Only its SHA-256 hash is stored (`sessions.token_hash`); a slow hash adds nothing for a 256-bit random value. A new token is issued on every login and registration, and the session the browser presented before is revoked (no fixation); logout sets `revoked_at`. Workspace roles are read from the database on every request, so a role change takes effect without a new token.
 - **Cookie.** `HttpOnly; Secure; SameSite=Strict; Path=/`.
   - Named `__Host-cl_session` in production and `cl_session` on `http://localhost`, where Chrome has historically rejected prefixed cookies.
   - Strict (OWASP's preference) works because every authenticated call is a same-origin `fetch` to `/api`; the static HTML shell needs no cookie.
   - Safari rejects `Secure` cookies on `http://localhost`: develop in Chrome or Firefox, or behind a local HTTPS proxy.
 - **Lifetimes** (configurable). OWASP suggests idle timeouts of 2–5 min for high-value apps and 15–30 min for low-risk ones, and 4–8 h absolute for full-day use. Proposed defaults: **30 min idle, 8 h absolute**. Not the high-value range: guide content renders only as text, sessions are revocable, and no payment data exists. Cost: a daily re-login; the extension has its own grant. `last_seen_at` writes are throttled.
-- **Passwords:** argon2id via `@node-rs/argon2`, whose defaults equal the OWASP minimum (19 MiB, t=2, p=1), with no install script. **Rate limits:** `@fastify/rate-limit` on register, login and token, keyed by IP and email, with `trustProxy`.
+- **Passwords:** argon2id via `@node-rs/argon2`, whose defaults equal the OWASP minimum (19 MiB, t=2, p=1), with no install script. **Rate limits:** `@fastify/rate-limit` on login (keyed by IP and email) and register (keyed by IP), and on the extension token endpoint in Phase 4, with `trustProxy` limited to the proxies named in `TRUST_PROXY`.
 - **CSRF guard** (`onRequest`, unsafe methods on cookie routes), plus JSON-only bodies and `SameSite=Strict` as defense in depth:
 
 ```mermaid
@@ -68,7 +68,7 @@ sequenceDiagram
 - **Stable development id.** A manifest `key` holds a public key generated locally with openssl (private key never committed, no Chrome Web Store account). `DASHBOARD_ORIGIN` and `EXTENSION_ID` are baked in at build time.
 - **Storage.** Opaque tokens, hashed server-side, never in content scripts or worker globals.
   - Access token (about 15 min): `chrome.storage.session`, in memory and trusted-contexts-only by default.
-  - Refresh token (about 30 days): `chrome.storage.local`, after the worker calls `chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })` at top level on every start. This works for `local` only from **Chrome 140**, so Phase 4 raises `minimum_chrome_version` from 120 to at least 140. If the call fails, the token stays in session storage and the user reconnects after a restart.
+  - Refresh token (about 30 days): `chrome.storage.local`, after the worker calls `chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })` at top level on every start. Chrome's reference documents `setAccessLevel()` for every storage area, `local` included, with `AccessLevel` available since Chrome 102 ([storage API](https://developer.chrome.com/docs/extensions/reference/api/storage#method-StorageArea-setAccessLevel)), so `minimum_chrome_version` stays at 120. The spike still verifies at runtime that content scripts can no longer read the area (item 5). If the call fails, the token stays in session storage and the user reconnects after a restart.
 - **Rotation.** Each refresh returns a new refresh token and marks the parent `used_at`; presenting a used token revokes the grant. The worker can stop between server-side rotation and persisting the child, which would turn a crash into a sign-out. So the child is persisted first, refreshes are single-flight, and within a short grace window (about 60 s) replaying a parent whose child was never used consumes that child and issues a fresh one instead of revoking. The window briefly weakens reuse detection; restricted storage makes that acceptable.
 - **Revocation.** One `extension_grants` row per connected browser, listed and revocable in the dashboard; sign-out calls `POST /v1/extension/revoke`; "log out everywhere" revokes all sessions and grants. Tokens are looked up on every request, so revocation is immediate. Bearer requests ignore cookies.
 
@@ -86,14 +86,20 @@ sequenceDiagram
 ## Consequences
 
 - **Positive:** no token reaches page-reachable code, every session is revocable, the API needs no CORS, and the token endpoint is OAuth-shaped for later clients.
-- **Negative:** three token types plus one-time codes (not yet in the [data model](../data-model.md)); the extension build depends on the dashboard origin; Chrome below 140 loses support; development cookies differ from production.
-- **Spike before implementation** (dashboard items at the start of Phase 2, extension items at the start of Phase 4; then Accepted):
+- **Negative:** three token types plus one-time codes (not yet in the [data model](../data-model.md)); the extension build depends on the dashboard origin; development cookies differ from production.
+- **Spike before implementation** (dashboard items at the start of Phase 2, extension items at the start of Phase 4; each half becomes Accepted after its items):
   1. `Origin`, `Sec-Fetch-Site` and cookies on service-worker fetches.
   2. Header values through the Vite proxy against the guard.
   3. `__Host-` and `Secure` cookies on localhost in Chrome, Firefox and Safari.
   4. `externally_connectable` on localhost delivering `sender.origin`.
   5. `storage.local.setAccessLevel` blocking content-script reads, and whether it persists.
   6. The rotation race, killing the worker through CDP `Target.closeTarget`.
+
+### Phase 2 results (dashboard items 2 and 3)
+
+- **Item 2, headers through the proxy.** The Vite dev and preview proxies forward the browser's `Origin` (`http://localhost:5173` or `:4173`) and `Sec-Fetch-Site: same-origin` unchanged; `changeOrigin` rewrites only `Host`. Every dashboard write in the Playwright suite (register, login, create workspace, logout) passes the guard through the proxy, and integration tests cover the rejections (foreign `Origin`, `Origin: null`, `Sec-Fetch-Site: cross-site` and `none`, `text/plain` bodies).
+- **Item 3, cookies on localhost.** Verified in Chromium (Playwright's bundled build): `cl_session` with `HttpOnly; Secure; SameSite=Strict; Path=/` is stored and sent on `http://localhost`, and is invisible to `document.cookie`. Firefox and Safari were not tested in this phase; the Safari limitation above stands. `__Host-cl_session` is used only in production, over HTTPS, and is covered by a configuration test.
+- **Implemented as proposed:** argon2id with the OWASP minimum, SHA-256 token hashes, 30 min idle and 8 h absolute lifetimes (both configurable), `last_seen_at` written at most once a minute, revocation on logout.
 
 ## References
 
@@ -102,6 +108,6 @@ sequenceDiagram
 - Cross-origin protection algorithm: https://words.filippo.io/csrf/
 - RFC 9700: https://www.rfc-editor.org/rfc/rfc9700.html
 - `externally_connectable`: https://developer.chrome.com/docs/extensions/reference/manifest/externally-connectable
-- `setAccessLevel` compatibility: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/storage/StorageArea/setAccessLevel
+- `StorageArea.setAccessLevel()` (all storage areas, Chrome 102+): https://developer.chrome.com/docs/extensions/reference/api/storage#method-StorageArea-setAccessLevel
 - Extension cookies: https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies
 - Vite `server.proxy`: https://vite.dev/config/server-options#server-proxy
