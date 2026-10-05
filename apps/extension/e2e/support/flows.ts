@@ -249,3 +249,76 @@ export async function openEditMode(extensionBrowser: ExtensionBrowser, page: Pag
   await panel.waitForLoadState()
   return panel
 }
+
+interface DomNode {
+  nodeId: number
+  nodeType: number
+  localName: string
+  nodeValue: string
+  attributes?: string[]
+  children?: DomNode[]
+  shadowRoots?: DomNode[]
+}
+
+export interface OverlayPart {
+  /** Computed `display`: `none` while the popover is hidden. */
+  display: string
+  borderTopWidth: string
+  width: string
+  text: string
+}
+
+/**
+ * ContextLayer's on-page UI as Chrome renders it, read through CDP (which can
+ * pierce closed shadow roots; page scripts cannot). Tests use it to check that
+ * the overlay is drawn, styled under a strict CSP, and removed.
+ */
+export async function overlayParts(
+  page: Page,
+): Promise<{ hosts: number; parts: Record<string, OverlayPart> }> {
+  const session = await page.context().newCDPSession(page)
+  try {
+    await session.send('DOM.enable')
+    await session.send('CSS.enable')
+    const { root } = (await session.send('DOM.getDocument', { depth: -1, pierce: true })) as {
+      root: DomNode
+    }
+    const all: DomNode[] = []
+    const walk = (node: DomNode) => {
+      all.push(node)
+      for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) walk(child)
+    }
+    walk(root)
+    const attribute = (node: DomNode, name: string) => {
+      const index = node.attributes?.findIndex((value, at) => at % 2 === 0 && value === name)
+      return index === undefined || index < 0 ? undefined : node.attributes?.[index + 1]
+    }
+    const hosts = all.filter((node) => attribute(node, 'data-contextlayer-root') !== undefined)
+    const parts: Record<string, OverlayPart> = {}
+    const host = hosts.at(-1)
+    for (const element of host?.shadowRoots?.[0]?.children ?? []) {
+      const className = attribute(element, 'class')
+      if (!className) continue
+      const { computedStyle } = (await session.send('CSS.getComputedStyleForNode', {
+        nodeId: element.nodeId,
+      })) as { computedStyle: { name: string; value: string }[] }
+      const style = (name: string) =>
+        computedStyle.find((entry) => entry.name === name)?.value ?? ''
+      const texts: string[] = []
+      const collect = (node: DomNode) => {
+        if (node.nodeType === 3) texts.push(node.nodeValue)
+        for (const child of node.children ?? []) collect(child)
+      }
+      collect(element)
+      parts[className] = {
+        display: style('display'),
+        borderTopWidth: style('border-top-width'),
+        width: style('width'),
+        text: texts.join(' ').replace(/\s+/g, ' ').trim(),
+      }
+    }
+    return { hosts: hosts.length, parts }
+  } finally {
+    await session.detach()
+  }
+}
