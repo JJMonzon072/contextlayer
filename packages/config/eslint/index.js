@@ -95,7 +95,12 @@ export function vueConfig({ tsconfigRootDir, environments = ['browser'] }) {
         globals: globalsFor(environments),
         parserOptions: { tsconfigRootDir },
       },
-      rules: sharedRules,
+      rules: {
+        ...sharedRules,
+        // Guide content is untrusted and ends up inside customer applications:
+        // it is rendered with text nodes, never as HTML (R-11).
+        'vue/no-v-html': 'error',
+      },
     },
     {
       files: ['**/*.js', '**/*.mjs'],

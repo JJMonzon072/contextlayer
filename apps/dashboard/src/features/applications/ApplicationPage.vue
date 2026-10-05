@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppButton from '../../components/AppButton.vue'
 import ErrorMessage from '../../components/ErrorMessage.vue'
 import { describeError } from '../../lib/errors'
+import GuideList from '../guides/GuideList.vue'
 import { useCurrentWorkspace } from '../workspaces/current-workspace'
 import * as api from './applications-api'
 import ApplicationForm from './ApplicationForm.vue'
@@ -16,6 +17,9 @@ const workspace = useCurrentWorkspace()
 const applicationId = computed(() => String(route.params.applicationId))
 const canManage = computed(() =>
   workspace.value ? roleAtLeast(workspace.value.role, 'admin') : false,
+)
+const canAuthor = computed(() =>
+  workspace.value ? roleAtLeast(workspace.value.role, 'editor') : false,
 )
 
 const application = shallowRef<Application>()
@@ -154,6 +158,24 @@ async function remove() {
           @submit="save"
           @cancel="editing = false"
         />
+      </section>
+
+      <GuideList
+        v-if="canAuthor"
+        class="mt-10"
+        :workspace-id="workspace.id"
+        :application-id="application.id"
+      />
+      <section
+        v-else
+        class="mt-10 max-w-2xl rounded-xl border border-dashed border-slate-300 bg-white/60 p-6"
+        aria-labelledby="guides-heading"
+      >
+        <h2 id="guides-heading" class="text-lg font-semibold">Guides</h2>
+        <p class="mt-1 text-sm text-slate-600">
+          Editors prepare the guides for this application. Once published, you will follow them
+          inside {{ application.name }} with the ContextLayer extension.
+        </p>
       </section>
     </template>
   </div>
