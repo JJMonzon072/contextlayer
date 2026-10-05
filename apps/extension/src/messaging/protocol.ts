@@ -9,7 +9,7 @@
  * receiving side. Content scripts run inside untrusted pages, so the background
  * treats their messages as untrusted input.
  */
-import { healthReportSchema } from '@contextlayer/shared'
+import { healthReportSchema, publishedGuideSummarySchema } from '@contextlayer/shared'
 import { z } from 'zod'
 
 export const MESSAGE_ERROR_CODES = [
@@ -56,6 +56,11 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('connection.start') }),
   z.strictObject({ type: z.literal('connection.cancel') }),
   z.strictObject({ type: z.literal('connection.disconnect') }),
+  z.strictObject({ type: z.literal('site.status'), tabId: z.number().int().nonnegative() }),
+  z.strictObject({ type: z.literal('site.enable'), tabId: z.number().int().nonnegative() }),
+  z.strictObject({ type: z.literal('site.disable'), tabId: z.number().int().nonnegative() }),
+  // The only request a content script may send: "may I run on this page?"
+  z.strictObject({ type: z.literal('page.hello') }),
 ])
 
 export type BackgroundRequest = z.infer<typeof backgroundRequestSchema>
@@ -77,7 +82,8 @@ export const connectionStatusSchema = z.object({
     .nullable(),
   attemptPending: z.boolean(),
   persistent: z.boolean(),
-  api: z.enum(['ok', 'unreachable']),
+  /** `withheld`: the user turned off the extension's access to the API origin in Chrome. */
+  api: z.enum(['ok', 'unreachable', 'withheld']),
 })
 
 export type ConnectionStatusData = z.infer<typeof connectionStatusSchema>
@@ -87,6 +93,41 @@ export const connectionStatusResultSchema = messageResultSchema(connectionStatus
 export const disconnectResultSchema = messageResultSchema(
   z.object({ serverConfirmed: z.boolean() }),
 )
+
+const siteFields = {
+  origin: z.string(),
+  pattern: z.string(),
+  /** Names of the workspace's applications registered for this origin. */
+  applications: z.array(z.string()),
+}
+
+/** What the popup shows for the active tab's site (ADR 0017). */
+export const siteStatusSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unsupported') }),
+  z.object({ state: z.literal('disconnected'), origin: z.string() }),
+  z.object({ state: z.literal('api-withheld'), origin: z.string() }),
+  z.object({ state: z.literal('api-unreachable'), origin: z.string() }),
+  z.object({ state: z.literal('not-registered'), origin: z.string(), workspace: z.string() }),
+  z.object({
+    state: z.literal('available'),
+    ...siteFields,
+    permission: z.enum(['granted', 'missing']),
+  }),
+  z.object({ state: z.literal('permission-missing'), ...siteFields }),
+  z.object({
+    state: z.literal('active'),
+    ...siteFields,
+    /** `null` when the API could not be reached. */
+    guides: z.array(publishedGuideSummarySchema).nullable(),
+    moreGuides: z.boolean(),
+  }),
+])
+
+export type SiteStatusData = z.infer<typeof siteStatusSchema>
+
+export const siteStatusResultSchema = messageResultSchema(siteStatusSchema)
+
+export const helloResultSchema = messageResultSchema(z.object({ active: z.boolean() }))
 
 /**
  * Worker → extension pages: "the connection changed, ask again". Carries no
@@ -98,7 +139,9 @@ export const CONNECTION_CHANGED = { type: 'connection.changed' } as const
 // --- Requests handled by the content script ----------------------------------
 
 export const contentRequestSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('page.ping') }),
+  z.strictObject({ type: z.literal('page.ping') }),
+  // Sent by the worker when the site lost access: the script stops for good.
+  z.strictObject({ type: z.literal('page.deactivate') }),
 ])
 
 export type ContentRequest = z.infer<typeof contentRequestSchema>
@@ -107,8 +150,6 @@ export const pageInfoSchema = z.object({
   url: z.string(),
   title: z.string(),
   extensionVersion: z.string(),
-  /** API status as seen through the background service worker. */
-  api: z.enum(['ok', 'unavailable', 'unreachable']),
 })
 
 export type PageInfo = z.infer<typeof pageInfoSchema>

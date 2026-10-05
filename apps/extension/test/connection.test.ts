@@ -23,7 +23,10 @@ const DASHBOARD = 'http://localhost:5173'
 const TAB = 42
 const CODE = `clc_${'c'.repeat(43)}`
 
-function setup(handler: (call: Call) => Response | Promise<Response> = () => json(204)) {
+function setup(
+  handler: (call: Call) => Response | Promise<Response> = () => json(204),
+  apiAccess = true,
+) {
   let clock = NOW
   const storage = memoryStorage()
   const vault = createVault(storage)
@@ -36,6 +39,7 @@ function setup(handler: (call: Call) => Response | Promise<Response> = () => jso
     auth,
     api,
     openTab,
+    apiAccess: () => Promise.resolve(apiAccess),
     dashboardOrigin: DASHBOARD,
     extensionId: DEVELOPMENT_EXTENSION_ID,
     now: () => clock,

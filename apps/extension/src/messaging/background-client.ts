@@ -6,9 +6,11 @@ import {
   connectionStatusResultSchema,
   disconnectResultSchema,
   failure,
+  siteStatusResultSchema,
   type BackgroundRequest,
   type ConnectionStatusData,
   type MessageResult,
+  type SiteStatusData,
 } from './protocol'
 
 /**
@@ -49,4 +51,16 @@ export function cancelConnection(): Promise<MessageResult<ConnectionStatusData>>
 
 export function disconnect(): Promise<MessageResult<{ serverConfirmed: boolean }>> {
   return sendToBackground({ type: 'connection.disconnect' }, disconnectResultSchema)
+}
+
+export function requestSiteStatus(tabId: number): Promise<MessageResult<SiteStatusData>> {
+  return sendToBackground({ type: 'site.status', tabId }, siteStatusResultSchema)
+}
+
+export function enableSite(tabId: number): Promise<MessageResult<SiteStatusData>> {
+  return sendToBackground({ type: 'site.enable', tabId }, siteStatusResultSchema)
+}
+
+export function disableSite(tabId: number): Promise<MessageResult<SiteStatusData>> {
+  return sendToBackground({ type: 'site.disable', tabId }, siteStatusResultSchema)
 }

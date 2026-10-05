@@ -4,6 +4,7 @@ import {
   DEVELOPMENT_EXTENSION_PUBLIC_KEY,
   extensionIdFromDigestHex,
   isExtensionId,
+  originMatchPattern,
 } from '@contextlayer/shared'
 
 /**
@@ -12,13 +13,15 @@ import {
  * Permission policy (see docs/adr/0007-chrome-manifest-v3-extension.md):
  * - `storage`: credentials live in chrome.storage (session, and local once it
  *   is restricted to trusted contexts; see docs/adr/0015-authentication-strategy.md).
+ * - `scripting`: content scripts are registered at runtime, per enabled site,
+ *   and injected into tabs that were already open (ADR 0017).
+ * - `activeTab`: the popup can read the address of the tab it was opened on
+ *   without a permission for every site.
  * - `host_permissions` only covers the ContextLayer API origin, so the service
- *   worker can call it without CORS.
- * - Content-script match patterns ALSO grant host access, so they are pinned to
- *   exact origins too: in Phase 1 the content script only runs on the local
- *   dashboard (dev and preview servers), the one page every developer has.
- *   Customer domains will be granted at runtime (optional host permissions +
- *   `chrome.scripting.registerContentScripts`) in Phase 4.
+ *   worker can call it without CORS. There are no static content scripts: their
+ *   match patterns would grant host access too.
+ * - `optional_host_permissions`: customer sites, requested one exact origin at
+ *   a time from a click in the popup.
  */
 interface ManifestOptions {
   version: string
@@ -32,12 +35,6 @@ interface ManifestOptions {
    */
   preGrantedSites?: URL[]
 }
-
-/**
- * Pages where the Phase 1 content script runs: the local dashboard (Vite dev and
- * preview). Ports are explicit because a pattern without a port matches all ports.
- */
-export const CONTENT_SCRIPT_MATCHES = ['http://localhost:5173/*', 'http://localhost:4173/*']
 
 export function createManifest({
   version,
@@ -66,28 +63,21 @@ export function createManifest({
       default_icon: { 16: 'icons/icon-16.png', 32: 'icons/icon-32.png' },
     },
     background: { service_worker: 'background.js', type: 'module' },
-    permissions: ['storage'],
-    content_scripts: [
-      {
-        matches: CONTENT_SCRIPT_MATCHES,
-        js: ['content.js'],
-        run_at: 'document_idle',
-      },
-    ],
+    permissions: ['storage', 'scripting', 'activeTab'],
     // A pattern without a port matches every port, so the port is always
     // explicit, including the scheme default that `URL.origin` would omit.
     host_permissions: [originPattern(apiBaseUrl), ...preGrantedSites.map(originPattern)],
     // The dashboard page and nothing else may message the extension: no other
     // site and, since "ids" is absent, no other extension (verified in the spike).
     externally_connectable: { matches: [originPattern(dashboardUrl)] },
+    // Customer sites are asked for one exact origin at a time, from a click in
+    // the popup, and only for applications registered in the workspace (ADR 0017).
+    optional_host_permissions: ['https://*/*', 'http://*/*'],
   }
 }
 
 /** `https://api.example.com` → `https://api.example.com:443/*` (port pinned). */
-export function originPattern(url: URL): string {
-  const port = url.port || (url.protocol === 'https:' ? '443' : '80')
-  return `${url.protocol}//${url.hostname}:${port}/*`
-}
+export const originPattern = (url: URL): string => originMatchPattern(url)
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 

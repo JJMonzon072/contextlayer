@@ -85,3 +85,15 @@ export const originListSchema = z
       seen.add(origin)
     })
   })
+
+/**
+ * The Chrome match pattern for exactly one origin, used for host permissions
+ * and content-script registrations. The port is always explicit, including the
+ * scheme default that `URL.origin` omits: a pattern without a port matches
+ * every port of the host. `https://crm.example.com` → `https://crm.example.com:443/*`.
+ */
+export function originMatchPattern(origin: string | URL): string {
+  const url = typeof origin === 'string' ? new URL(origin) : origin
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80')
+  return `${url.protocol}//${url.hostname}:${port}/*`
+}

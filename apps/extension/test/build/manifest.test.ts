@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { DEVELOPMENT_EXTENSION_ID, DEVELOPMENT_EXTENSION_PUBLIC_KEY } from '@contextlayer/shared'
 
 import {
-  CONTENT_SCRIPT_MATCHES,
   createManifest,
   originPattern,
   parseApiBaseUrl,
@@ -42,24 +41,30 @@ describe('createManifest', () => {
     expect(defaultPortManifest.host_permissions).toEqual(['https://api.contextlayer.example:443/*'])
   })
 
-  it('only asks for storage among the privileged APIs', () => {
-    expect(manifest.permissions).toEqual(['storage'])
+  it('asks for storage, scripting and activeTab, and customer sites only at runtime', () => {
+    expect(manifest.permissions).toEqual(['storage', 'scripting', 'activeTab'])
+    expect(manifest.optional_host_permissions).toEqual(['https://*/*', 'http://*/*'])
+  })
+
+  it('declares no static content script: they would grant host access too', () => {
+    expect(manifest.content_scripts).toBeUndefined()
+  })
+
+  it('pre-grants test sites only when the e2e build asks for them', () => {
+    const e2e = createManifest({
+      version: '0.1.0',
+      apiBaseUrl: new URL('http://localhost:3100'),
+      dashboardUrl: new URL('http://localhost:4173'),
+      identity,
+      preGrantedSites: [new URL('http://localhost:4179')],
+    })
+    expect(e2e.host_permissions).toEqual(['http://localhost:3100/*', 'http://localhost:4179/*'])
   })
 
   it('lets only the exact dashboard origin message the extension, no other extension', () => {
     expect(manifest.externally_connectable).toEqual({
       matches: ['https://app.contextlayer.example:443/*'],
     })
-  })
-
-  it('restricts the Phase 1 content script to the local dashboard, ports pinned', () => {
-    expect(manifest.content_scripts).toEqual([
-      { matches: CONTENT_SCRIPT_MATCHES, js: ['content.js'], run_at: 'document_idle' },
-    ])
-    // Content-script matches grant host access too: no wildcard hosts or ports.
-    for (const pattern of CONTENT_SCRIPT_MATCHES) {
-      expect(pattern).toMatch(/^http:\/\/localhost:\d+\/\*$/)
-    }
   })
 })
 

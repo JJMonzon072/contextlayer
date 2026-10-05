@@ -7,7 +7,9 @@ import {
   type BackgroundRequest,
   type ConnectionStatusData,
   type MessageResult,
+  type SiteStatusData,
 } from '../messaging/protocol'
+import type { HelloResult, PageSender } from './site-access'
 
 /**
  * Where a runtime message comes from. Content scripts live inside arbitrary web
@@ -17,18 +19,23 @@ import {
 export type SenderContext = 'extension-page' | 'content-script'
 
 /**
- * Which contexts may send each request. Connecting, disconnecting and every
- * other privileged command are for extension pages only.
+ * Which contexts may send each request. Every command that reads or changes
+ * the connection or site access is for extension pages only; a content script
+ * may only ask whether it may run on its own page.
  */
 const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[]> = {
-  'api.health.get': ['extension-page', 'content-script'],
+  'api.health.get': ['extension-page'],
   'connection.status': ['extension-page'],
   'connection.start': ['extension-page'],
   'connection.cancel': ['extension-page'],
   'connection.disconnect': ['extension-page'],
+  'site.status': ['extension-page'],
+  'site.enable': ['extension-page'],
+  'site.disable': ['extension-page'],
+  'page.hello': ['content-script'],
 }
 
-type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'>
+type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'> & PageSender
 
 export function classifySender(sender: Sender, extensionId: string): SenderContext | undefined {
   if (sender.id !== extensionId) return undefined
@@ -46,6 +53,12 @@ export interface BackgroundDeps {
     start(): Promise<void>
     cancel(): Promise<void>
     disconnect(): Promise<{ serverConfirmed: boolean }>
+  }
+  site: {
+    status(tabId: number): Promise<SiteStatusData>
+    enable(tabId: number): Promise<SiteStatusData>
+    disable(tabId: number): Promise<SiteStatusData>
+    hello(sender: PageSender): Promise<HelloResult>
   }
   onApiError?: (error: unknown) => void
 }
@@ -91,5 +104,13 @@ export async function handleBackgroundMessage(
       return success(await deps.connection.status())
     case 'connection.disconnect':
       return success(await deps.connection.disconnect())
+    case 'site.status':
+      return success(await deps.site.status(request.data.tabId))
+    case 'site.enable':
+      return success(await deps.site.enable(request.data.tabId))
+    case 'site.disable':
+      return success(await deps.site.disable(request.data.tabId))
+    case 'page.hello':
+      return success(await deps.site.hello(sender))
   }
 }

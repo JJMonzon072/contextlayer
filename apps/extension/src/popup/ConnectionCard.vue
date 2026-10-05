@@ -110,6 +110,14 @@ const state = computed(() => status.value?.state ?? 'loading')
       >
         ContextLayer can't be reached right now. This is the last known connection.
       </p>
+      <p
+        v-else-if="status.api === 'withheld'"
+        class="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-amber-900"
+        data-testid="connection-withheld"
+      >
+        Chrome is blocking ContextLayer's access to its server (chrome://extensions → ContextLayer →
+        Site access).
+      </p>
       <p v-if="status.attemptPending" class="mt-2 text-slate-600">
         Waiting for approval in the dashboard tab…
       </p>

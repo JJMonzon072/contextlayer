@@ -1,3 +1,4 @@
+import { extensionApplicationSchema } from '@contextlayer/shared'
 import { z } from 'zod'
 
 import type { ExtensionStorage, StorageArea } from './storage'
@@ -13,6 +14,9 @@ const KEYS = {
   refresh: 'cl.refresh',
   connection: 'cl.connection',
   ended: 'cl.ended',
+  sites: 'cl.sites',
+  applications: 'cl.applications',
+  pages: 'cl.pages',
 } as const
 
 export const attemptSchema = z.object({
@@ -38,6 +42,19 @@ export const connectionRecordSchema = z.object({
   expiresAt: z.string(),
 })
 
+/** Origins the user turned ContextLayer on for, in one workspace. */
+const sitesSchema = z.object({ workspaceId: z.string(), origins: z.array(z.string()) })
+
+/** The connection's registered applications, cached for this browser session. */
+const applicationsCacheSchema = z.object({
+  grantId: z.string(),
+  fetchedAt: z.number(),
+  items: z.array(extensionApplicationSchema),
+})
+
+/** Pages whose content script was authorized, by tab: told to stop when access ends. */
+const pagesSchema = z.record(z.string(), z.object({ origin: z.string(), documentId: z.string() }))
+
 /** Why the last connection ended without the user disconnecting. */
 const endedSchema = z.object({ reason: z.enum(['ended']), at: z.number() })
 
@@ -45,6 +62,8 @@ export type Attempt = z.infer<typeof attemptSchema>
 export type AccessRecord = z.infer<typeof accessSchema>
 export type RefreshRecord = z.infer<typeof refreshSchema>
 export type ConnectionRecord = z.infer<typeof connectionRecordSchema>
+export type ApplicationsCache = z.infer<typeof applicationsCacheSchema>
+export type PageRecords = z.infer<typeof pagesSchema>
 
 async function read<T>(
   area: StorageArea,
@@ -85,6 +104,22 @@ export function createVault(storage: ExtensionStorage) {
     },
     readEnded: () => read(storage.session, KEYS.ended, endedSchema),
 
+    /** Activated origins of a workspace; another workspace's list counts as empty. */
+    async readSites(workspaceId: string): Promise<string[]> {
+      const sites = await read(await persistentArea(), KEYS.sites, sitesSchema)
+      return sites?.workspaceId === workspaceId ? sites.origins : []
+    },
+    async writeSites(workspaceId: string, origins: string[]): Promise<void> {
+      await (await persistentArea()).set({ [KEYS.sites]: { workspaceId, origins } })
+    },
+
+    readApplications: () => read(storage.session, KEYS.applications, applicationsCacheSchema),
+    writeApplications: (cache: ApplicationsCache) =>
+      storage.session.set({ [KEYS.applications]: cache }),
+
+    readPages: async () => (await read(storage.session, KEYS.pages, pagesSchema)) ?? {},
+    writePages: (pages: PageRecords) => storage.session.set({ [KEYS.pages]: pages }),
+
     /** Stores a full credential set; the refresh token only in the protected area. */
     async saveConnection(values: {
       access: AccessRecord
@@ -100,8 +135,8 @@ export function createVault(storage: ExtensionStorage) {
     /** Forgets every credential, in both areas. `ended` marks a connection lost on its own. */
     async clearConnection(ended: boolean, at: number): Promise<void> {
       await storage.session.remove(KEYS.access)
-      await storage.local.remove([KEYS.refresh, KEYS.connection])
-      await storage.session.remove([KEYS.refresh, KEYS.connection])
+      await storage.local.remove([KEYS.refresh, KEYS.connection, KEYS.sites])
+      await storage.session.remove([KEYS.refresh, KEYS.connection, KEYS.sites, KEYS.applications])
       if (ended) await storage.session.set({ [KEYS.ended]: { reason: 'ended', at } })
       else await storage.session.remove(KEYS.ended)
     },

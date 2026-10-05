@@ -1,5 +1,3 @@
-import type { HealthReport } from '@contextlayer/shared'
-
 import {
   contentRequestSchema,
   failure,
@@ -10,38 +8,34 @@ import {
 
 export interface ContentDeps {
   extensionVersion: string
+  /** True once the worker authorized this page; until then nothing is shown or answered. */
+  isActive: () => boolean
   getPage: () => { url: string; title: string }
-  requestApiHealth: () => Promise<MessageResult<HealthReport>>
   showToast: (text: string) => void
-}
-
-const TOAST_BY_API_STATUS: Record<PageInfo['api'], string> = {
-  ok: 'ContextLayer is active on this page.',
-  unavailable: 'ContextLayer is active, but the API reports a problem.',
-  unreachable: 'ContextLayer is active, but the API is unreachable.',
+  /** Stops the script for good: listeners removed, UI removed. */
+  stop: () => void
 }
 
 /**
- * Handles messages addressed to the content script. The API is only reached
- * through the background service worker (`requestApiHealth`).
+ * Handles messages from the extension (popup, service worker) to the content
+ * script. The content script holds no credentials and never calls the API.
  */
-export async function handleContentMessage(
+export function handleContentMessage(
   message: unknown,
   deps: ContentDeps,
-): Promise<MessageResult<PageInfo>> {
+): MessageResult<PageInfo | null> {
   const request = contentRequestSchema.safeParse(message)
   if (!request.success) {
     return failure('BAD_REQUEST', 'Unsupported message.')
   }
 
-  // `page.ping` is the only request in Phase 1 (see the background handler).
-  const health = await deps.requestApiHealth()
-  const api: PageInfo['api'] = !health.ok
-    ? 'unreachable'
-    : health.data.status === 'ok'
-      ? 'ok'
-      : 'unavailable'
-
-  deps.showToast(TOAST_BY_API_STATUS[api])
-  return success({ ...deps.getPage(), extensionVersion: deps.extensionVersion, api })
+  switch (request.data.type) {
+    case 'page.deactivate':
+      deps.stop()
+      return success(null)
+    case 'page.ping':
+      if (!deps.isActive()) return failure('NOT_AVAILABLE', 'ContextLayer is not active here.')
+      deps.showToast('ContextLayer is active on this page.')
+      return success({ ...deps.getPage(), extensionVersion: deps.extensionVersion })
+  }
 }

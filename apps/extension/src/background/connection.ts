@@ -20,7 +20,7 @@ export interface ConnectionStatus {
   attemptPending: boolean
   /** False when the refresh token cannot be kept across browser restarts. */
   persistent: boolean
-  api: 'ok' | 'unreachable'
+  api: 'ok' | 'unreachable' | 'withheld'
 }
 
 export type ConnectionManager = ReturnType<typeof createConnectionManager>
@@ -39,6 +39,8 @@ export function createConnectionManager(deps: {
   auth: Auth
   api: ApiClient
   openTab: (url: string) => Promise<number | undefined>
+  /** False when the user withheld the extension's access to the API origin in Chrome. */
+  apiAccess: () => Promise<boolean>
   dashboardOrigin: string
   extensionId: string
   now: () => number
@@ -165,8 +167,8 @@ export function createConnectionManager(deps: {
       const attempt = await vault.readAttempt()
       const connecting = attempt !== undefined && attempt.expiresAt > now()
       let connection = await vault.readConnection()
-      let api: ConnectionStatus['api'] = 'ok'
-      if (connection) {
+      let api: ConnectionStatus['api'] = (await deps.apiAccess()) ? 'ok' : 'withheld'
+      if (connection && api === 'ok') {
         try {
           await auth.authorized(EXTENSION_PATHS.session, undefined)
         } catch (error) {
