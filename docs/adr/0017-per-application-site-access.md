@@ -24,7 +24,16 @@ From Phase 4 the extension must run inside customer applications (`https://crm.a
 
 **Manifest.** `permissions: storage, scripting, activeTab`; `host_permissions`: the API origin only; `optional_host_permissions: https://*/*, http://*/*`; no static content scripts (the Phase 1 one on the local dashboard is gone).
 
-**Popup.** `src/popup/ApplicationsCard.vue` lists the connection's applications with their origins, each On or Off in this browser, and opens an origin in a new tab. `src/popup/SiteCard.vue` shows, for the active tab, one state: unsupported page (browser pages, files, the Web Store), API access withheld, API unreachable, not registered in the workspace, available (registered, off; Chrome access granted or not), Chrome access removed while on, or active with the published guides (title and step count, no way to play them before Phase 6). "Turn on" calls `chrome.permissions.request` first, inside the click, for the origin with its port pinned (`originMatchPattern`), then asks the worker to record the activation; the worker records it only if the origin is registered and Chrome did grant it. "Turn off" removes the activation and gives Chrome's access back. `activeTab` lets the popup read the tab's address without a grant for every site.
+**Popup.** `src/popup/ApplicationsCard.vue` lists the connection's applications with their origins, each On or Off in this browser, and opens an origin in a new tab. `src/popup/SiteCard.vue` shows, for the active tab, one state: unsupported page (browser pages, files, the Web Store), API access withheld, API unreachable, not registered in the workspace, available (registered, off; Chrome access granted or not), Chrome access removed while on, or active with the published guides (title and step count, no way to play them before Phase 6). "Turn off" removes the activation and gives Chrome's access back. `activeTab` lets the popup read the tab's address without a grant for every site.
+
+**"Turn on" outlives the popup** (changed after the Phase 4 review of `5ed6613`, which found that the popup waited for Chrome's answer before telling the worker, so a popup closed while the prompt was open could leave the origin granted but never turned on). In the click's task, synchronously, the popup:
+
+1. sends `site.requestActivation` to the worker without waiting for its answer;
+2. calls `chrome.permissions.request()` for the origin with its port pinned (`originMatchPattern`).
+
+The worker stores a pending request in `storage.session`: the connection (grant) and workspace, the exact origin and pattern, the tab, and an expiry of 3 minutes; a newer request replaces it. The reconciliation completes it, at most once, when Chrome has granted that origin: at once if it already had, on `permissions.onAdded`, or when the popup asks for the status. Before turning the site on it checks again that the request has not lapsed, that the connection is the same, that the tab still shows that origin (a navigation drops the request: no other origin is ever turned on), that Chrome grants it and that it is still registered; the activation is written in a life-cycle transition ([ADR 0015](0015-authentication-strategy.md)), so Disconnect cannot slip in before the write. A refusal seen by the popup cancels the request; Disconnect, another connection, "Turn off" and expiry drop it. A grant made outside such a request, for instance in `chrome://extensions`, turns nothing on. If the popup was already closed when the user refused, the request waits until it lapses; granting that site in `chrome://extensions` within those 3 minutes completes it, since the user did ask for it.
+
+Measured in this repository's harness (Playwright's Chromium 153.0.8010.12, new headless; user activation simulated with CDP `Runtime.evaluate({ userGesture })`, not a real click): without activation, `permissions.request()` for an origin not yet granted is refused ("This function must be called during a user gesture"), while an origin already granted resolves `true` even without activation; with activation, a request made after a 6-second wait is refused, so activation expires with time. A request made after awaiting a round trip to the worker still went through, but the popup does not rely on that timing: it sends the message and asks Chrome in the same task, and that order was measured to still reach the prompt. In this harness the toolbar popup stayed open for 3 seconds after the prompt appeared; the closure reported in [Chromium issue 40721470](https://issues.chromium.org/issues/40721470) was not reproduced here, and the design does not depend on it, since a user can always close the popup.
 
 **Reconciliation** (`src/background/site-access.ts`). One idempotent, serialized function turns the four facts into dynamic registrations: id `cl-site-<first 96 bits of SHA-256(origin)>`, `matches` the pinned origin, `allFrames: false`, `runAt: document_idle`, `persistAcrossSessions: true`. It unregisters what is no longer wanted, registers what is missing, injects newly enabled origins into tabs already open on them, and sends `page.deactivate` (with the page's `documentId`) to pages that lost access. Registrations without the `cl-site-` prefix are never touched. Triggers: `runtime.onInstalled` and `runtime.onStartup` (which also re-inject every enabled origin, since registrations may be gone and open tabs hold orphans), `permissions.onAdded`/`onRemoved`, connection changes and site changes. There is no polling. Without a known application list (API down and nothing cached), it keeps what runs and adds nothing.
 
@@ -43,9 +52,34 @@ From Phase 4 the extension must run inside customer applications (`https://crm.a
 ## Consequences
 
 - **Positive:** the install-time grant is the API origin alone; each customer origin is granted by a click, only for registered applications; every change converges through one function that the unit tests drive with a fake Chrome and the e2e suite checks in Chromium.
-- **Negative:** an application deleted or an origin edited in the dashboard is noticed when the popup opens or a page asks after the cache expires, not instantly. The application list is bounded at 100 per workspace. Chrome's prompt cannot be automated: the e2e build pre-grants one stand-in site, so the popup's real request resolves without a prompt there.
-- **Manual check** (not automatable, not run by the test suites): load the regular build unpacked, connect, register an application for a site not granted yet, open it, click "Turn on for this site". Chrome shows its prompt for that origin only. "Allow" → the popup shows the site as on with its guides; "Deny" → the popup says Chrome did not allow access and the site stays off; nothing runs on it.
+- **Negative:** an application deleted or an origin edited in the dashboard is noticed when the popup opens or a page asks after the cache expires, not instantly. The application list is bounded at 100 per workspace. Chrome's prompt was not automated in this harness: the prompt for an origin not yet granted stayed open and the means tried did not answer it (the `--apps-gallery-install-auto-confirm-for-tests` switch, spike item 8), and the toolbar popup can only be opened there with `chrome.action.openPopup()`, which grants no `activeTab`, so the popup cannot even see the address of a site without access. Other setups (a headed browser driven at the OS level, for instance) were not tried. The e2e build therefore pre-grants one stand-in site, where the popup's real request resolves without a prompt; those tests show the worker's side, not the prompt.
+- **Manual check:** Chrome's own prompt is checked by hand, with the procedure below. Status: **not run yet** (pending for JJ); the automated suites do not cover it.
 - **Follow-ups:** **Proposed:** `permissions.addHostAccessRequest` (Chrome 133+) to ask again from the page when access was withheld. **Planned (Phase 6):** the player uses the same `page.hello` gate and reads guides through the worker.
+
+### Manual check of Chrome's permission prompt
+
+Use the regular build, not the e2e one, in a Chrome or Chromium profile where the sites below were never granted. Do not open the popup's DevTools: the point is its normal life cycle.
+
+Setup:
+
+1. `pnpm dev` (API, dashboard and `apps/extension/dist`), then `chrome://extensions` → Developer mode → **Load unpacked** → `apps/extension/dist`; pin ContextLayer.
+2. Serve two empty test sites that no extension has access to: `python3 -m http.server 8081` and, in another terminal, `python3 -m http.server 8082`.
+3. In the dashboard, in one workspace, register two applications, `http://localhost:8081` and `http://localhost:8082`, and publish one guide for each.
+4. Click the ContextLayer icon → **Connect to ContextLayer** → approve in the dashboard. The popup shows the workspace and both applications, Off.
+
+Allow:
+
+5. Open `http://localhost:8081`, click the ContextLayer icon in the toolbar (the real icon), and click **Turn on for this site**.
+6. Chrome asks for access to `localhost:8081` only. Click **Allow**. If the popup closed, leave it closed.
+7. Click the icon again. Expected: "On for …" with the published guide; Applications shows `http://localhost:8081` On; **Check this page** answers "Running on this page." and shows a toast on the page.
+
+Deny, in clean conditions (the second site was never granted nor turned on):
+
+8. Open `http://localhost:8082`, click the icon, **Turn on for this site**, and click **Deny** (or close the prompt).
+9. Reopen the popup if it closed. Expected: the site is still off ("Chrome will ask you to allow access to this site only." and the **Turn on** button, no guides and no **Check this page**); Applications shows `http://localhost:8082` Off; if the popup stayed open it said that Chrome did not allow access.
+10. Reload the page: no toast, nothing from ContextLayer. If `chrome://extensions` → ContextLayer → Details lists the sites ContextLayer may access, `localhost:8082` is not among them. After 3 minutes, reopen the popup: still off (the request lapsed).
+
+Record the Chrome version and the outcome of steps 7, 9 and 10 in the roadmap when the check is run.
 
 ## References
 

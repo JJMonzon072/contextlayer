@@ -91,7 +91,19 @@ An invalid or missing bearer answers 401 with `WWW-Authenticate: Bearer realm="c
 
 The cost is measured, not hypothetical: the spike showed that when Chrome stops the worker during a fetch, the response is lost. If that happens after the server rotated, the worker still holds the parent, its next refresh is a reuse, and the connection ends; the popup then says the connection expired or was revoked and offers to connect again (one approval in the dashboard, whose session is usually still valid). Refreshes are rare (single-flight, only when the access token is within 30 seconds of expiry), so this should seldom happen; the e2e suite reproduces it on purpose.
 
-**The worker's client.** Each request retries at most once, after one refresh; a second 401 ends the connection (no loops). A network error, a timeout, a 429 or a 5xx keeps the credentials: an unreachable API is not a revocation. A 400 or 401 from the token endpoint ends the connection and clears every credential. A refresh answer is saved only if the stored refresh token is still the one it replaced, so a late answer cannot bring back a connection the user disconnected or replaced meanwhile. Requests use `credentials: 'omit'`, `redirect: 'error'` (no credential follows a redirect), a 5-second timeout and only paths on the API origin.
+**The worker's client.** Each request retries at most once, after one refresh; a second 401 ends the connection (no loops). A network error, a timeout, a 429 or a 5xx keeps the credentials: an unreachable API is not a revocation. A 400 or 401 from the token endpoint ends the connection and clears every credential. A late answer is never applied to a connection other than the one it was requested for (life cycle below). Requests use `credentials: 'omit'`, `redirect: 'error'` (no credential follows a redirect), a 5-second timeout and only paths on the API origin.
+
+**Life cycle and late answers** (`src/background/lifecycle.ts`, added after the Phase 4 review of `5ed6613`, which found that a code exchange still in flight could install its connection after Disconnect or Cancel, and that two simultaneous messages could exchange one code twice).
+
+- Two in-memory generations: _attempts_ (moves when an attempt is started, consumed, cancelled or abandoned by closing its dashboard tab, when a connection is installed and on Disconnect) and _credentials_ (moves when the stored connection is installed, ends or is disconnected).
+- Every transition that reads or writes the stored connection runs alone (`exclusive`) and does storage work only, never a network request: Disconnect and Cancel never wait for a request in flight.
+- The attempt is read, checked and deleted in one transition, so of two simultaneous messages for it only one reaches the token endpoint; the other gets `unknown-attempt`.
+- A code exchange installs its tokens only if the attempt generation did not move since it took the attempt. Otherwise the tokens are never stored and the grant the server created is revoked (`reason: disconnected`), best effort: if that call fails (offline), the grant stays active on the server until its 30-day end or until it is revoked from "Connected browsers", where it is listed.
+- A refresh result, and the end of a connection after a refused refresh or a second 401, apply only if the credential generation is still the one the request started with, and a refresh is written only if the stored refresh token is still the one it rotated. A late answer can therefore neither bring back a disconnected connection nor overwrite or clear a newer one; a newer connection never shares an older one's refresh in flight.
+- Disconnect takes a snapshot, clears everything (connection, attempt, pending site request) in one transition, and only then revokes with the snapshot: its access token, or, if expired, a refresh made for that call only and never stored. If a refresh of the same connection is in flight at that moment, the server sees the refresh token twice and revokes the grant as a reuse; the popup then reports the revocation as unconfirmed.
+- The generations live in memory on purpose: Chrome runs one worker instance, and when it stops, its requests in flight stop with it (spike item 6), so no pending operation outlives them.
+
+The unit tests drive each interleaving with promises the test resolves (`apps/extension/test/lifecycle.test.ts`); ten of them failed before the change.
 
 **Storage.**
 
@@ -129,7 +141,7 @@ The worker calls `setAccessLevel` at top level on every start and awaits it befo
 ## Consequences
 
 - **Positive:** no token reaches page-reachable code, every session is revocable, the API needs no CORS, and the token endpoint is OAuth-shaped for later clients.
-- **Negative:** three token types plus one-time codes ([data model](../data-model.md)); the extension build depends on the dashboard origin; development cookies differ from production; a refresh answer lost after rotation costs a reconnection.
+- **Negative:** three token types plus one-time codes ([data model](../data-model.md)); the extension build depends on the dashboard origin; development cookies differ from production; a refresh answer lost after rotation costs a reconnection; a code exchange cancelled while in flight leaves an orphan grant on the server when its revocation cannot be sent.
 - **Spike before implementation** (dashboard items at the start of Phase 2, extension items at the start of Phase 4):
   1. `Origin`, `Sec-Fetch-Site` and cookies on service-worker fetches.
   2. Header values through the Vite proxy against the guard.
