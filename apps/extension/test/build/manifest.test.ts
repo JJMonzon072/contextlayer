@@ -1,20 +1,32 @@
 import { describe, expect, it } from 'vitest'
 
+import { DEVELOPMENT_EXTENSION_ID, DEVELOPMENT_EXTENSION_PUBLIC_KEY } from '@contextlayer/shared'
+
 import {
   CONTENT_SCRIPT_MATCHES,
   createManifest,
   originPattern,
   parseApiBaseUrl,
+  parseServiceOrigin,
+  resolveExtensionIdentity,
 } from '../../manifest.config'
+
+const identity = resolveExtensionIdentity({})
 
 describe('createManifest', () => {
   const manifest = createManifest({
     version: '0.1.0',
     apiBaseUrl: new URL('https://api.contextlayer.example:8443'),
+    identity,
   })
   const defaultPortManifest = createManifest({
     version: '0.1.0',
     apiBaseUrl: new URL('https://api.contextlayer.example'),
+    identity,
+  })
+
+  it('pins the extension id with the committed public key', () => {
+    expect(manifest.key).toBe(DEVELOPMENT_EXTENSION_PUBLIC_KEY)
   })
 
   it('declares a Manifest V3 extension with a module service worker', () => {
@@ -67,5 +79,54 @@ describe('parseApiBaseUrl', () => {
     ]) {
       expect(() => parseApiBaseUrl(value)).toThrow(/EXTENSION_API_BASE_URL/)
     }
+  })
+})
+
+describe('parseServiceOrigin', () => {
+  it('allows plain http only for loopback development hosts', () => {
+    expect(parseServiceOrigin('X', 'http://localhost:5173', '').origin).toBe(
+      'http://localhost:5173',
+    )
+    expect(parseServiceOrigin('X', 'http://127.0.0.1:3000', '').origin).toBe(
+      'http://127.0.0.1:3000',
+    )
+    expect(() => parseServiceOrigin('X', 'http://api.example.com', '')).toThrow(/https/)
+    expect(parseServiceOrigin('X', 'https://api.example.com', '').origin).toBe(
+      'https://api.example.com',
+    )
+  })
+
+  it('rejects credentials, queries and fragments, even empty ones', () => {
+    for (const value of [
+      'https://user:pw@api.example.com',
+      'https://api.example.com?',
+      'https://api.example.com#',
+    ]) {
+      expect(() => parseServiceOrigin('X', value, '')).toThrow(/X must be/)
+    }
+  })
+})
+
+describe('resolveExtensionIdentity', () => {
+  it('defaults to the committed development key and its id', () => {
+    expect(resolveExtensionIdentity({})).toEqual({
+      publicKey: DEVELOPMENT_EXTENSION_PUBLIC_KEY,
+      id: DEVELOPMENT_EXTENSION_ID,
+    })
+  })
+
+  it('accepts an EXTENSION_ID that matches the key and rejects one that does not', () => {
+    expect(resolveExtensionIdentity({ EXTENSION_ID: DEVELOPMENT_EXTENSION_ID }).id).toBe(
+      DEVELOPMENT_EXTENSION_ID,
+    )
+    expect(() => resolveExtensionIdentity({ EXTENSION_ID: 'a'.repeat(32) })).toThrow(
+      /does not match/,
+    )
+  })
+
+  it('rejects a key that is not base64 DER', () => {
+    expect(() =>
+      resolveExtensionIdentity({ EXTENSION_PUBLIC_KEY: '-----BEGIN PUBLIC KEY-----' }),
+    ).toThrow(/base64 DER/)
   })
 })

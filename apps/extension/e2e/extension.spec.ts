@@ -1,3 +1,4 @@
+import { DEVELOPMENT_EXTENSION_ID } from '@contextlayer/shared'
 import type { Page, Worker } from '@playwright/test'
 
 import { expect, test } from './fixtures'
@@ -39,8 +40,13 @@ async function pingActiveTab(page: Page, serviceWorker: Worker): Promise<unknown
   return response
 }
 
-test('loads the Manifest V3 service worker', ({ serviceWorker, extensionId }) => {
+test('loads the Manifest V3 service worker with the stable development id', ({
+  serviceWorker,
+  extensionId,
+}) => {
   expect(serviceWorker.url()).toBe(`chrome-extension://${extensionId}/background.js`)
+  // The manifest key pins the id: every clone and CI run installs the same extension.
+  expect(extensionId).toBe(DEVELOPMENT_EXTENSION_ID)
 })
 
 test('popup shows the API status obtained through the service worker', async ({

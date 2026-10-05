@@ -1,3 +1,11 @@
+import { createHash } from 'node:crypto'
+
+import {
+  DEVELOPMENT_EXTENSION_PUBLIC_KEY,
+  extensionIdFromDigestHex,
+  isExtensionId,
+} from '@contextlayer/shared'
+
 /**
  * Typed source of `dist/manifest.json`. Evaluated at build time by vite.config.ts.
  *
@@ -14,6 +22,7 @@
 interface ManifestOptions {
   version: string
   apiBaseUrl: URL
+  identity: ExtensionIdentity
 }
 
 /**
@@ -25,10 +34,13 @@ export const CONTENT_SCRIPT_MATCHES = ['http://localhost:5173/*', 'http://localh
 export function createManifest({
   version,
   apiBaseUrl,
+  identity,
 }: ManifestOptions): chrome.runtime.ManifestV3 {
   return {
     manifest_version: 3,
     name: 'ContextLayer',
+    // Public key that fixes the extension id (see packages/shared/src/extension-identity.ts).
+    key: identity.publicKey,
     description: 'Interactive, in-app guides for the web applications your team already uses.',
     version,
     minimum_chrome_version: '120',
@@ -63,24 +75,69 @@ export function originPattern(url: URL): string {
   return `${url.protocol}//${url.hostname}:${port}/*`
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
 /**
- * Validates `EXTENSION_API_BASE_URL`. Only an origin is accepted: the API serves
- * its routes at the root and only the origin is baked into the build, so a
- * path, query or fragment would otherwise be dropped silently.
+ * Validates an origin baked into the build (`EXTENSION_API_BASE_URL`). Only an
+ * origin is accepted: a path, query, fragment or credentials would otherwise
+ * be dropped silently. Plain http is only allowed for loopback development
+ * hosts; any remote service must use https.
  */
-export function parseApiBaseUrl(raw: string | undefined): URL {
-  const value = raw?.trim() ? raw.trim() : 'http://localhost:3000'
+export function parseServiceOrigin(name: string, raw: string | undefined, fallback: string): URL {
+  const value = raw?.trim() ? raw.trim() : fallback
   const url = URL.canParse(value) ? new URL(value) : undefined
-  if (
-    url === undefined ||
-    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
-    url.pathname !== '/' ||
-    url.search !== '' ||
-    url.hash !== ''
-  ) {
+  const valid =
+    url !== undefined &&
+    (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname))) &&
+    url.username === '' &&
+    url.password === '' &&
+    url.pathname === '/' &&
+    url.search === '' &&
+    url.hash === '' &&
+    !value.includes('#') &&
+    !value.includes('?')
+  if (!valid) {
     throw new Error(
-      `EXTENSION_API_BASE_URL must be an http(s) origin such as https://api.example.com, got "${value}"`,
+      `${name} must be an https origin such as https://api.example.com (http only for localhost), got "${value}"`,
     )
   }
   return url
+}
+
+export function parseApiBaseUrl(raw: string | undefined): URL {
+  return parseServiceOrigin('EXTENSION_API_BASE_URL', raw, 'http://localhost:3000')
+}
+
+export interface ExtensionIdentity {
+  /** Base64 DER public key, the manifest `key`. */
+  publicKey: string
+  /** The id Chrome derives from it. */
+  id: string
+}
+
+/**
+ * The manifest key and the id it produces. Without EXTENSION_PUBLIC_KEY the
+ * committed development key is used, so every build of a clone gets the same
+ * id. When EXTENSION_ID is also set, it must be the id of that key: the
+ * dashboard and the API are configured with the id, the manifest with the key.
+ */
+export function resolveExtensionIdentity(env: {
+  EXTENSION_PUBLIC_KEY?: string | undefined
+  EXTENSION_ID?: string | undefined
+}): ExtensionIdentity {
+  const publicKey = env.EXTENSION_PUBLIC_KEY?.trim()
+    ? env.EXTENSION_PUBLIC_KEY.trim()
+    : DEVELOPMENT_EXTENSION_PUBLIC_KEY
+  const der = Buffer.from(publicKey, 'base64')
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(publicKey) || der.length < 64) {
+    throw new Error('EXTENSION_PUBLIC_KEY must be a base64 DER public key (no PEM header).')
+  }
+  const id = extensionIdFromDigestHex(createHash('sha256').update(der).digest('hex'))
+  const expected = env.EXTENSION_ID?.trim()
+  if (expected && (!isExtensionId(expected) || expected !== id)) {
+    throw new Error(
+      `EXTENSION_ID (${expected}) does not match the id of EXTENSION_PUBLIC_KEY (${id}).`,
+    )
+  }
+  return { publicKey, id }
 }

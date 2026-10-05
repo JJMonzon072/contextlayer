@@ -5,7 +5,12 @@ import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defaultClientConditions, loadEnv, type InlineConfig, type Plugin } from 'vite'
 
-import { createManifest, parseApiBaseUrl } from './manifest.config'
+import {
+  createManifest,
+  parseApiBaseUrl,
+  resolveExtensionIdentity,
+  type ExtensionIdentity,
+} from './manifest.config'
 
 /**
  * The extension is produced by two Vite builds that share this file
@@ -27,6 +32,7 @@ interface BuildOptions {
 
 interface ExtensionEnv {
   apiBaseUrl: URL
+  identity: ExtensionIdentity
   version: string
 }
 
@@ -38,7 +44,11 @@ function readExtensionEnv(mode: string): ExtensionEnv {
     readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
   ) as { version: string }
 
-  return { apiBaseUrl, version: packageJson.version }
+  return {
+    apiBaseUrl,
+    identity: resolveExtensionIdentity(env),
+    version: packageJson.version,
+  }
 }
 
 /** Shared by both builds: source-first workspace packages and build-time constants. */
@@ -68,7 +78,11 @@ function manifestPlugin(env: ExtensionEnv): Plugin {
   return {
     name: 'contextlayer:manifest',
     generateBundle() {
-      const manifest = createManifest({ version: env.version, apiBaseUrl: env.apiBaseUrl })
+      const manifest = createManifest({
+        version: env.version,
+        apiBaseUrl: env.apiBaseUrl,
+        identity: env.identity,
+      })
       this.emitFile({
         type: 'asset',
         fileName: 'manifest.json',
