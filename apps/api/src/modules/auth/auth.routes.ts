@@ -8,7 +8,7 @@ import {
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 
-import type { SessionConfig } from '../../config/env.js'
+import type { AppConfig, SessionConfig } from '../../config/env.js'
 import { errorBody } from '../../http/error-handler.js'
 import type { AuthService, ClientMeta } from './auth.service.js'
 import { authOf } from './require-session.js'
@@ -17,7 +17,18 @@ import { clearedSessionCookieOptions, sessionCookieOptions } from './session-coo
 interface AuthRoutesOptions {
   auth: AuthService
   session: SessionConfig
+  rateLimits: AppConfig['rateLimits']
   requireSession: preHandlerAsyncHookHandler
+}
+
+/** Login attempts are counted per client and per targeted account. */
+function loginRateLimitKey(request: FastifyRequest): string {
+  const body: unknown = request.body
+  const email =
+    typeof body === 'object' && body !== null && 'email' in body && typeof body.email === 'string'
+      ? body.email.trim().toLowerCase()
+      : ''
+  return `login:${request.ip}:${email}`
 }
 
 function clientMeta(request: FastifyRequest): ClientMeta {
@@ -25,7 +36,7 @@ function clientMeta(request: FastifyRequest): ClientMeta {
 }
 
 export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (app, options) => {
-  const { auth, session, requireSession } = options
+  const { auth, session, rateLimits, requireSession } = options
 
   /** A fresh token on every sign-in; a session the client already had is revoked (no fixation). */
   async function issueSession(request: FastifyRequest, reply: FastifyReply, token: string) {
@@ -37,6 +48,13 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (app, option
   app.post(
     AUTH_PATHS.register,
     {
+      config: {
+        rateLimit: {
+          max: rateLimits.registerMax,
+          timeWindow: rateLimits.windowMs,
+          keyGenerator: (request) => `register:${request.ip}`,
+        },
+      },
       schema: {
         body: registerRequestSchema,
         response: { 201: sessionResponseSchema, 409: apiErrorSchema },
@@ -57,6 +75,15 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (app, option
   app.post(
     AUTH_PATHS.login,
     {
+      config: {
+        rateLimit: {
+          max: rateLimits.loginMax,
+          timeWindow: rateLimits.windowMs,
+          // After body parsing and validation, so the key can include the email.
+          hook: 'preHandler',
+          keyGenerator: loginRateLimitKey,
+        },
+      },
       schema: {
         body: loginRequestSchema,
         response: { 200: sessionResponseSchema, 401: apiErrorSchema },

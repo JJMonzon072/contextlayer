@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import cookie from '@fastify/cookie'
 import helmet from '@fastify/helmet'
+import rateLimit from '@fastify/rate-limit'
 import Fastify, { type FastifyBaseLogger } from 'fastify'
 import {
   serializerCompiler,
@@ -11,6 +12,7 @@ import {
 import { pino } from 'pino'
 
 import type { AppConfig } from './config/env.js'
+import { registerCsrfGuard } from './http/csrf-guard.js'
 import { registerErrorHandling } from './http/error-handler.js'
 import type { Database } from './infrastructure/database/client.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
@@ -47,6 +49,8 @@ export async function buildApp({
   const fastify = Fastify({
     loggerInstance: logger,
     genReqId: () => randomUUID(),
+    // Only named proxies may set the client address (rate limits key on request.ip).
+    trustProxy: config.http.trustProxy.length > 0 ? config.http.trustProxy : false,
   })
 
   fastify.setValidatorCompiler(validatorCompiler)
@@ -63,8 +67,20 @@ export async function buildApp({
     await database.close()
   })
 
+  // JSON only: text/plain is one of the bodies a cross-site form can send
+  // without a CORS preflight, so it is not accepted at all (415).
+  app.removeContentTypeParser('text/plain')
+  registerCsrfGuard(app, config.http.dashboardOrigins)
+
   await app.register(helmet)
   await app.register(cookie)
+  // No global limit: routes opt in (auth routes). The thrown error reaches the
+  // error handler, which answers 429 RATE_LIMITED; the plugin adds retry-after.
+  await app.register(rateLimit, {
+    global: false,
+    errorResponseBuilder: (_request, context) =>
+      Object.assign(new Error('rate limit exceeded'), { statusCode: context.statusCode }),
+  })
 
   const healthService = createHealthService({
     probes: { database: () => database.ping({ timeoutMs: HEALTH_PROBE_TIMEOUT_MS }) },
@@ -88,7 +104,12 @@ export async function buildApp({
     v1.addHook('onSend', async (_request, reply) => {
       void reply.header('cache-control', 'no-store')
     })
-    await v1.register(authRoutes, { auth, session: config.session, requireSession })
+    await v1.register(authRoutes, {
+      auth,
+      session: config.session,
+      rateLimits: config.rateLimits,
+      requireSession,
+    })
   })
 
   return app
