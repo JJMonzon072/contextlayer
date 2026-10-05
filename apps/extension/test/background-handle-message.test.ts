@@ -40,6 +40,7 @@ function deps(fetchApiHealth = vi.fn(() => Promise.resolve(report))) {
       disconnect: vi.fn(() => Promise.resolve({ serverConfirmed: true })),
     },
     site: {
+      applications: vi.fn(() => Promise.resolve({ applications: [] })),
       status: vi.fn(() => Promise.resolve(siteStatus)),
       enable: vi.fn(() => Promise.resolve(siteStatus)),
       disable: vi.fn(() => Promise.resolve(siteStatus)),
@@ -56,6 +57,7 @@ const PRIVILEGED = [
   { type: 'connection.start' },
   { type: 'connection.cancel' },
   { type: 'connection.disconnect' },
+  { type: 'applications.list' },
   { type: 'site.status', tabId: 7 },
   { type: 'site.enable', tabId: 7 },
   { type: 'site.disable', tabId: 7 },

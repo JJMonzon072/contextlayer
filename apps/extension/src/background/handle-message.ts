@@ -5,6 +5,7 @@ import {
   failure,
   success,
   type BackgroundRequest,
+  type ApplicationListData,
   type ConnectionStatusData,
   type MessageResult,
   type SiteStatusData,
@@ -29,6 +30,7 @@ const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[
   'connection.start': ['extension-page'],
   'connection.cancel': ['extension-page'],
   'connection.disconnect': ['extension-page'],
+  'applications.list': ['extension-page'],
   'site.status': ['extension-page'],
   'site.enable': ['extension-page'],
   'site.disable': ['extension-page'],
@@ -55,6 +57,7 @@ export interface BackgroundDeps {
     disconnect(): Promise<{ serverConfirmed: boolean }>
   }
   site: {
+    applications(): Promise<ApplicationListData>
     status(tabId: number): Promise<SiteStatusData>
     enable(tabId: number): Promise<SiteStatusData>
     disable(tabId: number): Promise<SiteStatusData>
@@ -104,6 +107,8 @@ export async function handleBackgroundMessage(
       return success(await deps.connection.status())
     case 'connection.disconnect':
       return success(await deps.connection.disconnect())
+    case 'applications.list':
+      return success(await deps.site.applications())
     case 'site.status':
       return success(await deps.site.status(request.data.tabId))
     case 'site.enable':

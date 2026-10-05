@@ -56,6 +56,7 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('connection.start') }),
   z.strictObject({ type: z.literal('connection.cancel') }),
   z.strictObject({ type: z.literal('connection.disconnect') }),
+  z.strictObject({ type: z.literal('applications.list') }),
   z.strictObject({ type: z.literal('site.status'), tabId: z.number().int().nonnegative() }),
   z.strictObject({ type: z.literal('site.enable'), tabId: z.number().int().nonnegative() }),
   z.strictObject({ type: z.literal('site.disable'), tabId: z.number().int().nonnegative() }),
@@ -128,6 +129,24 @@ export type SiteStatusData = z.infer<typeof siteStatusSchema>
 export const siteStatusResultSchema = messageResultSchema(siteStatusSchema)
 
 export const helloResultSchema = messageResultSchema(z.object({ active: z.boolean() }))
+
+/** The connection's applications, each origin marked on when ContextLayer runs there. */
+export const applicationListSchema = z.object({
+  /** `null` when not connected, or when the API cannot be reached and nothing is cached. */
+  applications: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        origins: z.array(z.object({ origin: z.string(), on: z.boolean() })),
+      }),
+    )
+    .nullable(),
+})
+
+export type ApplicationListData = z.infer<typeof applicationListSchema>
+
+export const applicationListResultSchema = messageResultSchema(applicationListSchema)
 
 /**
  * Worker → extension pages: "the connection changed, ask again". Carries no

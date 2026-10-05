@@ -7,7 +7,7 @@ import {
   type PublishedGuideSummary,
 } from '@contextlayer/shared'
 
-import type { SiteStatusData } from '../messaging/protocol'
+import type { ApplicationListData, SiteStatusData } from '../messaging/protocol'
 import { ApiUnreachableError } from './api-client'
 import { ConnectionEndedError, NotConnectedError, type Auth } from './auth'
 import type { ConnectionRecord, Vault } from './vault'
@@ -248,6 +248,33 @@ export function createSiteAccess(deps: {
   return {
     reconcile,
     status,
+
+    /** The connection's applications for the popup; an origin is "on" when all four facts hold. */
+    async applications(): Promise<ApplicationListData> {
+      const connection = await vault.readConnection()
+      if (!connection) return { applications: null }
+      let apps: ExtensionApplication[] | undefined
+      try {
+        apps = await applications(connection, true)
+      } catch (error) {
+        if (error instanceof ConnectionEndedError || error instanceof NotConnectedError) {
+          return { applications: null }
+        }
+        throw error
+      }
+      if (apps === undefined) return { applications: null }
+      const enabled = new Set(await vault.readSites(connection.workspace.id))
+      const result = []
+      for (const app of apps) {
+        const origins = []
+        for (const origin of app.origins) {
+          const on = enabled.has(origin) && (await chrome.hasHostAccess(originMatchPattern(origin)))
+          origins.push({ origin, on })
+        }
+        result.push({ id: app.id, name: app.name, origins })
+      }
+      return { applications: result }
+    },
 
     /**
      * Turns ContextLayer on for the tab's site. The popup asked Chrome for the

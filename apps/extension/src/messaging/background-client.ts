@@ -3,10 +3,12 @@ import type { z } from 'zod'
 
 import {
   apiHealthResultSchema,
+  applicationListResultSchema,
   connectionStatusResultSchema,
   disconnectResultSchema,
   failure,
   siteStatusResultSchema,
+  type ApplicationListData,
   type BackgroundRequest,
   type ConnectionStatusData,
   type MessageResult,
@@ -51,6 +53,10 @@ export function cancelConnection(): Promise<MessageResult<ConnectionStatusData>>
 
 export function disconnect(): Promise<MessageResult<{ serverConfirmed: boolean }>> {
   return sendToBackground({ type: 'connection.disconnect' }, disconnectResultSchema)
+}
+
+export function requestApplications(): Promise<MessageResult<ApplicationListData>> {
+  return sendToBackground({ type: 'applications.list' }, applicationListResultSchema)
 }
 
 export function requestSiteStatus(tabId: number): Promise<MessageResult<SiteStatusData>> {

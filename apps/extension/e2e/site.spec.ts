@@ -93,6 +93,15 @@ test('turns ContextLayer on for a registered site and lists its published guides
   extensionBrowser,
 }) => {
   await acme(context)
+  // The popup lists the connection's applications (here as a tab: it needs no active site).
+  const tab = await popupTab(context)
+  const applications = tab.getByTestId('application')
+  await expect(applications).toHaveCount(2)
+  await expect(applications.filter({ hasText: 'Acme CRM' })).toContainText(GRANTED_SITE)
+  await expect(applications.filter({ hasText: 'Acme Wiki' })).toContainText(UNGRANTED_SITE)
+  await expect(tab.getByTestId('application-origin-state')).toHaveText(['Off', 'Off'])
+  await tab.close()
+
   // Open before the site is enabled: the script must be injected into it.
   const open = await openSite(context, '/customers')
   const framed = await openSite(context, '/frame')
@@ -125,6 +134,15 @@ test('turns ContextLayer on for a registered site and lists its published guides
   expect(await contentScriptState(other)).toBeNull()
   await other.reload()
   expect(await contentScriptState(other)).toBeNull()
+
+  const after = await popupTab(context)
+  const state = (name: string) =>
+    after
+      .getByTestId('application')
+      .filter({ hasText: name })
+      .getByTestId('application-origin-state')
+  await expect(state('Acme CRM')).toHaveText('On')
+  await expect(state('Acme Wiki')).toHaveText('Off')
 })
 
 test('a second injection is a no-op and the on-page UI stays isolated', async ({

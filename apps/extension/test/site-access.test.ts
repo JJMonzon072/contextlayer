@@ -266,6 +266,42 @@ describe('enabling a site', () => {
   })
 })
 
+describe("the connection's applications", () => {
+  it('lists every application with its origins, on where ContextLayer runs', async () => {
+    const { site, granted } = await setup({
+      apps: [app('Acme CRM', [CRM]), app('Acme Wiki', [WIKI, 'https://wiki.acme.test'])],
+    })
+    granted.add(CRM_PATTERN)
+    await site.enable(CRM_TAB)
+
+    expect(await site.applications()).toEqual({
+      applications: [
+        {
+          id: expect.any(String) as string,
+          name: 'Acme CRM',
+          origins: [{ origin: CRM, on: true }],
+        },
+        {
+          id: expect.any(String) as string,
+          name: 'Acme Wiki',
+          origins: [
+            { origin: WIKI, on: false },
+            { origin: 'https://wiki.acme.test', on: false },
+          ],
+        },
+      ],
+    })
+  })
+
+  it('knows nothing when disconnected or when the API is down with nothing cached', async () => {
+    const disconnected = await setup({ connected: false })
+    expect(await disconnected.site.applications()).toEqual({ applications: null })
+
+    const offline = await setup({ api: () => Promise.reject(new ApiUnreachableError('offline')) })
+    expect(await offline.site.applications()).toEqual({ applications: null })
+  })
+})
+
 describe('pages asking to run (page.hello)', () => {
   it('authorizes the top frame of an enabled, registered and granted site', async () => {
     const { site, granted } = await setup()

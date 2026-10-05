@@ -6,6 +6,7 @@ import { computed, onMounted, shallowRef } from 'vue'
 import { EXTENSION_VERSION } from '../config'
 import { requestApiHealth } from '../messaging/background-client'
 import type { MessageResult } from '../messaging/protocol'
+import ApplicationsCard from './ApplicationsCard.vue'
 import ConnectionCard from './ConnectionCard.vue'
 import SiteCard from './SiteCard.vue'
 
@@ -34,6 +35,7 @@ const apiStatus = computed<{ tone: StatusTone; label: string }>(() => {
 
     <ConnectionCard />
     <SiteCard />
+    <ApplicationsCard />
 
     <section aria-labelledby="api-heading" class="mt-3 rounded-xl border border-slate-200 p-3">
       <div class="flex items-center justify-between" aria-live="polite">
