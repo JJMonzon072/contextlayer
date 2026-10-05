@@ -107,7 +107,12 @@ export async function buildApp({
     roleOf: (workspaceId: string, userId: string) => workspaces.roleOf(workspaceId, userId),
   }
   const applications = createApplicationsService({ db: database.db, memberships })
-  const guides = createGuidesService({ db: database.db, memberships, applications })
+  const guides = createGuidesService({
+    db: database.db,
+    memberships,
+    applications,
+    publishers: auth,
+  })
   const requireSession = createRequireSession(auth, config.session.cookieName)
 
   // Versioned product API: authenticated data must never sit in a cache.

@@ -3,6 +3,9 @@ import {
   guideListQuerySchema,
   guideListSchema,
   guideSchema,
+  guideVersionListSchema,
+  guideVersionSchema,
+  publishGuideResponseSchema,
   replaceStepsRequestSchema,
   updateGuideRequestSchema,
   WORKSPACES_PATH,
@@ -42,11 +45,20 @@ const ERRORS: Record<GuideError, DomainErrorReply> = {
     status: 404,
     message: 'A step in the request does not belong to this guide.',
   },
+  'no-steps': { status: 409, message: 'Add at least one step before publishing.' },
+  'version-not-found': { status: 404, message: 'Version not found.' },
+  'publish-conflict': {
+    status: 409,
+    message: 'Another publish of this guide just finished. Reload to see the new version.',
+  },
 }
 
 const BASE = `${WORKSPACES_PATH}/:workspaceId/guides`
 const workspaceParams = z.object({ workspaceId: z.uuid() })
 const guideParams = z.object({ workspaceId: z.uuid(), guideId: z.uuid() })
+const versionParams = guideParams.extend({
+  version: z.coerce.number().int().min(1).max(1_000_000),
+})
 
 export const guideRoutes: FastifyPluginAsyncZod<GuideRoutesOptions> = (app, options) => {
   const { guides, requireSession } = options
@@ -150,6 +162,61 @@ export const guideRoutes: FastifyPluginAsyncZod<GuideRoutesOptions> = (app, opti
         guideId,
         request.body,
       )
+      return result.ok
+        ? reply.send(result.value)
+        : sendDomainError(request, reply, ERRORS[result.error])
+    },
+  )
+
+  /** 201 with a new version, or 200 with the latest one when the draft did not change. */
+  app.post(
+    `${BASE}/:guideId/publish`,
+    {
+      schema: {
+        params: guideParams,
+        response: {
+          200: publishGuideResponseSchema,
+          201: publishGuideResponseSchema,
+          ...domainErrorResponses,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { workspaceId, guideId } = request.params
+      const result = await guides.publish(authOf(request).user.id, workspaceId, guideId)
+      if (!result.ok) return sendDomainError(request, reply, ERRORS[result.error])
+      return reply.code(result.value.created ? 201 : 200).send(result.value)
+    },
+  )
+
+  app.get(
+    `${BASE}/:guideId/versions`,
+    {
+      schema: {
+        params: guideParams,
+        response: { 200: guideVersionListSchema, ...domainErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const { workspaceId, guideId } = request.params
+      const result = await guides.listVersions(authOf(request).user.id, workspaceId, guideId)
+      return result.ok
+        ? reply.send({ items: result.value })
+        : sendDomainError(request, reply, ERRORS[result.error])
+    },
+  )
+
+  app.get(
+    `${BASE}/:guideId/versions/:version`,
+    {
+      schema: {
+        params: versionParams,
+        response: { 200: guideVersionSchema, ...domainErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const { workspaceId, guideId, version } = request.params
+      const result = await guides.getVersion(authOf(request).user.id, workspaceId, guideId, version)
       return result.ok
         ? reply.send(result.value)
         : sendDomainError(request, reply, ERRORS[result.error])

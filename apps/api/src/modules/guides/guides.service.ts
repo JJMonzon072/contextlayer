@@ -1,4 +1,5 @@
 import {
+  guideSnapshotSchema,
   roleAtLeast,
   type CreateGuideRequest,
   type Guide,
@@ -6,6 +7,9 @@ import {
   type GuideListQuery,
   type GuideStep,
   type GuideSummary,
+  type GuideVersion,
+  type GuideVersionSummary,
+  type PublishGuideResponse,
   type ReplaceStepsRequest,
   type UpdateGuideRequest,
 } from '@contextlayer/shared'
@@ -13,10 +17,18 @@ import {
 import { toPage } from '../../http/cursor.js'
 import {
   isForeignKeyViolation,
+  isUniqueViolation,
   type DbExecutor,
   type DrizzleDatabase,
 } from '../../infrastructure/database/client.js'
 import type { MembershipDirectory } from '../applications/applications.service.js'
+import {
+  findLatestVersion,
+  findVersion,
+  insertVersion,
+  listVersions,
+  type VersionRow,
+} from './guide-versions.repository.js'
 import {
   deleteStepsExcept,
   findGuide,
@@ -47,6 +59,9 @@ export type GuideError =
   | 'archived'
   | 'revision-conflict'
   | 'step-not-found'
+  | 'no-steps'
+  | 'version-not-found'
+  | 'publish-conflict'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: GuideError }
 
@@ -55,6 +70,11 @@ const fail = (error: GuideError): { ok: false; error: GuideError } => ({ ok: fal
 /** What this module needs from the applications module (wired in app.ts). */
 export interface ApplicationDirectory {
   exists(workspaceId: string, applicationId: string): Promise<boolean>
+}
+
+/** What this module needs from the auth module: names of the people who published. */
+export interface PublisherDirectory {
+  getProfiles(userIds: readonly string[]): Promise<Map<string, { displayName: string }>>
 }
 
 export function toGuideSummary(row: GuideRow): GuideSummary {
@@ -84,8 +104,35 @@ export function createGuidesService(deps: {
   db: DrizzleDatabase
   memberships: MembershipDirectory
   applications: ApplicationDirectory
+  publishers: PublisherDirectory
 }) {
-  const { db, memberships, applications } = deps
+  const { db, memberships, applications, publishers } = deps
+
+  async function toVersionSummaries(rows: readonly VersionRow[]): Promise<GuideVersionSummary[]> {
+    const ids = [...new Set(rows.flatMap((row) => (row.publishedBy ? [row.publishedBy] : [])))]
+    const profiles =
+      ids.length > 0
+        ? await publishers.getProfiles(ids)
+        : new Map<string, { displayName: string }>()
+    return rows.map((row) => {
+      const profile = row.publishedBy ? profiles.get(row.publishedBy) : undefined
+      return {
+        version: row.version,
+        publishedAt: row.publishedAt.toISOString(),
+        publishedBy:
+          row.publishedBy && profile
+            ? { userId: row.publishedBy, displayName: profile.displayName }
+            : null,
+        stepCount: row.stepCount,
+      }
+    })
+  }
+
+  async function toVersionSummary(row: VersionRow): Promise<GuideVersionSummary> {
+    const [summary] = await toVersionSummaries([row])
+    if (!summary) throw new Error('missing version summary')
+    return summary
+  }
 
   async function authorize(userId: string, workspaceId: string): Promise<GuideError | undefined> {
     const role = await memberships.roleOf(workspaceId, userId)
@@ -245,6 +292,114 @@ export function createGuidesService(deps: {
         await updateGuideDraft(tx, workspaceId, guideId, {})
         return guideOrFail(tx, workspaceId, guideId)
       })
+    },
+
+    /**
+     * Freezes the current draft into the next immutable version (ADR 0016).
+     * Runs under the guide lock that every draft change also takes, so the
+     * snapshot never mixes two drafts and two publishes cannot both create
+     * version N (the unique (guide_id, version) constraint backs this up). If
+     * the draft has not changed since the latest version, that version is
+     * returned instead of a duplicate, which makes double clicks harmless.
+     */
+    async publish(
+      userId: string,
+      workspaceId: string,
+      guideId: string,
+    ): Promise<Result<PublishGuideResponse>> {
+      const denied = await authorize(userId, workspaceId)
+      if (denied) return fail(denied)
+      return db.transaction(async (tx) => {
+        const guide = await lockGuide(tx, workspaceId, guideId)
+        if (!guide) return fail('guide-not-found')
+        if (guide.status === 'archived') return fail('archived')
+
+        const latest = await findLatestVersion(tx, workspaceId, guideId)
+        const current = async () => {
+          const row = await findGuide(tx, workspaceId, guideId)
+          if (!row) throw new Error('locked guide disappeared')
+          return toGuideSummary(row)
+        }
+        if (latest?.guideRevision === guide.revision) {
+          return {
+            ok: true,
+            value: {
+              created: false,
+              version: await toVersionSummary(latest),
+              guide: await current(),
+            },
+          }
+        }
+
+        const steps = await listSteps(tx, workspaceId, guideId)
+        if (steps.length === 0) return fail('no-steps')
+        const snapshot = guideSnapshotSchema.parse({
+          version: 1,
+          guide: {
+            id: guide.id,
+            applicationId: guide.applicationId,
+            title: guide.title,
+            description: guide.description,
+            startUrlPattern: guide.startUrlPattern,
+          },
+          steps,
+        })
+
+        let inserted: VersionRow
+        try {
+          inserted = await insertVersion(tx, {
+            guideId,
+            version: (latest?.version ?? 0) + 1,
+            guideRevision: guide.revision,
+            snapshot,
+            publishedBy: userId,
+          })
+        } catch (error) {
+          if (isUniqueViolation(error, 'guide_versions_guide_id_version_key')) {
+            return fail('publish-conflict')
+          }
+          throw error
+        }
+        if (guide.status === 'draft') await setGuideStatus(tx, workspaceId, guideId, 'published')
+        return {
+          ok: true,
+          value: {
+            created: true,
+            version: await toVersionSummary(inserted),
+            guide: await current(),
+          },
+        }
+      })
+    },
+
+    async listVersions(
+      userId: string,
+      workspaceId: string,
+      guideId: string,
+    ): Promise<Result<GuideVersionSummary[]>> {
+      const denied = await authorize(userId, workspaceId)
+      if (denied) return fail(denied)
+      if (!(await findGuide(db, workspaceId, guideId))) return fail('guide-not-found')
+      return {
+        ok: true,
+        value: await toVersionSummaries(await listVersions(db, workspaceId, guideId)),
+      }
+    },
+
+    async getVersion(
+      userId: string,
+      workspaceId: string,
+      guideId: string,
+      version: number,
+    ): Promise<Result<GuideVersion>> {
+      const denied = await authorize(userId, workspaceId)
+      if (denied) return fail(denied)
+      const row = await findVersion(db, workspaceId, guideId, version)
+      if (!row) return fail('version-not-found')
+      return {
+        ok: true,
+        value: { ...(await toVersionSummary(row)), guideId, snapshot: row.snapshot },
+      }
     },
 
     /** Archiving hides the guide from players; versions are kept and it can be restored. */
