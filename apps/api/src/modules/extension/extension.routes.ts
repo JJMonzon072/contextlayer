@@ -5,6 +5,7 @@ import {
   EXTENSION_PATHS,
   extensionApplicationListSchema,
   extensionConnectionInfoSchema,
+  extensionRevokeRequestSchema,
   extensionTokenRequestSchema,
   extensionTokenResponseSchema,
   publishedGuideListSchema,
@@ -149,10 +150,19 @@ export const extensionRoutes: FastifyPluginAsyncZod<ExtensionRoutesOptions> = (a
     EXTENSION_PATHS.revoke,
     {
       preHandler: requireExtensionAccess,
+      // The optional body is parsed after authentication: route validation would
+      // otherwise answer 400 to a request that has no valid token at all.
       schema: { response: { 204: z.undefined(), ...domainErrorResponses } },
     },
     async (request, reply) => {
-      await extension.revoke(extensionAuthOf(request).grantId, 'disconnected')
+      const body = extensionRevokeRequestSchema.safeParse(request.body ?? {})
+      if (!body.success) {
+        return sendDomainError(request, reply, {
+          status: 400,
+          message: 'Invalid revocation reason.',
+        })
+      }
+      await extension.revoke(extensionAuthOf(request).grantId, body.data.reason)
       return reply.code(204).send()
     },
   )

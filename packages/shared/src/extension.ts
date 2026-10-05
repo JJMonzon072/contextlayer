@@ -122,6 +122,56 @@ export const connectionSchema = z.object({
 
 export const connectionListSchema = z.object({ items: z.array(connectionSchema) })
 
+// --- Dashboard → extension handoff (externally_connectable) -------------------
+
+/**
+ * The only messages the dashboard may send the extension. The extension checks
+ * the sender (exact dashboard origin, top frame, the tab it opened) and the
+ * pending attempt's `state` before acting; the code alone is useless without
+ * the PKCE verifier that never left the service worker.
+ */
+export const extensionExternalMessageSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('connection.complete'),
+    state: z.string().regex(CONNECTION_STATE_PATTERN),
+    code: credential('code'),
+  }),
+  z.strictObject({
+    type: z.literal('connection.cancel'),
+    state: z.string().regex(CONNECTION_STATE_PATTERN),
+  }),
+])
+
+export const EXTERNAL_ERROR_CODES = [
+  /** Malformed message or a sender that is not the expected dashboard tab. */
+  'invalid-request',
+  /** No pending attempt with this state (finished, replaced, cancelled). */
+  'unknown-attempt',
+  'expired-attempt',
+  /** The API refused the code (expired, used, wrong verifier). */
+  'exchange-failed',
+  'api-unreachable',
+] as const
+
+/** Acknowledgement to the dashboard: never a token, only who is now connected. */
+export const extensionExternalResponseSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    connection: z
+      .object({
+        user: z.object({ displayName: z.string() }),
+        workspace: z.object({ name: z.string() }),
+      })
+      .nullable(),
+  }),
+  z.object({ ok: z.literal(false), error: z.enum(EXTERNAL_ERROR_CODES) }),
+])
+
+/** Why a connection was revoked from the extension itself. */
+export const extensionRevokeRequestSchema = z.strictObject({
+  reason: z.enum(['disconnected', 'replaced']).default('disconnected'),
+})
+
 // --- Published content for a connection --------------------------------------
 
 export const extensionApplicationSchema = z.object({
@@ -172,3 +222,6 @@ export type ExtensionApplication = z.infer<typeof extensionApplicationSchema>
 export type PublishedGuideSummary = z.infer<typeof publishedGuideSummarySchema>
 export type PublishedGuideList = z.infer<typeof publishedGuideListSchema>
 export type PublishedGuide = z.infer<typeof publishedGuideSchema>
+export type ExtensionExternalMessage = z.infer<typeof extensionExternalMessageSchema>
+export type ExtensionExternalResponse = z.infer<typeof extensionExternalResponseSchema>
+export type ExternalErrorCode = (typeof EXTERNAL_ERROR_CODES)[number]

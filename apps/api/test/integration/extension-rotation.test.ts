@@ -208,3 +208,33 @@ describe('token endpoint rate limit', () => {
     expect(limited.headers['retry-after']).toBeDefined()
   })
 })
+
+describe('revocation reasons', () => {
+  it('records a replaced connection as replaced', async () => {
+    const { tokens } = await connected()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/extension/revoke',
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: { reason: 'replaced' },
+    })
+
+    expect(response.statusCode).toBe(204)
+    expect((await grants())[0]).toMatchObject({ revokedReason: 'replaced' })
+  })
+
+  it('accepts only the reasons an extension may give', async () => {
+    const { tokens } = await connected()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/extension/revoke',
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: { reason: 'refresh-reuse' },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect((await grants())[0]?.revokedAt).toBeNull()
+  })
+})
