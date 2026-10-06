@@ -14,6 +14,9 @@ function fakeOverlay(own: Element[] = []) {
     callout: vi.fn(),
     isOwn: (node) => own.some((element) => element === node || element.contains(node)),
     destroy: vi.fn(),
+    playerCard: () => document.createElement('div'),
+    showPlayerCard: vi.fn(),
+    hidePlayerCard: vi.fn(),
   }
   return { overlay, drawn, banners }
 }

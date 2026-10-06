@@ -30,6 +30,7 @@ const OVERLAY_CSS = `
 :host {
   all: initial !important;
   pointer-events: none !important;
+  direction: ltr !important;
 }
 
 [popover] {
@@ -125,6 +126,124 @@ const OVERLAY_CSS = `
   outline-offset: 2px;
 }
 
+.player {
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 14px 16px 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font: 400 13px/1.5 ${FONT};
+  text-align: left;
+  box-shadow: 0 12px 32px rgb(15 23 42 / 0.25);
+  pointer-events: auto;
+}
+
+.player .context {
+  display: block;
+  padding-right: 28px;
+  color: #4338ca;
+  font: 600 11px/1.4 ${FONT};
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.player .progress {
+  display: block;
+  margin: 2px 0 0;
+  color: #475569;
+  font: 500 12px/1.4 ${FONT};
+}
+
+.player .title {
+  display: block;
+  margin: 6px 0 0;
+  font: 600 15px/1.4 ${FONT};
+  overflow-wrap: anywhere;
+  outline: none;
+}
+
+.player .line {
+  display: block;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.player .hint {
+  display: block;
+  margin: 10px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fef3c7;
+  color: #78350f;
+  font: 500 12px/1.45 ${FONT};
+}
+
+.player .hint[hidden] {
+  display: none;
+}
+
+.player .actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin: 12px 0 0;
+}
+
+.player button {
+  padding: 6px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font: 600 12px/1.2 ${FONT};
+  cursor: pointer;
+}
+
+.player button.primary {
+  border-color: #4338ca;
+  background: #4338ca;
+  color: #ffffff;
+}
+
+.player button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.player .close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #334155;
+  font: 400 18px/28px ${FONT};
+}
+
+.player button:focus-visible,
+.player .title:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+.hidden-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .banner {
   inset: 12px auto auto 12px;
   max-width: 420px;
@@ -160,6 +279,14 @@ export interface Overlay {
   highlight(rect: HighlightRect | null, label?: string): void
   /** A persistent notice at the top of the page; `null` hides it. */
   banner(text: string | null): void
+  /**
+   * The Guide Player's card: a dialog popover the player fills and places. A
+   * new element after the page removed our host: the player keeps the one it
+   * filled and fills a new one again.
+   */
+  playerCard(): HTMLElement
+  showPlayerCard(): void
+  hidePlayerCard(): void
   /** True for our own host: hit tests and pickers skip it. */
   isOwn(node: Node): boolean
   destroy(): void
@@ -172,6 +299,7 @@ interface MountedOverlay {
   label: HTMLElement
   banner: HTMLElement
   callout: HTMLElement
+  player: HTMLElement
 }
 
 export function createOverlay(doc: Document): Overlay {
@@ -222,11 +350,12 @@ export function createOverlay(doc: Document): Overlay {
     const banner = part('banner', 'status')
     const callout = part('callout', 'dialog')
     callout.setAttribute('aria-label', 'ContextLayer step preview')
+    const player = part('player', 'dialog')
     const toast = part('toast', 'status')
 
     // documentElement survives SPA frameworks that replace <body> content.
     doc.documentElement.append(host)
-    return { host, toast, box, label, banner, callout }
+    return { host, toast, box, label, banner, callout, player }
   }
 
   /** The page may have removed our node (e.g. a framework re-rendering <html>). */
@@ -257,8 +386,8 @@ export function createOverlay(doc: Document): Overlay {
   /** Removes the host once nothing is shown, so an idle page carries no node of ours. */
   function unmountIfIdle() {
     if (!mounted) return
-    const { box, banner, callout } = mounted
-    const open = [box, banner, callout].some((element) => element.matches(':popover-open'))
+    const { box, banner, callout, player } = mounted
+    const open = [box, banner, callout, player].some((element) => element.matches(':popover-open'))
     if (!toastVisible && !open) unmount()
   }
 
@@ -332,6 +461,18 @@ export function createOverlay(doc: Document): Overlay {
       const left = Math.min(Math.max(12, target.left), Math.max(12, width - box.width - 12))
       callout.style.left = `${String(left)}px`
       callout.style.top = `${String(Math.min(top, Math.max(12, height - box.height - 12)))}px`
+    },
+
+    playerCard: () => ensure().player,
+
+    showPlayerCard() {
+      const { player } = ensure()
+      if (!player.matches(':popover-open')) show(player)
+    },
+
+    hidePlayerCard() {
+      hide(mounted?.player)
+      unmountIfIdle()
     },
 
     isOwn: (node) =>

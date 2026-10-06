@@ -13,6 +13,8 @@ function deps(overrides: Partial<ContentDeps> = {}): ContentDeps {
     stopPicker: vi.fn(),
     showPreview: vi.fn(() => true),
     hidePreview: vi.fn(),
+    showPlayer: vi.fn(() => true),
+    hidePlayer: vi.fn(),
     ...overrides,
   }
 }
@@ -116,5 +118,47 @@ describe('handleContentMessage', () => {
       data: { shown: false },
     })
     expect(showPreview).toHaveBeenCalledWith(CAPTURE, 'Save', ['Click.'])
+  })
+
+  it('plays a guide for the worker only, on a page it authorized', () => {
+    const step = {
+      runId: 'Rn1_run-id-0123456789abcdef',
+      generation: 0,
+      guideTitle: 'Create a customer',
+      index: 0,
+      count: 3,
+      title: 'Open the form',
+      lines: [],
+      target: null,
+      urlPattern: null,
+      placement: 'auto',
+    }
+    const showPlayer = vi.fn(() => true)
+    const hidePlayer = vi.fn()
+    const show = { type: 'player.show', step }
+    const hide = { type: 'player.hide', runId: step.runId }
+
+    for (const request of [show, hide]) {
+      expect(handleContentMessage(request, POPUP, deps({ showPlayer, hidePlayer }))).toMatchObject({
+        ok: false,
+        error: { code: 'FORBIDDEN' },
+      })
+    }
+    expect(
+      handleContentMessage(show, WORKER, deps({ isActive: () => false, showPlayer })),
+    ).toMatchObject({ ok: false, error: { code: 'NOT_AVAILABLE' } })
+    expect(showPlayer).not.toHaveBeenCalled()
+    expect(hidePlayer).not.toHaveBeenCalled()
+
+    expect(handleContentMessage(show, WORKER, deps({ showPlayer }))).toEqual({
+      ok: true,
+      data: { shown: true },
+    })
+    expect(showPlayer).toHaveBeenCalledWith(step)
+    expect(handleContentMessage(hide, WORKER, deps({ hidePlayer }))).toEqual({
+      ok: true,
+      data: null,
+    })
+    expect(hidePlayer).toHaveBeenCalledWith(step.runId)
   })
 })

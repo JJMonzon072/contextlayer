@@ -1,3 +1,4 @@
+import type { PlayerStep } from '../messaging/protocol'
 import { failure, success, type MessageResult } from '../messaging/result'
 import { readContentRequest } from './messages'
 
@@ -23,6 +24,10 @@ export interface ContentDeps {
   /** Previews a step on the element selected under this request; false when it is gone. */
   showPreview: (captureId: string, title: string, lines: string[]) => boolean
   hidePreview: () => void
+  /** Shows a step of a running guide; false when it cannot be shown (Edit Mode is selecting). */
+  showPlayer: (step: PlayerStep) => boolean
+  /** Removes the guide's UI if that run is the one shown. */
+  hidePlayer: (runId: string) => void
 }
 
 export interface ContentSender {
@@ -33,8 +38,8 @@ export interface ContentSender {
 /**
  * Handles messages from the extension (popup, service worker) to the content
  * script. The content script holds no credentials and never calls the API.
- * Capture and preview requests are accepted from the service worker only: it
- * is the one that checked the side panel's session and created the request id.
+ * Capture, preview and player requests are accepted from the service worker
+ * only: it is the one that checked the session or the run and created its id.
  */
 export function handleContentMessage(
   message: unknown,
@@ -67,6 +72,14 @@ export function handleContentMessage(
       return success({ shown: deps.showPreview(request.captureId, request.title, request.lines) })
     case 'preview.hide':
       deps.hidePreview()
+      return success(null)
+    case 'player.show':
+      if (!sender.fromWorker) return failure('FORBIDDEN', 'Only the extension may play a guide.')
+      if (!deps.isActive()) return failure('NOT_AVAILABLE', 'ContextLayer is not active here.')
+      return success({ shown: deps.showPlayer(request.step) })
+    case 'player.hide':
+      if (!sender.fromWorker) return failure('FORBIDDEN', 'Only the extension may end a guide.')
+      deps.hidePlayer(request.runId)
       return success(null)
   }
 }
