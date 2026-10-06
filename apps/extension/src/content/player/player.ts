@@ -31,7 +31,11 @@ export const HINTS = {
 export const ENDED_TEXT = 'This guide ended: a step could not be shown on this page.'
 export const STALE_TEXT = 'This guide is no longer playing.'
 
-/** How many two-frame checks a moving target gets before it is anchored anyway. */
+/**
+ * How many two-frame checks a target gets to hold still. One that is still
+ * moving after the last check is never anchored: the step is shown as
+ * `not-found` (reason `unstable`), under the descriptor's policy.
+ */
 const STABILITY_CHECKS = 5
 const POINTER_EVENTS = [
   'click',
@@ -356,7 +360,11 @@ export function createPlayer(deps: PlayerDeps): Player {
     }
   }
 
-  /** The element once its box held still for two frames; undefined if it went away. */
+  /**
+   * The element once its box held still across two animation frames;
+   * undefined if it went away or never held still within the checks (never a
+   * substitute: the caller shows the step unanchored).
+   */
   async function settle(element: Element, token: number): Promise<Element | undefined> {
     for (let check = 0; check < STABILITY_CHECKS; check += 1) {
       const before = boxOf(element)
@@ -364,9 +372,9 @@ export function createPlayer(deps: PlayerDeps): Player {
       await nextFrame()
       if (token !== renderToken) return undefined
       if (!element.isConnected || !rendered(element)) return undefined
-      if (sameBox(before, boxOf(element))) break
+      if (sameBox(before, boxOf(element))) return element
     }
-    return element
+    return undefined
   }
 
   /** Something other than the target (or our UI) is on top of its centre: a warning only. */

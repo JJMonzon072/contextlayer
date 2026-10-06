@@ -273,6 +273,46 @@ describe('showing a step', () => {
     expect(ui.highlights.every((rect) => rect === null)).toBe(true)
   })
 
+  it('never anchors a target that keeps moving, and shows the step on its own', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    const moving = document.querySelector('#new')
+    if (!moving) throw new Error('no button')
+    let x = 0
+    // A new box on every read: the target never holds still for two frames.
+    vi.spyOn(moving, 'getBoundingClientRect').mockImplementation(() =>
+      DOMRect.fromRect({ x: (x += 7), y: 40, width: 120, height: 32 }),
+    )
+
+    ui.player.show(step(0, { target }))
+    await settle()
+
+    expect(ui.isOpen()).toBe(true)
+    expect(ui.card.dataset.outcome).toBe('not-found')
+    expect(ui.card.dataset.side).toBe('none')
+    expect(ui.text('.hint')).toBe(HINTS['not-found'])
+    expect(ui.highlights.every((rect) => rect === null)).toBe(true)
+    expect(ui.anchored()).toBe(false)
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('anchors a target once it holds still, after moving for a while', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    const settling = document.querySelector('#new')
+    if (!settling) throw new Error('no button')
+    let reads = 0
+    vi.spyOn(settling, 'getBoundingClientRect').mockImplementation(() =>
+      DOMRect.fromRect({ x: Math.min((reads += 1), 3) * 10, y: 40, width: 120, height: 32 }),
+    )
+
+    ui.player.show(step(0, { target }))
+    await settle()
+
+    expect(ui.card.dataset.outcome).toBe('resolved')
+    expect(ui.anchored()).toBe(true)
+  })
+
   it('scrolls a target out of view into view, instantly under reduced motion', async () => {
     const ui = setup()
     const target = capture('#save')
