@@ -437,7 +437,9 @@ export async function playerView(page: Page): Promise<PlayerView> {
       text: open ? textOf(card) : '',
       hint: open ? hint : undefined,
       buttons: open ? buttons.map((button) => button.name) : [],
-      highlight: boxShown ? await borderBox(session, box) : undefined,
+      // The player hides the highlight between steps (while the next target
+      // settles): a box that went away between the two CDP calls is not drawn.
+      highlight: boxShown ? await borderBox(session, box).catch(() => undefined) : undefined,
     }
   } finally {
     await session.detach()
@@ -463,8 +465,7 @@ async function playerButtonCentre(page: Page, name: string): Promise<{ x: number
  * Clicks a player button with the real mouse (the root is closed to
  * locators). Like Playwright's own actionability wait, it first waits until
  * the button is there with a box: CDP reads the DOM and the box in two
- * calls, and "Could not compute box model" can come in between (seen once
- * on CI right after a step change).
+ * calls, and the UI may change in between.
  */
 export async function clickInPlayer(page: Page, name: string): Promise<void> {
   let point: { x: number; y: number } | undefined
