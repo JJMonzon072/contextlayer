@@ -21,15 +21,15 @@ ContextLayer has three deployables and one database: a Fastify API on PostgreSQL
 
 The full register, with likelihood, impact and verification, is in [technical risks](technical-risks.md). These risks shape the architecture most:
 
-| Risk                                   | Architectural answer                                                                                                                                                                                                                        | Section       |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| R-01 Service-worker termination        | Implemented: no state in globals, top-level listeners, 5 s timeouts, tokens and site state in `chrome.storage` (Phase 4). Planned: an idempotent event queue (Phase 7)                                                                      | 7.2           |
-| R-03 Host permissions                  | Implemented (Phase 4, [ADR 0017](adr/0017-per-application-site-access.md)): install-time access to the API origin only; customer origins granted per application and origin at runtime                                                      | 7.3           |
-| R-04 Fragile element targeting         | Implemented (Phase 5, [ADR 0014](adr/0014-element-targeting-strategy.md)): capture of a versioned multi-signal `TargetDescriptor` with counted locators. Proposed (Phase 6): scored resolution with explicit outcomes, never a silent guess | 8.6, 8.7, 9.1 |
-| R-11 Security of injected UI           | Implemented: closed shadow root in a plain `<div>` host, `textContent` only, no page message channel, sender classification in the service worker; authoring text only in the side panel (Phase 5)                                          | 7.4, 10       |
-| R-12 Extension ↔ backend communication | Implemented: the service worker is the only API caller, with schema validation and timeouts. Planned (Phase 7): idempotent event ingestion                                                                                                  | 8.1, 10       |
-| R-13 Authentication and token storage  | Implemented ([ADR 0015](adr/0015-authentication-strategy.md)): dashboard cookie sessions and CSRF guard (Phase 2); extension tokens from a code + PKCE handoff with strict rotation (Phase 4)                                               | 8.5, 10       |
-| R-17 Multi-tenant data isolation       | Implemented (Phases 2–3): membership checks, 404 for other tenants' ids, `workspace_id` on content tables, a composite foreign key from guides to applications, isolation matrices over every route                                         | 5.2, 9.1      |
+| Risk                                   | Architectural answer                                                                                                                                                                                                                                                                                    | Section       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| R-01 Service-worker termination        | Implemented: no state in globals, top-level listeners, 5 s timeouts, tokens and site state in `chrome.storage` (Phase 4). Planned: an idempotent event queue (Phase 7)                                                                                                                                  | 7.2           |
+| R-03 Host permissions                  | Implemented (Phase 4, [ADR 0017](adr/0017-per-application-site-access.md)): install-time access to the API origin only; customer origins granted per application and origin at runtime                                                                                                                  | 7.3           |
+| R-04 Fragile element targeting         | Implemented ([ADR 0014](adr/0014-element-targeting-strategy.md)): capture of a versioned multi-signal `TargetDescriptor` with counted locators (Phase 5); scored light-DOM resolution with explicit outcomes, never a silent guess (Phase 6a). Planned (6b–6c): waits, navigation, shadow roots, frames | 8.6, 8.7, 9.1 |
+| R-11 Security of injected UI           | Implemented: closed shadow root in a plain `<div>` host, `textContent` only, no page message channel, sender classification in the service worker; authoring text only in the side panel (Phase 5)                                                                                                      | 7.4, 10       |
+| R-12 Extension ↔ backend communication | Implemented: the service worker is the only API caller, with schema validation and timeouts. Planned (Phase 7): idempotent event ingestion                                                                                                                                                              | 8.1, 10       |
+| R-13 Authentication and token storage  | Implemented ([ADR 0015](adr/0015-authentication-strategy.md)): dashboard cookie sessions and CSRF guard (Phase 2); extension tokens from a code + PKCE handoff with strict rotation (Phase 4)                                                                                                           | 8.5, 10       |
+| R-17 Multi-tenant data isolation       | Implemented (Phases 2–3): membership checks, 404 for other tenants' ids, `workspace_id` on content tables, a composite foreign key from guides to applications, isolation matrices over every route                                                                                                     | 5.2, 9.1      |
 
 ## 2. System context
 
@@ -70,18 +70,18 @@ Dashed edges are planned. In Phase 1 the content script runs only on the local d
 
 ## 3. Components and responsibilities
 
-| Component         | Responsibility                                                       | Tech                                                 | Status                                                                                           |
-| ----------------- | -------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `apps/api`        | HTTP API, business rules, persistence                                | Node 22, Fastify 5, zod type provider, pino, Drizzle | Implemented: `health`, `auth`, `workspaces`, `applications`, `guides`                            |
-| PostgreSQL        | System of record                                                     | PostgreSQL 18 in Docker Compose                      | Implemented: identity (Phase 2) and content (Phase 3) tables                                     |
-| `apps/dashboard`  | Workspaces, guides, analytics                                        | Vue 3.5, vue-router 5, Vite 8, Tailwind CSS 4        | Implemented: auth, workspaces, members (Phase 2); applications, guide editor, versions (Phase 3) |
-| Service worker    | Only API client, message router; later tokens, script registration   | MV3 module service worker                            | Implemented: health (Phase 1), tokens and site access (Phase 4), Edit Mode sessions (Phase 5)    |
-| Content script    | Everything on the host page; later picking, targeting, playback      | Classic IIFE, isolated world, closed Shadow DOM      | Implemented: `page.ping`, toast (Phase 1), per-site runs (Phase 4), picker and preview (Phase 5) |
-| Popup             | Launcher and status view; sign-in and site-access requests (Phase 4) | Vue 3, Tailwind, `packages/ui`                       | Implemented (Phase 1)                                                                            |
-| Side panel        | Guide authoring (Edit Mode)                                          | Vue 3 extension page                                 | Implemented (Phase 5)                                                                            |
-| `packages/shared` | zod contracts and inferred types                                     | zod 4                                                | Implemented: health, `ApiError`, auth, workspaces                                                |
-| `packages/ui`     | Vue components, theme tokens                                         | Vue SFCs, Tailwind v4                                | Implemented (Phase 1): `StatusBadge`                                                             |
-| `packages/config` | tsconfig and ESLint presets                                          | TypeScript 6.0, ESLint 10                            | Implemented (Phase 1)                                                                            |
+| Component         | Responsibility                                                       | Tech                                                 | Status                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api`        | HTTP API, business rules, persistence                                | Node 22, Fastify 5, zod type provider, pino, Drizzle | Implemented: `health`, `auth`, `workspaces`, `applications`, `guides`                                                                 |
+| PostgreSQL        | System of record                                                     | PostgreSQL 18 in Docker Compose                      | Implemented: identity (Phase 2) and content (Phase 3) tables                                                                          |
+| `apps/dashboard`  | Workspaces, guides, analytics                                        | Vue 3.5, vue-router 5, Vite 8, Tailwind CSS 4        | Implemented: auth, workspaces, members (Phase 2); applications, guide editor, versions (Phase 3)                                      |
+| Service worker    | Only API client, message router; later tokens, script registration   | MV3 module service worker                            | Implemented: health (Phase 1), tokens and site access (Phase 4), Edit Mode sessions (Phase 5), guide runs (Phase 6a)                  |
+| Content script    | Everything on the host page; later picking, targeting, playback      | Classic IIFE, isolated world, closed Shadow DOM      | Implemented: `page.ping`, toast (Phase 1), per-site runs (Phase 4), picker and preview (Phase 5), resolver and player card (Phase 6a) |
+| Popup             | Launcher and status view; sign-in and site-access requests (Phase 4) | Vue 3, Tailwind, `packages/ui`                       | Implemented (Phase 1); guides for the page with Play (Phase 6a)                                                                       |
+| Side panel        | Guide authoring (Edit Mode)                                          | Vue 3 extension page                                 | Implemented (Phase 5)                                                                                                                 |
+| `packages/shared` | zod contracts and inferred types                                     | zod 4                                                | Implemented: health, `ApiError`, auth, workspaces                                                                                     |
+| `packages/ui`     | Vue components, theme tokens                                         | Vue SFCs, Tailwind v4                                | Implemented (Phase 1): `StatusBadge`                                                                                                  |
+| `packages/config` | tsconfig and ESLint presets                                          | TypeScript 6.0, ESLint 10                            | Implemented (Phase 1)                                                                                                                 |
 
 ## 4. Monorepo structure and dependency rules
 
@@ -232,7 +232,9 @@ A pattern without a port matches every port ([match patterns](https://developer.
 
 Implemented (Phase 5): the Edit Mode picker's highlight box, tag/role label and banner, and the preview callout (title, instructions as text, **Close preview**), all top-layer popovers with `pointer-events: none` except the callout, positioned through the CSSOM; verified under a strict CSP with Trusted Types ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)). Text input never happens in the page: it is in the side panel ([ADR 0018](adr/0018-side-panel-edit-mode.md)).
 
-Tailwind is not used in the shadow root because v4 utilities relying on `@property` (shadows, rings, transforms) compute to `none` there; a shadow-safe pipeline is Planned with the player (Phase 6, R-09).
+Implemented (Phase 6a): the Guide Player's highlight (the same box, `pointer-events: none`) and its card, a top-layer popover in the same closed root, placed next to the target by a small flip-and-shift module (`src/content/player/position.ts`) or in the bottom-right corner when unanchored. The card's own clicks and keys do not reach page listeners in the bubble phase, and its buttons ignore events with `isTrusted === false` ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)).
+
+Tailwind is not used in the shadow root because v4 utilities relying on `@property` (shadows, rings, transforms) compute to `none` there; the Phase 6a player card uses plain CSS in the same adopted sheet, and a shadow-safe pipeline stays Planned (R-09).
 
 ### 7.5 Build
 
@@ -384,36 +386,49 @@ sequenceDiagram
 
 A reload pauses the session until the author continues; Disconnect, a replaced connection, a site turned off or withdrawn, a closed tab, Exit or a closed panel end it and remove any picker or preview. Unsaved steps are copied to `storage.session` through the worker and offered back; a lost save answer is checked against the server before anything is reported.
 
-### 8.7 Planned (Phases 6–7): guide playback
+### 8.7 Guide playback (Implemented, Phase 6a; events Planned, Phase 7)
 
-Message names are illustrative; resolution follows [ADR 0014](adr/0014-element-targeting-strategy.md) (Proposed).
+**Implemented (Phase 6a).** Code: `apps/extension/src/background/player.ts` (the run), `src/content/player/` (card and placement), `src/content/resolve/resolver.ts` (resolution, [ADR 0014](adr/0014-element-targeting-strategy.md)) and the popup's `SiteCard.vue`. The worker owns the run and calls the API; the page resolves and draws only the step it is sent; nothing the page sends can pick a guide, a step or a version.
 
 ```mermaid
 sequenceDiagram
   actor U as End user
-  participant CS as Content script
+  participant P as Popup
   participant SW as Service worker
   participant A as API
-  CS->>SW: guides for this page (no URL or token in the payload)
-  SW->>A: GET /v1/extension/guides?origin=... (Bearer, origin from sender)
-  A-->>SW: published guide versions
-  SW-->>CS: validated guides
-  U->>CS: start guide
-  CS->>SW: event run_started (clientEventId)
-  loop each step
-    CS->>CS: resolve target: candidates, score, veto, margin, visibility, wait up to about 10 s
-    alt resolved
-      CS-->>U: highlight and popover (Previous, Next, Finish)
-      CS->>SW: event step_viewed
-    else ambiguous, not found or wrong page
-      CS-->>U: step shown unanchored, never a guess
-      CS->>SW: event target_not_found
-    end
+  participant CS as Content script
+  P->>SW: site.status {tabId}
+  SW->>A: GET /v1/extension/guides?origin=... (Bearer)
+  A-->>SW: published summaries with startUrlPattern
+  SW-->>P: guides whose start page matches the tab URL (URLPattern)
+  U->>P: Play
+  P->>SW: player.start {tabId, guideId, version}
+  SW->>A: GET /v1/extension/guides/:guideId (Bearer)
+  SW->>SW: same version, application and start page; run stored in storage.session
+  SW->>CS: player.show {step} (tabs.sendMessage with documentId)
+  CS->>CS: resolve: candidates, score, veto, identity, margin, visibility, two stable frames
+  alt resolved
+    CS-->>U: highlight and card
+  else ambiguous, not-found, wrong-page, unsupported
+    CS-->>U: card on its own with a hint (or skip or end, per the descriptor)
   end
-  CS->>SW: event run_completed or run_abandoned
-  SW->>SW: queue in storage.local, flush with alarms
-  SW->>A: POST /v1/analytics/events (batched, idempotent)
+  CS-->>SW: shown
+  SW-->>P: started, the popup closes
+  U->>CS: Next / Previous
+  CS->>SW: player.go {runId, generation, direction}
+  SW-->>CS: the next step, if the run, page and generation still match
+  U->>CS: Finish / Close / Escape
+  CS->>CS: UI removed at once
+  CS->>SW: player.end {runId, reason}
 ```
+
+- **Run state.** One run in `storage.session` (`cl.player`): run id, connection, tab, origin, document, guide, version and its snapshot, step index and generation. It survives the worker stopping between events and is never stored in the API. It ends on Finish, Close, a new document in its tab (`page.hello`), the tab closing, Edit Mode attaching to the tab, the site turned off or its access withdrawn, Disconnect and revocation (cleared with the connection; the page is told to stop).
+- **Stale requests.** `player.go` and `player.end` are accepted only from the run's tab, top frame, document and origin as Chrome reports them, and only for the stored run id; a request about an older generation changes nothing and returns the step now shown. The page ignores answers about a run it closed and refuses a later `player.show` for it, so a late answer never brings a guide back.
+- **Edit Mode exclusivity.** A guide does not start on a tab with an Edit Mode session; Edit Mode attaching to a tab ends its guide first; the page refuses `player.show` during a selection or preview, and starting a selection or preview removes the guide.
+
+**Planned (Phase 7).** Run events (`run_started`, `step_viewed`, `target_not_found`, `run_completed`, `run_abandoned`) queued in `storage.local` and flushed in idempotent batches.
+
+**Planned (6b–6c).** Waiting for late targets, SPA navigation, multi-page runs, bfcache, host modals, shadow roots and frames.
 
 ## 9. Data and contracts
 
@@ -471,7 +486,7 @@ flowchart LR
 - **Content script: exposed.** A compromised renderer can forge its messages ([stay secure](https://developer.chrome.com/docs/extensions/develop/security-privacy/stay-secure)). Implemented: receivers check `sender.id`; the service worker classifies senders as extension pages or content scripts against a per-request-type allow-list; every message is parsed with strict zod schemas; the worker builds only known API URLs, so it is not an open proxy. Since Phase 4 a content script may only send `page.hello`, judged on the sender Chrome reports, and `chrome.storage` is closed to it (verified in Chromium). Planned: guides for `sender.origin` and events.
 - **No credentials in content scripts or pages (Implemented, Phase 4).** Access token in `chrome.storage.session`, refresh token in `chrome.storage.local` restricted to trusted contexts, no "get token" message; the popup receives only public connection facts; the dashboard page handles a one-time code in memory and never an extension token. The worker fetches with `credentials: 'omit'` and `redirect: 'error'`.
 - **CSP and no remote code.** Extension pages run under the default MV3 CSP (`script-src 'self'`), so Vue templates are precompiled. Implemented (Phase 5): `z.config({ jitless: true })` is the first import of every extension entry point, because zod 4 otherwise probes `new Function`, which that CSP blocks and reports (an e2e test counts the violations). The page's `style-src` does not govern constructable stylesheets and its Trusted Types do not apply to the isolated world; MAIN-world code would lose both (R-10).
-- **Guide content (R-11).** Implemented (Phase 3): step bodies are a restricted rich-text AST validated by zod on write (strict objects, limited blocks, characters and runs), never HTML; the dashboard renders them with text nodes only and `vue/no-v-html` is an error; links must be `https:` with `rel="noopener noreferrer"`. Planned (Phase 6): the player renders them with `createElement` and `textContent`. `innerHTML` and `v-html` are banned in injected UI because event-handler attributes created by a content script compile in the page's main world, turning author HTML into stored XSS inside the customer's app.
+- **Guide content (R-11).** Implemented (Phase 3): step bodies are a restricted rich-text AST validated by zod on write (strict objects, limited blocks, characters and runs), never HTML; the dashboard renders them with text nodes only and `vue/no-v-html` is an error; links must be `https:` with `rel="noopener noreferrer"`. Implemented (Phase 6a): the worker turns them into lines of plain text (links shown as their text) and the player renders them with `createElement` and `textContent`. `innerHTML` and `v-html` are banned in injected UI because event-handler attributes created by a content script compile in the page's main world, turning author HTML into stored XSS inside the customer's app.
 - **API.** Helmet defaults; no CORS plugin (same-origin dashboard, host-permitted worker); JSON bodies only. Implemented (Phase 2, [ADR 0015](adr/0015-authentication-strategy.md)): an `Origin` / `Sec-Fetch-Site` guard on unsafe requests, rate limits on login and registration (and on extension codes and tokens, Phase 4), `no-store` on every `/v1` response. Every route accepts one kind of credential: cookie routes refuse an `Authorization` header, bearer routes never read cookies.
 - **Sessions (Implemented, Phase 2).** Passwords are stored only as argon2id hashes. The session token is 32 random bytes in an `HttpOnly; Secure; SameSite=Strict; Path=/` cookie (`__Host-` prefixed in production); the database stores its SHA-256 hash. Sessions expire after 30 min idle or 8 h, are revoked on logout, and a login revokes the session the browser presented before. The dashboard never sees the token: no `localStorage`, no JavaScript-readable cookie, no JWT.
 - **Tenant isolation (Implemented, Phase 2).** Every workspace route checks membership first; a non-member gets the same 404 as for a missing workspace, a member with too low a role gets 403. Member changes lock the workspace row so concurrent requests cannot remove its last owner.
@@ -482,7 +497,7 @@ flowchart LR
 - **Configuration.** One root `.env`, validated by the API at startup; the extension bakes `EXTENSION_API_BASE_URL`, `EXTENSION_DASHBOARD_URL` and its key in at build time, the dashboard bakes `EXTENSION_ID`. `NODE_ENV` is deliberately absent: Vite reads `.env`, and a `NODE_ENV` there would turn production builds into development builds. Implemented (Phase 2): `DASHBOARD_ORIGIN` (CSRF allow-list, required in production), session lifetimes, auth rate limits, `TRUST_PROXY`, `TEST_DATABASE_URL`. Implemented (Phase 4): `EXTENSION_ID` (required by the API in production), extension token lifetimes and rate limits, `E2E_DATABASE_URL` for the Playwright suites.
 - **Observability.** Implemented: request ids in API logs, `x-request-id` and every error body, so a user-visible error maps to a log line; extension contexts log to DevTools with a `[ContextLayer]` prefix. Planned (Phase 8): metrics and tracing.
 - **Performance budgets (R-15).** Implemented (Phase 5): `content.js` no longer bundles zod (hand-written readers with equivalence tests) and is 26 267 bytes minified (10 098 gzip) with the picker, capture and preview; every non-watch build, including CI's, fails above 64 KiB (`apps/extension/scripts/budget.ts`). In-page UI stays framework-free unless a feature justifies Vue ([ADR 0006](adr/0006-vue-3-frontend-framework.md)). zod runs `jitless` in the worker and extension pages (no `new Function` probe under the MV3 CSP). Timeouts are short by design (2 s probe, 5 s fetch, 5 s pool connect).
-- **Accessibility.** Implemented: live regions and `role="alert"` on the status card, `role="status"` on the toast, decorative dots hidden from assistive technology; labelled form fields with `aria-invalid` and `aria-describedby` errors, `role="alert"` for form errors and a polite live region for member changes (Phase 2); axe audits with 0 violations on the status, sign-in, registration, onboarding, overview and members screens. Planned (Phase 6, R-16): a non-modal player card with an announcer, no focus stealing, Esc to dismiss, reduced motion.
+- **Accessibility.** Implemented: live regions and `role="alert"` on the status card, `role="status"` on the toast, decorative dots hidden from assistive technology; labelled form fields with `aria-invalid` and `aria-describedby` errors, `role="alert"` for form errors and a polite live region for member changes (Phase 2); axe audits with 0 violations on the status, sign-in, registration, onboarding, overview and members screens. Implemented (Phase 6a, R-16): the player card is a non-modal `role="dialog"` labelled by the step title and described by its instructions, with native buttons, a polite live region announcing "Step n of m", no focus trap, focus taken only when the page has none, Escape only from inside the card, no animation and instant scrolling under reduced motion; e2e keyboard-only run, accessibility-tree check and axe with 0 violations on the card's markup and styles.
 - **Error handling.** One shape per boundary (`ApiError`, `HttpError`, `MessageResult`); expected states such as a tab without a content script are results, not exceptions.
 
 ## 12. Testing strategy

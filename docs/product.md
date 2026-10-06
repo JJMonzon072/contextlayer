@@ -37,19 +37,19 @@ There are no real users yet; these personas are hypotheses, not research results
 
 ## Core concepts
 
-| Term              | Meaning                                                                                                                                                           | Status                                                        |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Workspace         | Tenant boundary; every tenant-owned row carries `workspace_id`.                                                                                                   | Implemented (Phase 2)                                         |
-| Member            | A user in a workspace with one role: `owner`, `admin`, `editor` or `member`.                                                                                      | Implemented (Phase 2)                                         |
-| Application       | A target web app, identified by its origins (e.g. `https://crm.example.com`); determines where the extension requests access.                                     | Implemented (Phase 3)                                         |
-| Guide             | Ordered steps for one application; `draft`, `published` or `archived`; a start URL pattern.                                                                       | Implemented (Phase 3)                                         |
-| Step              | Position, title, body (restricted rich text, never HTML), target descriptor (captured in Phase 5), optional URL pattern, placement.                               | Implemented (Phase 3)                                         |
-| Target descriptor | Versioned JSON of signals captured at pick time (test attributes, role and accessible name, text, CSS path, ancestors, URL pattern), used to re-find the element. | Proposed ([ADR 0014](adr/0014-element-targeting-strategy.md)) |
-| Guide version     | Immutable snapshot of a guide and its steps, frozen at publish; learners see only versions, never drafts.                                                         | Implemented (Phase 3)                                         |
-| Run               | One learner's attempt at one guide version: `in_progress`, `completed` or `abandoned`.                                                                            | Planned (Phase 7)                                             |
-| Event             | Append-only run record (`run_started`, `step_viewed`, `step_completed`, `target_not_found`, `run_completed`, `run_abandoned`), deduplicated by a client id.       | Planned (Phase 7)                                             |
-| Edit Mode         | Authoring state: picking elements on the page, typing in the side panel (unobservable by the host page).                                                          | Implemented (Phase 5)                                         |
-| Player            | In-page runtime that finds published guides for the URL, resolves targets, highlights them and shows instructions.                                                | Planned (Phase 6)                                             |
+| Term              | Meaning                                                                                                                                                           | Status                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Workspace         | Tenant boundary; every tenant-owned row carries `workspace_id`.                                                                                                   | Implemented (Phase 2)                                                         |
+| Member            | A user in a workspace with one role: `owner`, `admin`, `editor` or `member`.                                                                                      | Implemented (Phase 2)                                                         |
+| Application       | A target web app, identified by its origins (e.g. `https://crm.example.com`); determines where the extension requests access.                                     | Implemented (Phase 3)                                                         |
+| Guide             | Ordered steps for one application; `draft`, `published` or `archived`; a start URL pattern.                                                                       | Implemented (Phase 3)                                                         |
+| Step              | Position, title, body (restricted rich text, never HTML), target descriptor (captured in Phase 5), optional URL pattern, placement.                               | Implemented (Phase 3)                                                         |
+| Target descriptor | Versioned JSON of signals captured at pick time (test attributes, role and accessible name, text, CSS path, ancestors, URL pattern), used to re-find the element. | Implemented (Phases 5–6a, [ADR 0014](adr/0014-element-targeting-strategy.md)) |
+| Guide version     | Immutable snapshot of a guide and its steps, frozen at publish; learners see only versions, never drafts.                                                         | Implemented (Phase 3)                                                         |
+| Run               | One learner's attempt at one guide version: `in_progress`, `completed` or `abandoned`.                                                                            | Planned (Phase 7)                                                             |
+| Event             | Append-only run record (`run_started`, `step_viewed`, `step_completed`, `target_not_found`, `run_completed`, `run_abandoned`), deduplicated by a client id.       | Planned (Phase 7)                                                             |
+| Edit Mode         | Authoring state: picking elements on the page, typing in the side panel (unobservable by the host page).                                                          | Implemented (Phase 5)                                                         |
+| Player            | In-page runtime that finds published guides for the URL, resolves targets, highlights them and shows instructions.                                                | Implemented (Phase 6a; waits, navigation, shadow roots and frames in 6b–6c)   |
 
 ## Key journeys
 
@@ -77,10 +77,10 @@ Precondition: the application is registered (Phase 3); the author's extension is
 
 ### (b) Learner follows a guide
 
-7. The learner opens the same application; the extension fetches published guides matching the URL. (Phase 6)
-8. The learner starts a guide; a run begins (`run_started`). (Phases 6–7)
-9. The player resolves each step's target, waiting for late-rendered content and in-app navigation. On an ambiguous or missing match it never guesses: it shows the step unanchored and records `target_not_found`. (Phases 6–7)
-10. The player highlights the element and shows a popover with Previous / Next / Finish; Finish completes the run, closing early abandons it. (Phases 6–7)
+7. The learner opens the same application and the ContextLayer popup, which lists the published guides whose start page matches the page, each with **Play**. (Implemented, Phase 6a)
+8. The learner starts a guide; the popup closes and the first step appears on the page. A run begins, kept in the browser session only; `run_started` is recorded in Phase 7. (Implemented, Phase 6a; events Phase 7)
+9. The player resolves each step's target on the page as it is. On an ambiguous or missing match it never guesses: it shows the step unanchored with a short reason (or skips or ends, if the step says so); `target_not_found` is recorded in Phase 7. Waiting for late-rendered content and in-app navigation comes in 6b. (Implemented, Phase 6a; 6b and 7 Planned)
+10. The player highlights the element and shows a card with Previous / Next / Finish and Close; it never clicks or types for the learner. Finish ends the guide; completion and abandonment are recorded in Phase 7. (Implemented, Phase 6a; events Phase 7)
 
 ### (c) Owner reviews completion
 
@@ -88,16 +88,16 @@ Precondition: the application is registered (Phase 3); the author's extension is
 
 ## MVP scope
 
-| Capability                                                                                     | Phase                 |
-| ---------------------------------------------------------------------------------------------- | --------------------- |
-| Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1) |
-| Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2) |
-| Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3) |
-| Extension connected to a workspace; per-application site access                                | Implemented (Phase 4) |
-| Edit Mode: element picking, target capture, instructions, preview, save                        | Implemented (Phase 5) |
-| Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Planned (Phase 6)     |
-| Events (start, progress, completion, abandonment, target not found); basic dashboard analytics | Planned (Phase 7)     |
-| Production packaging and distribution                                                          | Planned (Phase 8)     |
+| Capability                                                                                     | Phase                                 |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1)                 |
+| Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2)                 |
+| Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3)                 |
+| Extension connected to a workspace; per-application site access                                | Implemented (Phase 4)                 |
+| Edit Mode: element picking, target capture, instructions, preview, save                        | Implemented (Phase 5)                 |
+| Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Implemented (Phase 6a; 6b–6c Planned) |
+| Events (start, progress, completion, abandonment, target not found); basic dashboard analytics | Planned (Phase 7)                     |
+| Production packaging and distribution                                                          | Planned (Phase 8)                     |
 
 ## Non-goals
 
@@ -139,9 +139,9 @@ Run events are reported by a content script inside pages ContextLayer does not c
 1. **Do learners need accounts?** The proposed model ties runs and extension grants to a user; managed configuration or pseudonymous runs would cut friction but change privacy and analytics.
 2. **How are guides offered?** Launcher, auto-start or dashboard link; are unfinished guides re-offered?
 3. **When is a run abandoned?** Explicit close only, or also inactivity or leaving the application? This moves the completion rate.
-4. **Default for a missing target**: unanchored, skip or end (ADR 0014 allows a per-step policy).
+4. **Default for a missing target**: unanchored, skip or end (ADR 0014 allows a per-step policy). Phase 6a follows the descriptor's policy; captures default to unanchored, and the dashboard cannot change it yet.
 5. **Advance on action?** Advancing when the learner uses the target mirrors real work; a Next button is simpler.
-6. **Multi-page guides**: run state across full page loads, in the first player release or later?
+6. **Multi-page guides**: run state across full page loads, in the first player release or later? Phase 6a ends the guide when the tab loads a new document; 6b decides.
 7. **Role permissions**: can `member` see aggregates? (Phase 3 lets `editor` and above publish; it can be narrowed to `admin` later.)
 8. **Republish mid-run**: the run keeps its version; tell the learner?
 9. **Localization** of guide text and of text-based targeting signals.

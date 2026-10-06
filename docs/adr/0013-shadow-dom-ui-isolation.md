@@ -45,7 +45,14 @@ Verified by the extension e2e suite (`apps/extension/e2e/site.spec.ts`, on an en
 - No secrets are ever rendered in the shadow root.
 - **Implemented (Phase 5):** text entry for guide authoring lives in the side panel, an extension page the host cannot observe ([ADR 0018](0018-side-panel-edit-mode.md)); the page only gets the highlight and a text-only preview.
 - **Implemented (Phase 5):** the picker ignores events with `isTrusted === false`, and blocks pointer, click, submit and key events from the page while selecting.
-- **Planned (Phase 6):** player controls check `event.isTrusted`.
+- **Implemented (Phase 6a):** the player card's buttons and Escape check `event.isTrusted`, and the card stops its clicks and keys from reaching page listeners in the bubble phase (a page menu that closes on an outside click stays open). Capture-phase page listeners still see them.
+
+**Implemented (Phase 6a): the Guide Player** uses the same host and root. It adds a card (`role="dialog"`, a top-layer `popover="manual"`, the only part besides the preview callout that takes pointer events) next to the highlight box:
+
+- The card holds the guide's title, "Step n of m", the step title, its instructions as lines of text, a hint when the target cannot be shown, Previous, Next or Finish, Close (×) and a polite live region. Everything is set with `textContent`; the step body arrives from the worker already turned into lines of plain text.
+- **Placement without Floating UI.** The card needs two behaviours: flip (the step's placement, then the opposite side, then the others) and shift (slid along that side to stay in the viewport). They are a small pure module (`src/content/player/position.ts`) with its own tests, instead of a positioning library shipped to every page of every enabled site ([R-15](../technical-risks.md)). The card is positioned through the CSSOM, re-measured on scroll and resize once per frame; an unanchored card goes to the bottom-right corner.
+- Accessibility ([R-16](../technical-risks.md)): the card is labelled by the step title and described by its instructions, both inside the same root (ARIA references cannot cross it); it takes the focus only when nothing on the page has it, never traps it, and Escape closes the guide only from inside the card. No animation; scrolling to an off-screen target is instant under `prefers-reduced-motion`.
+- Verified in Chromium 153 (`apps/extension/e2e/player.spec.ts`), including on the strict-CSP demo page with 0 violations and the same inline-style control.
 
 **Styling the larger UI.** Phase 1 uses plain CSS. Tailwind v4 utilities that rely on `@property` (shadows, rings, transforms) compute to `none` inside a shadow root (measured in Chromium 153; tailwindcss#15005). **Planned (Phase 6):** evaluate a build-time transform that turns each `@property` initial value into a declaration on `:host, *, ::before, ::after, ::backdrop` and converts rem to px. The alternative, hoisting `@property` into the page, writes to the host page's global registry and can collide with its own Tailwind.
 
@@ -70,14 +77,14 @@ Verified by the extension e2e suite (`apps/extension/e2e/site.spec.ts`, on an en
 
 ### Negative and trade-offs
 
-- **Testing.** Playwright cannot pierce closed roots, so e2e tests assert effects (host attributes, message results, `shadowRoot === null`). **Proposed (Phase 6):** an open root in a test-only build if the player needs DOM assertions.
-- **Leaks `all` does not stop:** custom properties, `direction` and `unicode-bidi`. The Phase 6 UI sets every variable it uses and `direction` on `:host`.
-- **Host modals.** A page `showModal()` dialog makes everything outside it inert, including our popover. **Planned (Phase 6):** move the host into the modal and re-show the popover.
+- **Testing.** Playwright cannot pierce closed roots, so e2e tests assert effects (host attributes, message results, `shadowRoot === null`) and read the UI through CDP, which page scripts cannot use (`DOM.getDocument` with `pierce`, computed styles, box models, the accessibility tree). **Decided (Phase 6a):** no open-root test build, so the build under test is the shipped one: the player's buttons are clicked with the real mouse at their CDP box, its focus is read from the isolated world (`chrome.dom.openOrClosedShadowRoot`), and axe audits a copy of the card's markup with the live adopted styles, since axe cannot enter a closed root.
+- **Leaks `all` does not stop:** custom properties, `direction` and `unicode-bidi`. Implemented (Phase 6a): `direction: ltr !important` on `:host`; the player uses no custom properties.
+- **Host modals.** A page `showModal()` dialog makes everything outside it inert, including our popover. **Planned (Phase 6b):** move the host into the modal and re-show the popover.
 - No shared Tailwind tokens with the dashboard until the transform exists, and a page can still detect that ContextLayer is showing UI.
 
 ### Follow-ups
 
-- **Planned (Phase 6):** accessibility of the player ([R-16](../technical-risks.md)): an `aria-live` region, a non-modal labelled card, no focus stealing and reduced motion.
+- **Implemented (Phase 6a):** accessibility of the player ([R-16](../technical-risks.md)): an `aria-live` region, a non-modal labelled card, no focus stealing and reduced motion. **Planned (6b):** a keyboard shortcut into the card and focus restore on close.
 
 ## References
 

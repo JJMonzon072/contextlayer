@@ -13,8 +13,9 @@
  *   tag and no style attribute, so a strict `style-src` does not block them;
  *   positions are set through the CSSOM (`element.style.left`), which CSP
  *   allows.
- * - Floating UI uses the Popover API, which renders in the browser's top layer,
- *   above any page z-index or `overflow: hidden` container.
+ * - Every floating part (toast, highlight, callout, player card) is a popover
+ *   (Popover API), rendered in the browser's top layer, above any page z-index
+ *   or `overflow: hidden` container.
  * - Nothing we draw takes pointer events (`pointer-events: none`), and the
  *   picker's hit test skips the host anyway, so the page element under the
  *   pointer is always the one found.
