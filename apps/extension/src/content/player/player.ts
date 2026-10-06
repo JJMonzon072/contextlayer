@@ -42,7 +42,10 @@ const POINTER_EVENTS = [
   'touchstart',
   'touchend',
 ]
-/** Runs ended here; a late `player.show` for one of them is refused. */
+/**
+ * Runs ended here or that the worker said to hide, shown or not yet: a later
+ * `player.show` for one of them is refused. The most recent ones are kept.
+ */
 const MAX_ENDED = 20
 
 export interface PlayerDeps {
@@ -279,12 +282,16 @@ export function createPlayer(deps: PlayerDeps): Player {
     track(false)
     overlay.highlight(null)
     overlay.hidePlayerCard()
-    if (shown) {
-      ended.add(shown.step.runId)
-      for (const runId of ended) {
-        if (ended.size <= MAX_ENDED) break
-        ended.delete(runId)
-      }
+    if (shown) remember(shown.step.runId)
+  }
+
+  /** Marks a run as ended for good on this page (bounded). */
+  function remember(runId: string) {
+    ended.delete(runId)
+    ended.add(runId)
+    for (const oldest of ended) {
+      if (ended.size <= MAX_ENDED) break
+      ended.delete(oldest)
     }
   }
 
@@ -450,7 +457,9 @@ export function createPlayer(deps: PlayerDeps): Player {
       return true
     },
     hide(runId) {
+      // Fail closed: a hide that arrives before its show still ends the run here.
       if (current?.step.runId === runId) teardown()
+      else remember(runId)
     },
     stop() {
       teardown()

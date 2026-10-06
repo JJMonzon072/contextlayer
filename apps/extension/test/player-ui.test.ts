@@ -27,7 +27,7 @@ const runFrames = () => {
 }
 /** Lets the player's frames and awaited answers run. */
 async function settle() {
-  for (let round = 0; round < 12; round += 1) {
+  for (let round = 0; round < 30; round += 1) {
     runFrames()
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
@@ -552,6 +552,76 @@ describe('closing, keyboard and focus', () => {
     await settle()
 
     expect(ui.root.activeElement).toBe(ui.button('Next'))
+  })
+})
+
+describe('late messages never bring a guide back', () => {
+  it('refuses a show that arrives after the hide of the same run', async () => {
+    const ui = setup()
+
+    ui.player.hide(RUN)
+    expect(ui.player.show(step(0, { target: capture('#new') }))).toBe(false)
+    await settle()
+
+    expect(ui.isOpen()).toBe(false)
+    expect(ui.highlights).toEqual([])
+    expect(ui.player.runId).toBeUndefined()
+    expect(ui.sent).toEqual([])
+  })
+
+  it('keeps the newer run when the older one is hidden before its late show', async () => {
+    const ui = setup()
+
+    // The worker replaced A with B on this tab: hide A, show B, then A's show comes late.
+    ui.player.hide(RUN)
+    expect(ui.player.show(step(0, { runId: OTHER_RUN, guideTitle: 'Export reports' }))).toBe(true)
+    await settle()
+    expect(ui.player.show(step(0))).toBe(false)
+    await settle()
+
+    expect(ui.player.runId).toBe(OTHER_RUN)
+    expect(ui.text('.context')).toBe('Export reports')
+    expect(ui.isOpen()).toBe(true)
+  })
+
+  it('refuses a run that Edit Mode removed, even a later step of it', async () => {
+    const ui = setup()
+    ui.player.show(step(0))
+    await settle()
+
+    // Edit Mode starts a selection or preview on this page.
+    ui.player.stop()
+    expect(ui.player.show(step(1))).toBe(false)
+    await settle()
+
+    expect(ui.isOpen()).toBe(false)
+    expect(ui.player.runId).toBeUndefined()
+  })
+
+  it('still removes a run that is shown when its hide arrives', async () => {
+    const ui = setup()
+    ui.player.show(step(0, { target: capture('#new') }))
+    await settle()
+
+    ui.player.hide(RUN)
+
+    expect(ui.isOpen()).toBe(false)
+    expect(ui.highlights.at(-1)).toBeNull()
+    expect(ui.player.show(step(1))).toBe(false)
+  })
+
+  it('remembers the most recent ended runs only', () => {
+    const ui = setup()
+    const runs = Array.from(
+      { length: 21 },
+      (_, index) => `Rn${String(index).padStart(2, '0')}_ended-run-0123456789`,
+    )
+
+    for (const runId of runs) ui.player.hide(runId)
+
+    // The oldest of 21 is forgotten (20 are kept); the newest is still refused.
+    expect(ui.player.show(step(0, { runId: runs.at(-1) ?? '' }))).toBe(false)
+    expect(ui.player.show(step(0, { runId: runs[0] ?? '' }))).toBe(true)
   })
 })
 
