@@ -14,5 +14,6 @@ export default defineProject({
     name: 'extension',
     environment: 'jsdom',
     include: ['test/**/*.test.ts'],
+    setupFiles: ['test/support/setup.ts'],
   },
 })

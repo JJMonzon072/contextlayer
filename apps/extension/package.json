@@ -32,6 +32,7 @@
     "tailwindcss": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
+    "urlpattern-polyfill": "^10.1.0",
     "vite": "catalog:",
     "vitest": "catalog:",
     "vue-tsc": "catalog:"
