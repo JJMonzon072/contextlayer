@@ -25,6 +25,7 @@ import {
   focusedInPlayer,
   openActionPopup,
   openEditMode,
+  overlayParts,
   overlayStyles,
   playerCardMarkup,
   playerView,
@@ -56,9 +57,9 @@ async function acme(context: BrowserContext): Promise<Workspace> {
   return { account, workspaceId, applicationId }
 }
 
-async function demoPage(context: BrowserContext, extensionBrowser: ExtensionBrowser) {
+async function demoPage(context: BrowserContext, extensionBrowser: ExtensionBrowser, path = '') {
   const page = await context.newPage()
-  await page.goto(DEMO)
+  await page.goto(`${DEMO}${path}`)
   const popup = await openActionPopup(extensionBrowser, page)
   await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'available')
   await popup.getByRole('button', { name: 'Turn on for this site' }).click()
@@ -431,4 +432,46 @@ test('a reload or Disconnect ends the guide and leaves nothing on the page', asy
   await expect(popup.getByTestId('connection')).toHaveAttribute('data-state', 'disconnected')
   await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
   await expect.poll(async () => (await storedRun(context)).run).toBeNull()
+})
+
+test('plays under a strict CSP with Trusted Types, without a single violation', async ({
+  context,
+  extensionBrowser,
+}) => {
+  const workspace = await acme(context)
+  await context.addInitScript({
+    content: `globalThis.__cspViolations = [];
+      document.addEventListener('securitypolicyviolation', (event) => {
+        globalThis.__cspViolations.push(event.violatedDirective + ' ' + event.blockedURI)
+      })`,
+  })
+  const page = await demoPage(context, extensionBrowser, 'strict/')
+  await authorAndPublish(workspace, extensionBrowser, page, 'Strict page', [
+    {
+      title: 'Start a new customer',
+      instructions: 'Click New customer.',
+      click: () => page.getByTestId('new-customer').click(),
+    },
+  ])
+
+  await play(extensionBrowser, page, 'Strict page')
+
+  // Highlight and card are drawn and styled although the page allows no inline style.
+  await expect.poll(async () => (await playerView(page)).outcome).toBe('resolved')
+  await expectHighlighted(page, page.getByTestId('new-customer'))
+  const { parts } = await overlayParts(page)
+  expect(parts.box?.borderTopWidth).toBe('2px')
+  expect(parts.player?.width).toBe('320px')
+  expect(await page.evaluate('globalThis.__cspViolations')).toEqual([])
+  await clickInPlayer(page, 'Finish')
+  await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
+  await expect(page.getByTestId('page-clicks')).toHaveText('0')
+
+  // Control: the policy is enforced and the listener reports it.
+  await page.evaluate(
+    `document.head.append(Object.assign(document.createElement('style'), { textContent: 'p {}' }))`,
+  )
+  await expect
+    .poll(async () => (await page.evaluate<string[]>('globalThis.__cspViolations')).length)
+    .toBeGreaterThan(0)
 })
