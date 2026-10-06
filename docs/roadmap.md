@@ -327,6 +327,7 @@ Review fixes (PR #5 review, after `153ab9d`):
 - Verification (final review-fix code):
   - `pnpm test`: 848 tests in 70 files (extension 418);
   - `pnpm test:e2e`: dashboard 12/12 and extension 47/47; the 8 player scenarios `--repeat-each=3` 24/24. During the first such repetition the reload scenario failed once and its output was not kept; it was not reproduced in about 110 later runs, and the scenario now waits for the new document's script and a known tab before checking that the run is gone;
+  - CI run 37528170031 on `5045ca0` was green with one flaky retry: in the main player scenario, CDP answered "Could not compute box model" between reading the card and measuring its Previous button. The e2e helper that clicks player buttons now waits until the button has a box, as Playwright's own clicks wait for actionability;
   - `content.js` is 45 304 bytes minified (16 093 gzip) of the unchanged 65 536-byte budget;
   - `drizzle-kit check` is clean; no migration and no new permission.
 

@@ -444,20 +444,40 @@ export async function playerView(page: Page): Promise<PlayerView> {
   }
 }
 
-/** Clicks a player button with the real mouse (the root is closed to locators). */
-export async function clickInPlayer(page: Page, name: string): Promise<void> {
+/** The centre of a player button, read through CDP; throws while it has no box. */
+async function playerButtonCentre(page: Page, name: string): Promise<{ x: number; y: number }> {
   const session = await page.context().newCDPSession(page)
-  let point: { x: number; y: number } | undefined
   try {
     await session.send('DOM.enable')
     const { buttons } = await playerNodes(session)
     const button = buttons.find((candidate) => candidate.name === name)
     if (!button) throw new Error(`No player button named ${name}`)
     const box = await borderBox(session, button.node)
-    point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   } finally {
     await session.detach()
   }
+}
+
+/**
+ * Clicks a player button with the real mouse (the root is closed to
+ * locators). Like Playwright's own actionability wait, it first waits until
+ * the button is there with a box: CDP reads the DOM and the box in two
+ * calls, and "Could not compute box model" can come in between (seen once
+ * on CI right after a step change).
+ */
+export async function clickInPlayer(page: Page, name: string): Promise<void> {
+  let point: { x: number; y: number } | undefined
+  await expect
+    .poll(
+      async () => {
+        point = await playerButtonCentre(page, name).catch(() => undefined)
+        return point !== undefined
+      },
+      { message: `the player's ${name} button has a box` },
+    )
+    .toBe(true)
+  if (!point) throw new Error(`No box for the player's ${name} button`)
   await page.mouse.click(point.x, point.y)
 }
 
