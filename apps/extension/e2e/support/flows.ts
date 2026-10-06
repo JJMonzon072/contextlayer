@@ -410,7 +410,28 @@ async function borderBox(session: CDPSession, node: DomNode) {
   return { x: x1, y: y1, width: x2 - x1, height: y3 - y1 }
 }
 
+/** CDP errors for a node that changed between two calls (hidden, or removed). */
+const nodeChanged = (error: unknown) =>
+  error instanceof Error &&
+  /Could not (find node with given id|compute box model)/.test(error.message)
+
+/**
+ * The player as drawn now. The UI can change between two CDP calls (a step
+ * change hides the highlight while the next target settles; an ending guide
+ * removes the host), so a read that hits a changed node starts again from a
+ * fresh snapshot, a few times at most.
+ */
 export async function playerView(page: Page): Promise<PlayerView> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await readPlayerView(page)
+    } catch (error) {
+      if (attempt >= 5 || !nodeChanged(error)) throw error
+    }
+  }
+}
+
+async function readPlayerView(page: Page): Promise<PlayerView> {
   const session = await page.context().newCDPSession(page)
   try {
     await session.send('DOM.enable')
@@ -437,9 +458,7 @@ export async function playerView(page: Page): Promise<PlayerView> {
       text: open ? textOf(card) : '',
       hint: open ? hint : undefined,
       buttons: open ? buttons.map((button) => button.name) : [],
-      // The player hides the highlight between steps (while the next target
-      // settles): a box that went away between the two CDP calls is not drawn.
-      highlight: boxShown ? await borderBox(session, box).catch(() => undefined) : undefined,
+      highlight: boxShown ? await borderBox(session, box) : undefined,
     }
   } finally {
     await session.detach()
