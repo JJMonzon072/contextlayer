@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Demo CRM · Customers</title>
+    <link rel="stylesheet" href="./demo.css" />
+    <script src="./demo.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <strong class="brand">Demo CRM</strong>
+      <nav aria-label="Main">
+        <a href="./">Customers</a>
+        <a href="./reports.html">Reports</a>
+      </nav>
+    </header>
+
+    <main>
+      <p class="notice">
+        A fictitious application for trying ContextLayer's Edit Mode. Nothing here is saved or sent
+        anywhere.
+      </p>
+      <p>
+        Clicks the page received:
+        <output id="page-clicks" data-testid="page-clicks">0</output>
+        <span class="hint">(selecting elements in Edit Mode must not change this)</span>
+      </p>
+
+      <h1>Customers</h1>
+      <div class="actions">
+        <button type="button" data-testid="new-customer">New customer</button>
+        <button type="button" id="export-button" class="secondary">Export</button>
+      </div>
+
+      <section aria-labelledby="form-heading" class="card">
+        <h2 id="form-heading">Customer details</h2>
+        <form id="customer-form" action="./reports.html">
+          <label for="customer-name">Name</label>
+          <input id="customer-name" name="name" value="Ana Ejemplo" autocomplete="off" />
+          <label for="customer-email">Email</label>
+          <input
+            id="customer-email"
+            name="email"
+            type="email"
+            value="ana.ejemplo@example.test"
+            autocomplete="off"
+          />
+          <label for="customer-notes">Notes</label>
+          <textarea id="customer-notes" name="notes">Prefers calls in the morning.</textarea>
+          <button type="submit" class="primary">
+            <span class="icon" aria-hidden="true">✓</span>
+            <span>Save customer</span>
+          </button>
+        </form>
+      </section>
+
+      <section aria-labelledby="recent-heading" class="card">
+        <h2 id="recent-heading">Recent customers</h2>
+        <ul class="recent">
+          <li>Ana Ejemplo <button type="button">Edit</button></li>
+          <li>Luis Prueba <button type="button">Edit</button></li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="status-heading" class="card">
+        <h2 id="status-heading">Service status</h2>
+        <div class="lights">
+          <div></div>
+          <div></div>
+          <div></div>
+        </div>
+      </section>
+
+      <section aria-labelledby="notes-heading" class="card">
+        <h2 id="notes-heading">Team notes</h2>
+        <h3 contenteditable="true">Private note: renegotiate the fictitious contract</h3>
+        <button type="button" data-testid="share-notes">Share notes</button>
+      </section>
+
+      <div class="spacer" aria-hidden="true"></div>
+      <section aria-labelledby="archive-heading" class="card">
+        <h2 id="archive-heading">Archive</h2>
+        <button type="button" data-testid="archive">Archive old customers</button>
+      </section>
+    </main>
+  </body>
+</html>

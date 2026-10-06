@@ -1,6 +1,6 @@
 # ADR 0014: Multi-signal target descriptors for element targeting
 
-- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3); Proposed for capture (Phase 5) and resolution (Phase 6)
+- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3) and for capture (implemented in Phase 5); Proposed for resolution (Phase 6)
 - Date: 2026-10-04
 - Deciders: JJ
 
@@ -12,16 +12,16 @@ Prior art: Playwright's selector generator scores a test id 1, role plus name 10
 
 ## Decision
 
-Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by scoring. Never guess silently. The storage half is **Accepted and implemented** (Phase 3); capture and resolution stay **Proposed** until they are built against a fixture corpus.
+Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by scoring. Never guess silently. The storage half is **Accepted and implemented** (Phase 3) and capture is **Accepted and implemented** (Phase 5, below); resolution stays **Proposed** until it is built against a fixture corpus.
 
 ### What is stored where
 
-| Data                    | Location                                                                                                                                                                                                                                                   | Phase                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `TargetDescriptor` v1   | `guide_steps.target jsonb`, validated by a zod union on `version` in `packages/shared/src/target-descriptor.ts`. Unknown versions and unknown keys are rejected, strings and arrays capped, the whole descriptor ≤ 16 384 characters. Null until captured. | Implemented (Phase 3 contract); Planned (Phase 5 capture) |
-| Frozen copy for players | `guide_versions.snapshot` ([ADR 0016](0016-immutable-published-guide-versions.md))                                                                                                                                                                         | Implemented (Phase 3)                                     |
-| Page matching           | URLPattern init objects (descriptor `page.urlPattern`, optionally overridden by `guide_steps.url_pattern`), evaluated in the extension. Node 22 has no URLPattern, so the API narrows by origin (`applications.origins`).                                  | Planned (Phase 6)                                         |
-| Resolution outcome      | `guide_events` of type `target_not_found`, with `metadata.reason` and per-strategy counts. Page text is never stored.                                                                                                                                      | Planned (Phase 7)                                         |
+| Data                    | Location                                                                                                                                                                                                                                                   | Phase                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `TargetDescriptor` v1   | `guide_steps.target jsonb`, validated by a zod union on `version` in `packages/shared/src/target-descriptor.ts`. Unknown versions and unknown keys are rejected, strings and arrays capped, the whole descriptor ≤ 16 384 characters. Null until captured. | Implemented (Phase 3 contract, Phase 5 capture) |
+| Frozen copy for players | `guide_versions.snapshot` ([ADR 0016](0016-immutable-published-guide-versions.md))                                                                                                                                                                         | Implemented (Phase 3)                           |
+| Page matching           | URLPattern init objects (descriptor `page.urlPattern`, optionally overridden by `guide_steps.url_pattern`), evaluated in the extension. Node 22 has no URLPattern, so the API narrows by origin (`applications.origins`).                                  | Planned (Phase 6)                               |
+| Resolution outcome      | `guide_events` of type `target_not_found`, with `metadata.reason` and per-strategy counts. Page text is never stored.                                                                                                                                      | Planned (Phase 7)                               |
 
 ### Example (light-DOM target in a modal)
 
@@ -108,15 +108,24 @@ Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by sc
 
 `framePath` hops hold an iframe's URL pattern, name, title, test id and index. `shadowPath` hops hold the root's mode and the host's tag, test id, id and CSS path. CSS locators are relative to the innermost root.
 
-### Capture heuristics (Planned, Phase 5)
+### Capture (Implemented, Phase 5)
 
-1. **Pick the real element.** A capture-phase listener on `window` calls `preventDefault()` and `stopImmediatePropagation()` for pointer, mouse and click events, so the click neither triggers its default action nor reaches the page's own handlers. Page listeners registered earlier on `window` in the capture phase still run first; a transparent top-layer picker overlay that receives the click avoids triggering page elements at all. The picker descends through shadow hosts with `chrome.dom.openOrClosedShadowRoot` and `elementFromPoint`.
-2. **Promote** the picked node to its interactive ancestor (`button`, `a`, `[role=button|link|checkbox|tab|menuitem]`).
-3. **Test attributes** in order: first-party `data-contextlayer-id`, then `data-testid`, `data-test`, `data-qa`, `data-cy`.
-4. **Filter generated values at every stage, including the CSS path.** Ids: `useId` patterns, UUIDs, runs of 4+ digits, and Playwright's `isGuidLike`. Classes: hashed CSS-in-JS and CSS Modules names, Tailwind utilities and state classes.
-5. **Compute role and accessible name** in JavaScript. Record `matchCount` per locator at capture time.
-6. **Warn about weak targets.** Show "weak target" when no unique test id, stable id or role plus name exists.
-7. **Privacy.** Cap strings at 80 characters, redact emails and long digit runs, and store URLs as patterns (`:projectId`). XPath is emitted for light-DOM targets only.
+Code: `apps/extension/src/content/capture/` (descriptor) and `src/content/picker.ts` (selection), run in the content script's isolated world for the top document's light DOM; the side panel and the worker are in [ADR 0018](0018-side-panel-edit-mode.md).
+
+1. **Pick the real element.** While Edit Mode is selecting, listeners on `window` in the capture phase call `preventDefault()` and `stopImmediatePropagation()` on pointer, mouse, touch, click, submit and key events, so the click neither runs its default action (link, submit, focus) nor reaches the page's handlers. Limit: page listeners registered earlier on `window` in the capture phase still run first. Hover is resolved once per animation frame with `document.elementsFromPoint`, skipping ContextLayer's own host (its UI also has `pointer-events: none`). Events the page dispatches itself (`isTrusted === false`) never select or cancel. Escape or the 2-minute limit cancel; Tab and Enter select from the keyboard. Elements in iframes, behind shadow hosts (open or closed, detected with `chrome.dom.openOrClosedShadowRoot`), `body` and `html` are refused with a reason, never replaced by another element: `framePath` and `shadowPath` are always `[]` in Phase 5 (6c).
+2. **Promote** the picked node to its interactive ancestor (`button`, `a[href]`, `summary`, form controls, `[role=button|link|checkbox|radio|switch|tab|menuitem…|option|treeitem]`) within 6 levels, never up to `body`. Inside an SVG graphic the picked node is the outermost `<svg>`. `capture.pickedTag` and `capture.promotion` record what happened.
+3. **Test attributes** in order: `data-contextlayer-id`, `data-testid`, `data-test`, `data-qa`, `data-cy`; values that look like counters or row ids are not used.
+4. **Filter generated values at every stage, including the CSS path.** Ids: React `useId` (`:r1:`, `«r1»`, `_r_1_`), Vue `v-1`, UUIDs, runs of 4+ digits, trailing counters, framework prefixes, hash-like suffixes and Playwright's `isGuidLike`. A generated id is kept only as `element.id` with `generated: true` (a hint, never a locator or path step); an id that looks like a record id (UUID, 4+ digits) is not stored at all. Classes: CSS-in-JS and CSS Modules hashes, state and Tailwind-style utility classes. These are heuristics: a random suffix made only of letters (`export-qkzbfa`) cannot be told from a word, and is kept.
+5. **Role and accessible name** come from an own, bounded subset of WAI-ARIA role mapping and accname 1.2 (`capture/accessible.ts`, documented as such): explicit roles, implicit roles of common elements, `aria-labelledby`, `aria-label`, `<label>`, `alt`, name from content and `title`/`placeholder`. Unlike accname, a hidden element referenced by `aria-labelledby` contributes nothing.
+6. **`matchCount`** is counted over the whole document with the same definition the value was captured with: `querySelectorAll` of the exact attribute or selector for `testId`, `id`, `placeholder`, `altText`, `title`, `css` and `cssPath`; elements with that role and exactly that name for `role`; form controls whose labels read exactly that text for `label`; the deepest elements whose visible text is exactly that text for `text` (the span inside a button: the resolver is expected to promote it the same way). A locator that cannot be counted (more than 5 000 candidates) is left out, never assumed unique; a locator that matches nothing is dropped.
+7. **CSS path.** Tags and `:nth-of-type` from the nearest ancestor with a stable unique id or `data-testid`, or from `body`; at most 24 levels and 512 characters, otherwise no path (never a cut one). **XPath is not emitted**: in the light DOM it would repeat the CSS path. The schema still accepts it.
+8. **Privacy.** Two separate policies apply.
+   - **Exclusion of what users type (guaranteed for these sources).** Form controls (`input`, `textarea`, `select`) and editable content are never read, by any path that builds the descriptor: the target's name and text, the heading before it, labels, `aria-labelledby` references, container names and the text counted for locators. The check runs at the root of every text extraction and at every node below it. Editable means an editing host above or at the node (`contenteditable` true, empty or `plaintext-only`, also through `false` islands and `inherit`) or a document in design mode. Inside an editable region, nodes other than the host are not read at all (no name, text, attributes, ids, test ids, classes or path anchors); only their counted position describes them. Values are excluded before reading, never read and then cleaned. Limit: text a page renders itself from user input outside form controls and editable regions (a customer's name shown as plain text, an editor that draws without `contenteditable`) cannot be told from the page's own text and only goes through redaction.
+   - **Redaction of allowed text (heuristic).** Every stored string is whitespace-normalized, capped at 80 characters (with `…`) and has emails and runs of 5+ digits (phones, cards, ids) replaced by `[email]` and `[number]`. A value that was redacted or cut no longer equals the page, so it is never used as a locator. The page is stored as a pattern of scheme, host, port and path, with numeric, id-like, email-like and long segments replaced by `:id` (`/customers/48213/edit` → `/customers/:id/edit`); query, fragment and credentials are never kept. Names of people in visible text cannot be detected: the side panel lists every stored value ("What will be saved") so the author can review the target, select another one or remove it before saving. Descriptors are never logged.
+9. **Weak targets.** The panel derives a category from the stored descriptor (`src/authoring/target-summary.ts`): stable (a unique test attribute or stable id), found by name (a unique role and name, label, text…) or weak, with the reasons ("Only structural selectors are available", "Several elements share this label", "Dynamic identifiers were ignored", "Some text was hidden for privacy"). These are categories, not probabilities; nothing claims a confidence percentage.
+10. **`resolution`** holds the starting values above (`minScore` 0.65, `minMargin` 0.15, 10 s, `show-unanchored`) because the schema requires them; they are not calibrated until Phase 6.
+
+Work is bounded: hover does one hit test and one promotion per frame; the full descriptor is built only for the selected element; counts stop above 5 000 candidates; a descriptor over 16 384 characters drops its anchors, then refuses. The whole content script stays under its build-enforced budget (`apps/extension/scripts/budget.ts`).
 
 ### Resolution (Planned, Phase 6)
 
@@ -159,7 +168,7 @@ The thresholds are starting values, to be calibrated against a fixture corpus in
   - ≤ 6 anchors, ≤ 5 frame and ≤ 5 shadow hops, ≤ 12 attributes;
   - strict objects everywhere.
 
-  A step's `target` is null until captured, which also allows unanchored steps. Capture in Phase 5 and resolution in Phase 6 ([roadmap](../roadmap.md)) are still to be validated with a fixture corpus (generated ids, CSS-in-JS, shadow roots, iframes, virtualized lists, modals).
+  A step's `target` is null until captured, which also allows unanchored steps. Capture is implemented (Phase 5) and covered by unit tests and a demo page; resolution (Phase 6, [roadmap](../roadmap.md)) is still to be validated with a fixture corpus (generated ids, CSS-in-JS, shadow roots, iframes, virtualized lists, modals), which will also tell whether the capture heuristics above need a v2.
 
 ## References
 

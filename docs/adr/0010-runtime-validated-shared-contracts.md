@@ -55,7 +55,7 @@ Contract rules:
 
 ### Negative and trade-offs
 
-- **Content-script size (R-15).** `content.js` is about 89 kB (26 kB gzip), mostly zod, injected into every matched page.
+- **Content-script size (R-15).** In Phase 1 `content.js` was about 89 kB (26 kB gzip), mostly zod. Since Phase 5 the content script reads its few messages with hand-written readers that tests keep equal to the zod schemas, and the worker still validates everything a content script sends with zod (26 kB, budget enforced by the build).
 - **Blocked JIT probe.** zod 4 calls `new Function` once to test for JIT support. The extension CSP blocks it and zod falls back, but the attempt can surface as a CSP violation report. `z.config({ jitless: true })` skips the probe; it is not set yet.
 - **Shared version.** A zod major upgrade touches every app.
 - **Build order.** The production API needs the compiled `packages/shared/dist` ([ADR 0011](0011-source-first-workspace-packages.md)).

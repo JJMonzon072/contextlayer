@@ -7,39 +7,54 @@ import type { ExtensionStorage, StorageArea } from '../../src/background/storage
 /**
  * An in-memory chrome.storage area. `holdNextSet(key)` makes the next write of
  * that key wait until the returned `release()` is called, so a test can stop a
- * credential write halfway and run another operation in between.
+ * credential write halfway and run another operation in between;
+ * `holdNextGet(key)` does the same for the next read of that key (it answers
+ * with the value stored when it is released).
  */
 export function memoryArea(): StorageArea & {
   data: Map<string, unknown>
   holdNextSet: (key: string) => { reached: Promise<void>; release: () => void }
+  holdNextGet: (key: string) => { reached: Promise<void>; release: () => void }
 } {
   const data = new Map<string, unknown>()
   const holds = new Map<string, { arrive: () => void; gate: Promise<void> }>()
+  const getHolds = new Map<string, { arrive: () => void; gate: Promise<void> }>()
+  const hold = (into: typeof holds, key: string) => {
+    const reached = deferred<undefined>()
+    const gate = deferred<undefined>()
+    into.set(key, {
+      arrive: () => {
+        reached.resolve(undefined)
+      },
+      gate: gate.promise,
+    })
+    return {
+      reached: reached.promise,
+      release: () => {
+        gate.resolve(undefined)
+      },
+    }
+  }
   const keys = (value: string | string[]) => (Array.isArray(value) ? value : [value])
   return {
     data,
-    holdNextSet: (key) => {
-      const reached = deferred<undefined>()
-      const gate = deferred<undefined>()
-      holds.set(key, {
-        arrive: () => {
-          reached.resolve(undefined)
-        },
-        gate: gate.promise,
-      })
-      return {
-        reached: reached.promise,
-        release: () => {
-          gate.resolve(undefined)
-        },
+    holdNextSet: (key) => hold(holds, key),
+    holdNextGet: (key) => hold(getHolds, key),
+    get: async (value) => {
+      for (const key of keys(value)) {
+        const held = getHolds.get(key)
+        if (held) {
+          getHolds.delete(key)
+          held.arrive()
+          await held.gate
+        }
       }
-    },
-    get: (value) =>
-      Promise.resolve(
-        Object.fromEntries(
-          keys(value).flatMap((key) => (data.has(key) ? [[key, data.get(key)]] : [])),
+      return Object.fromEntries(
+        keys(value).flatMap((key) =>
+          data.has(key) ? [[key, structuredClone(data.get(key))]] : [],
         ),
-      ),
+      )
+    },
     set: async (items) => {
       for (const key of Object.keys(items)) {
         const hold = holds.get(key)

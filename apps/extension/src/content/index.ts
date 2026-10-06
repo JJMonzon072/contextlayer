@@ -13,12 +13,19 @@
  *    teardown). A copy orphaned by an extension reload or update cannot reach
  *    the extension any more; it notices when the page is shown again or a call
  *    fails, and removes itself.
+ * 4. In Edit Mode the worker sends `picker.start` with a capture request id;
+ *    the selected element is described here (`capture/`) and sent back to the
+ *    worker for that request only. The element itself stays in this script's
+ *    memory, for the step preview, and is never sent anywhere.
  */
 import { EXTENSION_VERSION } from '../config'
-import { sendToBackground } from '../messaging/background-client'
-import { failure, helloResultSchema } from '../messaging/protocol'
+import { failure } from '../messaging/result'
+import { captureTarget, type CaptureContext } from './capture/descriptor'
 import { handleContentMessage } from './handle-message'
+import { askWorker, readHelloAnswer } from './messages'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
+import { startPicker, type Picker } from './picker'
+import { showPreview, type Preview } from './preview'
 
 type ContentState = 'starting' | 'active' | 'inactive' | 'stopped'
 
@@ -31,6 +38,32 @@ interface ContentInstance {
 
 const GUARD = '__contextlayerContent'
 const scope = globalThis as typeof globalThis & { [GUARD]?: ContentInstance }
+/** Elements kept for previews; older selections are forgotten. */
+const MAX_REMEMBERED = 50
+
+function captureContext(): CaptureContext {
+  const chromeMajor = Number(/Chrome\/(\d+)/.exec(navigator.userAgent)?.[1])
+  return {
+    extensionVersion: EXTENSION_VERSION,
+    capturedAt: new Date(),
+    href: location.href,
+    viewport: {
+      width: Math.max(1, Math.round(innerWidth)),
+      height: Math.max(1, Math.round(innerHeight)),
+      devicePixelRatio: Math.min(Math.max(devicePixelRatio, 0.1), 10),
+    },
+    ...(chromeMajor >= 100 && chromeMajor <= 999 && { chromeMajor }),
+  }
+}
+
+/** A host whose shadow root is closed: its contents are out of Phase 5's reach. */
+function hasClosedShadowRoot(element: Element): boolean {
+  try {
+    return chrome.dom.openOrClosedShadowRoot(element as HTMLElement) !== null
+  } catch {
+    return false
+  }
+}
 
 function start(instance: ContentInstance): void {
   instance.state = 'starting'
@@ -49,9 +82,85 @@ function start(instance: ContentInstance): void {
   }
 
   /** `inactive`: refused by the worker; `stopped`: told to stop or orphaned. Both are silent. */
+  let picker: { captureId: string; instance: Picker } | undefined
+  let preview: Preview | undefined
+  const remembered = new Map<string, WeakRef<Element>>()
+
+  function hidePreview() {
+    preview?.stop()
+    preview = undefined
+  }
+
+  /** The element selected under this request, if this page still holds it. */
+  function previewStep(captureId: string, title: string, lines: string[]): boolean {
+    hidePreview()
+    stopCapture()
+    const element = remembered.get(captureId)?.deref()
+    if (!element) return false
+    preview = showPreview({
+      window,
+      overlay,
+      element,
+      title,
+      lines,
+      onClose: () => {
+        preview = undefined
+      },
+    })
+    return preview !== undefined
+  }
+
+  function startCapture(captureId: string, ttlMs: number) {
+    hidePreview()
+    picker?.instance.stop()
+    const instance = startPicker({
+      window,
+      overlay,
+      ttlMs,
+      isAlive: contextAlive,
+      onPick: (hit) => {
+        if (picker?.captureId === captureId) picker = undefined
+        let outcome
+        try {
+          outcome = captureTarget(hit, captureContext(), hasClosedShadowRoot)
+        } catch {
+          outcome = { ok: false, reason: 'This element could not be described.' } as const
+        }
+        if (outcome.ok) {
+          remembered.set(captureId, new WeakRef(outcome.element))
+          for (const key of remembered.keys()) {
+            if (remembered.size <= MAX_REMEMBERED) break
+            remembered.delete(key)
+          }
+        }
+        void askWorker({
+          type: 'picker.result',
+          captureId,
+          outcome: outcome.ok
+            ? { ok: true, descriptor: outcome.descriptor }
+            : { ok: false, reason: outcome.reason },
+        })
+      },
+      onCancel: (reason) => {
+        if (picker?.captureId === captureId) picker = undefined
+        void askWorker({ type: 'picker.cancelled', captureId, reason })
+      },
+    })
+    picker = { captureId, instance }
+  }
+
+  function stopCapture(captureId?: string) {
+    if (captureId !== undefined && picker?.captureId !== captureId) return
+    picker?.instance.stop()
+    picker = undefined
+  }
+
   function stop(state: 'inactive' | 'stopped' = 'stopped') {
     if (instance.state === 'stopped' || instance.state === 'inactive') return
     instance.state = state
+    stopCapture()
+    hidePreview()
+    remembered.clear()
     overlay.destroy()
     document.removeEventListener('visibilitychange', checkContext)
     window.removeEventListener('pageshow', checkContext)
@@ -71,17 +180,27 @@ function start(instance: ContentInstance): void {
     if (sender.id !== chrome.runtime.id) return false
     let response
     try {
-      response = handleContentMessage(message, {
-        extensionVersion: EXTENSION_VERSION,
-        isActive: () => instance.state === 'active',
-        getPage: () => ({ url: location.href, title: document.title }),
-        showToast: (text) => {
-          overlay.showToast(text)
+      // Set by Chrome: the worker's script URL, not a value the sender chooses.
+      const fromWorker = sender.url === chrome.runtime.getURL('background.js')
+      response = handleContentMessage(
+        message,
+        { fromWorker },
+        {
+          extensionVersion: EXTENSION_VERSION,
+          isActive: () => instance.state === 'active',
+          getPage: () => ({ url: location.href, title: document.title }),
+          showToast: (text) => {
+            overlay.showToast(text)
+          },
+          stop: () => {
+            stop()
+          },
+          startPicker: startCapture,
+          stopPicker: stopCapture,
+          showPreview: previewStep,
+          hidePreview,
         },
-        stop: () => {
-          stop()
-        },
-      })
+      )
     } catch {
       response = failure('INTERNAL_ERROR', 'Unexpected error while handling the message.')
     }
@@ -93,9 +212,9 @@ function start(instance: ContentInstance): void {
   document.addEventListener('visibilitychange', checkContext)
   window.addEventListener('pageshow', checkContext)
 
-  void sendToBackground({ type: 'page.hello' }, helloResultSchema).then((result) => {
+  void askWorker({ type: 'page.hello' }).then((answer) => {
     if (instance.state !== 'starting') return
-    if (result.ok && result.data.active) instance.state = 'active'
+    if (readHelloAnswer(answer) === true) instance.state = 'active'
     // Not authorized, or the worker is unreachable (orphaned copy): stay silent.
     else stop(contextAlive() ? 'inactive' : 'stopped')
   })

@@ -11,6 +11,8 @@ import {
 } from 'fastify-type-provider-zod'
 import { pino } from 'pino'
 
+import type { CreateGuideRequest, ReplaceStepsRequest } from '@contextlayer/shared'
+
 import type { AppConfig } from './config/env.js'
 import { registerCsrfGuard } from './http/csrf-guard.js'
 import { registerErrorHandling } from './http/error-handler.js'
@@ -19,11 +21,20 @@ import { applicationRoutes } from './modules/applications/applications.routes.js
 import { createApplicationsService } from './modules/applications/applications.service.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
+import {
+  authoringRoutes,
+  type AuthoringError,
+  type AuthoringResult,
+} from './modules/extension/authoring.routes.js'
 import { extensionRoutes } from './modules/extension/extension.routes.js'
 import { createExtensionService } from './modules/extension/extension.service.js'
 import { createRequireExtensionAccess } from './modules/extension/require-extension-access.js'
 import { guideRoutes } from './modules/guides/guides.routes.js'
-import { createGuidesService } from './modules/guides/guides.service.js'
+import {
+  createGuidesService,
+  type GuideError,
+  type Result as GuideResult,
+} from './modules/guides/guides.service.js'
 import { createRequireSession } from './modules/auth/require-session.js'
 import { healthRoutes } from './modules/health/health.routes.js'
 import { createHealthService } from './modules/health/health.service.js'
@@ -141,6 +152,32 @@ export async function buildApp({
   })
   const requireSession = createRequireSession(auth, config.session.cookieName)
   const requireExtensionAccess = createRequireExtensionAccess(extension)
+  // Guide authoring from the extension reuses the guides service as is.
+  const authoringError = (error: GuideError): AuthoringError =>
+    error === 'no-steps' || error === 'version-not-found' || error === 'publish-conflict'
+      ? 'guide-not-found'
+      : error
+  const asAuthoring = <T>(result: GuideResult<T>): AuthoringResult<T> =>
+    result.ok ? result : { ok: false, error: authoringError(result.error) }
+  const authoring = {
+    applicationExists: (workspaceId: string, applicationId: string) =>
+      applications.exists(workspaceId, applicationId),
+    list: async (
+      userId: string,
+      workspaceId: string,
+      query: { applicationId: string; limit: number; afterId: string | undefined },
+    ) => asAuthoring(await guides.list(userId, workspaceId, { ...query, status: undefined })),
+    get: async (userId: string, workspaceId: string, guideId: string) =>
+      asAuthoring(await guides.get(userId, workspaceId, guideId)),
+    create: async (userId: string, workspaceId: string, input: CreateGuideRequest) =>
+      asAuthoring(await guides.create(userId, workspaceId, input)),
+    replaceSteps: async (
+      userId: string,
+      workspaceId: string,
+      guideId: string,
+      input: ReplaceStepsRequest,
+    ) => asAuthoring(await guides.replaceSteps(userId, workspaceId, guideId, input)),
+  }
 
   // Versioned product API: authenticated data must never sit in a cache.
   await app.register(async (v1) => {
@@ -162,6 +199,7 @@ export async function buildApp({
       requireSession,
       requireExtensionAccess,
     })
+    await v1.register(authoringRoutes, { authoring, requireExtensionAccess })
   })
 
   return app

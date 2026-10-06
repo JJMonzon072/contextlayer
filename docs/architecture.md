@@ -21,15 +21,15 @@ ContextLayer has three deployables and one database: a Fastify API on PostgreSQL
 
 The full register, with likelihood, impact and verification, is in [technical risks](technical-risks.md). These risks shape the architecture most:
 
-| Risk                                   | Architectural answer                                                                                                                                                                                | Section  |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| R-01 Service-worker termination        | Implemented: no state in globals, top-level listeners, 5 s timeouts, tokens and site state in `chrome.storage` (Phase 4). Planned: an idempotent event queue (Phase 7)                              | 7.2      |
-| R-03 Host permissions                  | Implemented (Phase 4, [ADR 0017](adr/0017-per-application-site-access.md)): install-time access to the API origin only; customer origins granted per application and origin at runtime              | 7.3      |
-| R-04 Fragile element targeting         | Proposed ([ADR 0014](adr/0014-element-targeting-strategy.md)): a versioned multi-signal `TargetDescriptor` and scored resolution with explicit outcomes, never a silent guess                       | 8.6, 9.1 |
-| R-11 Security of injected UI           | Implemented: closed shadow root in a plain `<div>` host, `textContent` only, no page message channel, sender classification in the service worker                                                   | 7.4, 10  |
-| R-12 Extension ↔ backend communication | Implemented: the service worker is the only API caller, with schema validation and timeouts. Planned (Phase 7): idempotent event ingestion                                                          | 8.1, 10  |
-| R-13 Authentication and token storage  | Implemented ([ADR 0015](adr/0015-authentication-strategy.md)): dashboard cookie sessions and CSRF guard (Phase 2); extension tokens from a code + PKCE handoff with strict rotation (Phase 4)       | 8.5, 10  |
-| R-17 Multi-tenant data isolation       | Implemented (Phases 2–3): membership checks, 404 for other tenants' ids, `workspace_id` on content tables, a composite foreign key from guides to applications, isolation matrices over every route | 5.2, 9.1 |
+| Risk                                   | Architectural answer                                                                                                                                                                                                                        | Section       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| R-01 Service-worker termination        | Implemented: no state in globals, top-level listeners, 5 s timeouts, tokens and site state in `chrome.storage` (Phase 4). Planned: an idempotent event queue (Phase 7)                                                                      | 7.2           |
+| R-03 Host permissions                  | Implemented (Phase 4, [ADR 0017](adr/0017-per-application-site-access.md)): install-time access to the API origin only; customer origins granted per application and origin at runtime                                                      | 7.3           |
+| R-04 Fragile element targeting         | Implemented (Phase 5, [ADR 0014](adr/0014-element-targeting-strategy.md)): capture of a versioned multi-signal `TargetDescriptor` with counted locators. Proposed (Phase 6): scored resolution with explicit outcomes, never a silent guess | 8.6, 8.7, 9.1 |
+| R-11 Security of injected UI           | Implemented: closed shadow root in a plain `<div>` host, `textContent` only, no page message channel, sender classification in the service worker; authoring text only in the side panel (Phase 5)                                          | 7.4, 10       |
+| R-12 Extension ↔ backend communication | Implemented: the service worker is the only API caller, with schema validation and timeouts. Planned (Phase 7): idempotent event ingestion                                                                                                  | 8.1, 10       |
+| R-13 Authentication and token storage  | Implemented ([ADR 0015](adr/0015-authentication-strategy.md)): dashboard cookie sessions and CSRF guard (Phase 2); extension tokens from a code + PKCE handoff with strict rotation (Phase 4)                                               | 8.5, 10       |
+| R-17 Multi-tenant data isolation       | Implemented (Phases 2–3): membership checks, 404 for other tenants' ids, `workspace_id` on content tables, a composite foreign key from guides to applications, isolation matrices over every route                                         | 5.2, 9.1      |
 
 ## 2. System context
 
@@ -42,7 +42,7 @@ flowchart LR
     dash[Dashboard SPA]
     subgraph ext[ContextLayer extension]
       popup[Popup]
-      panel[Side panel<br/>Planned Phase 5]
+      panel[Side panel<br/>Edit Mode]
       sw[Service worker]
       cs[Content script]
     end
@@ -75,10 +75,10 @@ Dashed edges are planned. In Phase 1 the content script runs only on the local d
 | `apps/api`        | HTTP API, business rules, persistence                                | Node 22, Fastify 5, zod type provider, pino, Drizzle | Implemented: `health`, `auth`, `workspaces`, `applications`, `guides`                            |
 | PostgreSQL        | System of record                                                     | PostgreSQL 18 in Docker Compose                      | Implemented: identity (Phase 2) and content (Phase 3) tables                                     |
 | `apps/dashboard`  | Workspaces, guides, analytics                                        | Vue 3.5, vue-router 5, Vite 8, Tailwind CSS 4        | Implemented: auth, workspaces, members (Phase 2); applications, guide editor, versions (Phase 3) |
-| Service worker    | Only API client, message router; later tokens, script registration   | MV3 module service worker                            | Implemented (Phase 1): `api.health.get`                                                          |
-| Content script    | Everything on the host page; later picking, targeting, playback      | Classic IIFE, isolated world, closed Shadow DOM      | Implemented (Phase 1): `page.ping`, toast                                                        |
+| Service worker    | Only API client, message router; later tokens, script registration   | MV3 module service worker                            | Implemented: health (Phase 1), tokens and site access (Phase 4), Edit Mode sessions (Phase 5)    |
+| Content script    | Everything on the host page; later picking, targeting, playback      | Classic IIFE, isolated world, closed Shadow DOM      | Implemented: `page.ping`, toast (Phase 1), per-site runs (Phase 4), picker and preview (Phase 5) |
 | Popup             | Launcher and status view; sign-in and site-access requests (Phase 4) | Vue 3, Tailwind, `packages/ui`                       | Implemented (Phase 1)                                                                            |
-| Side panel        | Guide authoring                                                      | Vue 3 extension page                                 | Planned (Phase 5)                                                                                |
+| Side panel        | Guide authoring (Edit Mode)                                          | Vue 3 extension page                                 | Implemented (Phase 5)                                                                            |
 | `packages/shared` | zod contracts and inferred types                                     | zod 4                                                | Implemented: health, `ApiError`, auth, workspaces                                                |
 | `packages/ui`     | Vue components, theme tokens                                         | Vue SFCs, Tailwind v4                                | Implemented (Phase 1): `StatusBadge`                                                             |
 | `packages/config` | tsconfig and ESLint presets                                          | TypeScript 6.0, ESLint 10                            | Implemented (Phase 1)                                                                            |
@@ -190,12 +190,12 @@ Arbitrary messages may contain internals, so they are replaced. Domain errors ar
 
 An MV3 extension is several programs with different privileges in one package ([ADR 0007](adr/0007-chrome-manifest-v3-extension.md)).
 
-| Context                          | Runs in                         | May                                                                                                                    | May not                                                                    | Status                    |
-| -------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------- |
-| Service worker (`background.js`) | Extension origin, no DOM        | Call the API (sole caller), hold tokens, route messages, reconcile per-site content scripts                            | Keep state in globals; use DOM; use dynamic `import()`                     | Implemented (Phases 1, 4) |
-| Content script (`content.js`)    | Isolated world in the host page | Ask the SW whether it may run (`page.hello`); then change the page DOM and render UI in a closed shadow root           | Call the API; hold credentials; trust page messages; run in the MAIN world | Implemented (Phases 1, 4) |
-| Popup (`popup.html`)             | Extension page                  | Use `chrome.*`; message the SW and content scripts; start the connection and request site access that the SW completes | Host long workflows: it closes, losing state, when focus leaves            | Implemented (Phases 1, 4) |
-| Side panel                       | Extension page                  | Authoring forms the page cannot observe                                                                                | Assume it stays open; an open panel delays extension updates               | Planned (Phase 5)         |
+| Context                          | Runs in                         | May                                                                                                                                                                    | May not                                                                    | Status                       |
+| -------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------- |
+| Service worker (`background.js`) | Extension origin, no DOM        | Call the API (sole caller), hold tokens, route messages, reconcile per-site content scripts                                                                            | Keep state in globals; use DOM; use dynamic `import()`                     | Implemented (Phases 1, 4)    |
+| Content script (`content.js`)    | Isolated world in the host page | Ask the SW whether it may run (`page.hello`); then change the page DOM and render UI in a closed shadow root; run the Edit Mode picker and preview the worker asks for | Call the API; hold credentials; trust page messages; run in the MAIN world | Implemented (Phases 1, 4, 5) |
+| Popup (`popup.html`)             | Extension page                  | Use `chrome.*`; message the SW and content scripts; start the connection and request site access that the SW completes                                                 | Host long workflows: it closes, losing state, when focus leaves            | Implemented (Phases 1, 4)    |
+| Side panel (`sidepanel.html`)    | Extension page, one tab         | Edit Mode: guides, steps, titles and instructions the page cannot observe; ask the SW for captures, previews and saves                                                 | Call the API or a content script directly; assume it stays open            | Implemented (Phase 5)        |
 
 The service worker and the content script share one shape: `index.ts` registers `chrome.*` listeners and delegates to a pure `handle-message.ts`, unit-tested without Chrome, that returns an explicit result; the shell turns any unexpected rejection into `INTERNAL_ERROR`, so a sender always gets a reply. The popup listens only for the worker's data-less `connection.changed` notice; it calls the helpers in `src/messaging/background-client.ts` and `pingTab()` (`src/popup/active-tab.ts`), which validate replies and turn failures into results.
 
@@ -211,7 +211,7 @@ The service worker and the content script share one shape: `index.ts` registers 
 
 | Capability               | Implemented                                                                                                                                                                                   | Planned                                                                                                           |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `permissions`            | `storage`, `scripting`, `activeTab` (Phase 4)                                                                                                                                                 | `sidePanel` (Phase 5), `alarms` (Phase 7); no install warnings                                                    |
+| `permissions`            | `storage`, `scripting`, `activeTab` (Phase 4), `sidePanel` (Phase 5, no `side_panel` key: enabled per tab from the popup)                                                                     | `alarms` (Phase 7); no install warnings                                                                           |
 | API host access          | `host_permissions` = API origin with the port always explicit (`http://localhost:3000/*` in dev, `:443` for a default HTTPS port), from `EXTENSION_API_BASE_URL`, which must be a bare origin | Proposed: allow `chrome-extension://<id>` in API CORS, since withheld site access also withholds this grant       |
 | Target pages             | Phase 4: `optional_host_permissions`; `permissions.request` from the popup click for one registered origin; `scripting.registerContentScripts` per enabled origin; no static content scripts  | Proposed: `permissions.addHostAccessRequest` when access was withheld                                             |
 | Web pages → extension    | Phase 4: `externally_connectable` for the exact dashboard origin only (port pinned); no other extension                                                                                       | none                                                                                                              |
@@ -230,14 +230,16 @@ A pattern without a port matches every port ([match patterns](https://developer.
 - Styles are a constructable stylesheet in px (rem follows the page's root font-size) with a system font stack (`@font-face` does not apply in shadow roots).
 - The toast is a `popover="manual"` top-layer element, above any page `z-index` or `overflow: hidden`, with `role="status"` and `textContent` only.
 
+Implemented (Phase 5): the Edit Mode picker's highlight box, tag/role label and banner, and the preview callout (title, instructions as text, **Close preview**), all top-layer popovers with `pointer-events: none` except the callout, positioned through the CSSOM; verified under a strict CSP with Trusted Types ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)). Text input never happens in the page: it is in the side panel ([ADR 0018](adr/0018-side-panel-edit-mode.md)).
+
 Tailwind is not used in the shadow root because v4 utilities relying on `@property` (shadows, rings, transforms) compute to `none` there; a shadow-safe pipeline is Planned with the player (Phase 6, R-09).
 
 ### 7.5 Build
 
 Pages and the service worker run as ES modules but content scripts as classic scripts, so `apps/extension/scripts/build.ts` cleans `dist` once and runs two Vite builds from `apps/extension/vite.config.ts` ([ADR 0009](adr/0009-extension-build-tooling.md)):
 
-1. **Pages and service worker** as ES modules with a stable `background.js`; a ~10-line plugin serializes the typed `chrome.runtime.ManifestV3` object from `manifest.config.ts` into `manifest.json`.
-2. **Content script** in library mode as one IIFE, `content.js`, with `process.env.NODE_ENV` defined explicitly.
+1. **Pages and service worker** (`popup.html`, `sidepanel.html`, `background.js`) as ES modules with a stable `background.js`; a ~10-line plugin serializes the typed `chrome.runtime.ManifestV3` object from `manifest.config.ts` into `manifest.json`.
+2. **Content script** in library mode as one IIFE, `content.js`, with `process.env.NODE_ENV` defined explicitly. It imports neither zod nor the shared schemas at runtime (hand-written readers, kept equal to the zod schemas by tests), and every non-watch build fails when the injected files exceed 64 KiB minified (`scripts/budget.ts`; 26 267 bytes at the end of Phase 5).
 
 Both use `emptyOutDir: false` so one watch rebuild cannot delete the other's output. CRXJS was rejected because its default output exposes content-script chunks as web-accessible resources on every matched site; WXT emits the same two builds plus framework conventions and pre-1.0 migrations. Cost: no HMR, so a ~0.1 s rebuild is followed by a manual reload.
 
@@ -245,17 +247,17 @@ Both use `emptyOutDir: false` so one watch rebuild cannot delete the other's out
 
 ### 8.1 Channel matrix
 
-| Channel                          | Transport                                                                                            | Validation and trust                                                        | Status                                                                          |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Dashboard → API                  | `fetch` to same-origin `/api/*`, proxied                                                             | Shared schemas both sides; HttpOnly session cookie, CSRF guard              | Implemented: health (Phase 1), auth and workspaces (Phase 2), content (Phase 3) |
-| Popup → service worker           | `chrome.runtime.sendMessage`                                                                         | strict zod, `sender.id`, sender context                                     | Implemented: `api.health.get` (Phase 1), `connection.*`, `site.*` (Phase 4)     |
-| Content script → service worker  | `chrome.runtime.sendMessage`                                                                         | Same, as untrusted input; only `page.hello`, judged on Chrome's sender      | Implemented (Phase 4). Planned: guides for `sender.origin`, events              |
-| Popup / SW → content script      | `chrome.tabs.sendMessage(tabId, message)`                                                            | zod, `sender.id`; missing receiver is an expected state                     | Implemented: `page.ping`, `page.deactivate` (with `documentId`, Phase 4)        |
-| Service worker → API             | `fetch` within `host_permissions` (no CORS), `credentials: 'omit'`, `redirect: 'error'`, 5 s timeout | Shared schema; bearer token                                                 | Implemented (Phases 1, 4)                                                       |
-| Dashboard page → extension       | `chrome.runtime.sendMessage(EXTENSION_ID)` via `externally_connectable`                              | Exact origin, top frame, the attempt's tab, `state`, single use             | Implemented (Phase 4)                                                           |
-| Side panel ↔ SW / content script | Runtime and tabs messaging                                                                           | Privileged commands from extension pages only                               | Planned (Phase 5)                                                               |
-| Host page ↔ content script       | Shared DOM only                                                                                      | No `window.postMessage` listener (page scripts can forge it), no MAIN world | Implemented (Phase 1) as a rule                                                 |
-| API → PostgreSQL                 | node-postgres pool via Drizzle                                                                       | `DATABASE_URL`; loopback-only port in dev                                   | Implemented (Phase 1): `select 1`                                               |
+| Channel                         | Transport                                                                                            | Validation and trust                                                                                                                            | Status                                                                                                       |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Dashboard → API                 | `fetch` to same-origin `/api/*`, proxied                                                             | Shared schemas both sides; HttpOnly session cookie, CSRF guard                                                                                  | Implemented: health (Phase 1), auth and workspaces (Phase 2), content (Phase 3)                              |
+| Popup → service worker          | `chrome.runtime.sendMessage`                                                                         | strict zod, `sender.id`, sender context                                                                                                         | Implemented: `api.health.get` (Phase 1), `connection.*`, `site.*` (Phase 4)                                  |
+| Content script → service worker | `chrome.runtime.sendMessage`                                                                         | Same, as untrusted input; `page.hello`, and `picker.result`/`picker.cancelled` for the current capture request, judged on Chrome's sender       | Implemented (Phases 4, 5). Planned: guides for `sender.origin`, events                                       |
+| Popup / SW → content script     | `chrome.tabs.sendMessage(tabId, message)`                                                            | Hand-written readers (equal to zod), `sender.id`; `picker.*`/`preview.*` from the SW only (`sender.url`); missing receiver is an expected state | Implemented: `page.ping`, `page.deactivate` (Phase 4); `picker.*`, `preview.*` to one `documentId` (Phase 5) |
+| Service worker → API            | `fetch` within `host_permissions` (no CORS), `credentials: 'omit'`, `redirect: 'error'`, 5 s timeout | Shared schema; bearer token                                                                                                                     | Implemented (Phases 1, 4)                                                                                    |
+| Dashboard page → extension      | `chrome.runtime.sendMessage(EXTENSION_ID)` via `externally_connectable`                              | Exact origin, top frame, the attempt's tab, `state`, single use                                                                                 | Implemented (Phase 4)                                                                                        |
+| Side panel → service worker     | `chrome.runtime.sendMessage`                                                                         | strict zod; `authoring.*` only from `/sidepanel.html`, bound to the session's `panelId`; the panel never talks to a content script              | Implemented (Phase 5)                                                                                        |
+| Host page ↔ content script      | Shared DOM only                                                                                      | No `window.postMessage` listener (page scripts can forge it), no MAIN world                                                                     | Implemented (Phase 1) as a rule                                                                              |
+| API → PostgreSQL                | node-postgres pool via Drizzle                                                                       | `DATABASE_URL`; loopback-only port in dev                                                                                                       | Implemented (Phase 1): `select 1`                                                                            |
 
 ### 8.2 Implemented: dashboard health check
 
@@ -348,7 +350,41 @@ sequenceDiagram
   SW-->>D: { ok, user and workspace names }
 ```
 
-### 8.6 Planned (Phases 6–7): guide playback
+### 8.6 Implemented (Phase 5): Edit Mode
+
+Decided in [ADR 0018](adr/0018-side-panel-edit-mode.md); the descriptor is [ADR 0014](adr/0014-element-targeting-strategy.md).
+
+```mermaid
+sequenceDiagram
+  actor U as Author
+  participant Pop as Popup
+  participant P as Side panel
+  participant SW as Service worker
+  participant CS as Content script
+  participant A as API
+  U->>Pop: click "Edit Mode" (site active)
+  Pop->>Pop: sidePanel.setOptions(tab) + open(tab) in the click
+  P->>SW: authoring.attach(tab)
+  SW->>SW: connected, site on and granted, page said hello? session {grant, panelId, tab, origin, documentId}
+  P->>SW: authoring.open / create (panelId)
+  SW->>A: GET or POST /v1/extension/authoring/... (Bearer)
+  U->>P: "Select element" on a step
+  P->>SW: authoring.capture.start
+  SW->>CS: picker.start {captureId} (documentId)
+  U->>CS: click on the page (blocked from the page)
+  CS->>SW: picker.result {captureId, descriptor}
+  SW->>SW: same tab, top frame, document, origin, pending, not expired; shared schema
+  SW-->>P: authoring.changed (no data)
+  P->>SW: authoring.capture.take → review, "Use this element"
+  U->>P: Save draft
+  P->>SW: authoring.save {expectedRevision, steps}
+  SW->>A: PUT /v1/extension/authoring/.../steps (Bearer)
+  SW-->>P: saved guide, if the connection, session and guide did not change
+```
+
+A reload pauses the session until the author continues; Disconnect, a replaced connection, a site turned off or withdrawn, a closed tab, Exit or a closed panel end it and remove any picker or preview. Unsaved steps are copied to `storage.session` through the worker and offered back; a lost save answer is checked against the server before anything is reported.
+
+### 8.7 Planned (Phases 6–7): guide playback
 
 Message names are illustrative; resolution follows [ADR 0014](adr/0014-element-targeting-strategy.md) (Proposed).
 
@@ -431,10 +467,10 @@ flowchart LR
   api --> db
 ```
 
-- **Host page: untrusted.** It can modify what ContextLayer adds and dispatch events. A closed shadow root isolates styles but is not a security boundary (UI events are composed), so authoring inputs belong in the side panel (Planned, Phase 5).
+- **Host page: untrusted.** It can modify what ContextLayer adds and dispatch events. A closed shadow root isolates styles but is not a security boundary (UI events are composed), so authoring inputs live in the side panel (Implemented, Phase 5, [ADR 0018](adr/0018-side-panel-edit-mode.md)).
 - **Content script: exposed.** A compromised renderer can forge its messages ([stay secure](https://developer.chrome.com/docs/extensions/develop/security-privacy/stay-secure)). Implemented: receivers check `sender.id`; the service worker classifies senders as extension pages or content scripts against a per-request-type allow-list; every message is parsed with strict zod schemas; the worker builds only known API URLs, so it is not an open proxy. Since Phase 4 a content script may only send `page.hello`, judged on the sender Chrome reports, and `chrome.storage` is closed to it (verified in Chromium). Planned: guides for `sender.origin` and events.
 - **No credentials in content scripts or pages (Implemented, Phase 4).** Access token in `chrome.storage.session`, refresh token in `chrome.storage.local` restricted to trusted contexts, no "get token" message; the popup receives only public connection facts; the dashboard page handles a one-time code in memory and never an extension token. The worker fetches with `credentials: 'omit'` and `redirect: 'error'`.
-- **CSP and no remote code.** Extension pages run under the default MV3 CSP (`script-src 'self'`), so Vue templates are precompiled. Planned (Phase 5): `z.config({ jitless: true })` in extension entry points, because zod 4 otherwise probes `new Function`, which that CSP blocks and reports. The page's `style-src` does not govern constructable stylesheets and its Trusted Types do not apply to the isolated world; MAIN-world code would lose both (R-10).
+- **CSP and no remote code.** Extension pages run under the default MV3 CSP (`script-src 'self'`), so Vue templates are precompiled. Implemented (Phase 5): `z.config({ jitless: true })` is the first import of every extension entry point, because zod 4 otherwise probes `new Function`, which that CSP blocks and reports (an e2e test counts the violations). The page's `style-src` does not govern constructable stylesheets and its Trusted Types do not apply to the isolated world; MAIN-world code would lose both (R-10).
 - **Guide content (R-11).** Implemented (Phase 3): step bodies are a restricted rich-text AST validated by zod on write (strict objects, limited blocks, characters and runs), never HTML; the dashboard renders them with text nodes only and `vue/no-v-html` is an error; links must be `https:` with `rel="noopener noreferrer"`. Planned (Phase 6): the player renders them with `createElement` and `textContent`. `innerHTML` and `v-html` are banned in injected UI because event-handler attributes created by a content script compile in the page's main world, turning author HTML into stored XSS inside the customer's app.
 - **API.** Helmet defaults; no CORS plugin (same-origin dashboard, host-permitted worker); JSON bodies only. Implemented (Phase 2, [ADR 0015](adr/0015-authentication-strategy.md)): an `Origin` / `Sec-Fetch-Site` guard on unsafe requests, rate limits on login and registration (and on extension codes and tokens, Phase 4), `no-store` on every `/v1` response. Every route accepts one kind of credential: cookie routes refuse an `Authorization` header, bearer routes never read cookies.
 - **Sessions (Implemented, Phase 2).** Passwords are stored only as argon2id hashes. The session token is 32 random bytes in an `HttpOnly; Secure; SameSite=Strict; Path=/` cookie (`__Host-` prefixed in production); the database stores its SHA-256 hash. Sessions expire after 30 min idle or 8 h, are revoked on logout, and a login revokes the session the browser presented before. The dashboard never sees the token: no `localStorage`, no JavaScript-readable cookie, no JWT.
@@ -445,7 +481,7 @@ flowchart LR
 
 - **Configuration.** One root `.env`, validated by the API at startup; the extension bakes `EXTENSION_API_BASE_URL`, `EXTENSION_DASHBOARD_URL` and its key in at build time, the dashboard bakes `EXTENSION_ID`. `NODE_ENV` is deliberately absent: Vite reads `.env`, and a `NODE_ENV` there would turn production builds into development builds. Implemented (Phase 2): `DASHBOARD_ORIGIN` (CSRF allow-list, required in production), session lifetimes, auth rate limits, `TRUST_PROXY`, `TEST_DATABASE_URL`. Implemented (Phase 4): `EXTENSION_ID` (required by the API in production), extension token lifetimes and rate limits, `E2E_DATABASE_URL` for the Playwright suites.
 - **Observability.** Implemented: request ids in API logs, `x-request-id` and every error body, so a user-visible error maps to a log line; extension contexts log to DevTools with a `[ContextLayer]` prefix. Planned (Phase 8): metrics and tracing.
-- **Performance budgets (R-15).** `content.js` is about 89 kB (26 kB gzip), mostly zod, and is injected into every matching page: recorded tech debt. Options: `zod/mini` or hand-written guards, and framework-free in-page UI unless a feature justifies Vue ([ADR 0006](adr/0006-vue-3-frontend-framework.md)). Proposed: a CI size check (Phase 8). Timeouts are short by design (2 s probe, 5 s fetch, 5 s pool connect).
+- **Performance budgets (R-15).** Implemented (Phase 5): `content.js` no longer bundles zod (hand-written readers with equivalence tests) and is 26 267 bytes minified (10 098 gzip) with the picker, capture and preview; every non-watch build, including CI's, fails above 64 KiB (`apps/extension/scripts/budget.ts`). In-page UI stays framework-free unless a feature justifies Vue ([ADR 0006](adr/0006-vue-3-frontend-framework.md)). zod runs `jitless` in the worker and extension pages (no `new Function` probe under the MV3 CSP). Timeouts are short by design (2 s probe, 5 s fetch, 5 s pool connect).
 - **Accessibility.** Implemented: live regions and `role="alert"` on the status card, `role="status"` on the toast, decorative dots hidden from assistive technology; labelled form fields with `aria-invalid` and `aria-describedby` errors, `role="alert"` for form errors and a polite live region for member changes (Phase 2); axe audits with 0 violations on the status, sign-in, registration, onboarding, overview and members screens. Planned (Phase 6, R-16): a non-modal player card with an announcer, no focus stealing, Esc to dismiss, reduced motion.
 - **Error handling.** One shape per boundary (`ApiError`, `HttpError`, `MessageResult`); expected states such as a tab without a content script are results, not exceptions.
 

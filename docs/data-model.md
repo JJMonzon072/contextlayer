@@ -427,7 +427,7 @@ Shortened from the targeting research ([ADR 0014](adr/0014-element-targeting-str
 }
 ```
 
-Rules (Implemented, `packages/shared/src/target-descriptor.ts`): unknown versions and unknown keys are rejected on write. Captured strings are capped at 80 characters, selectors at 512; 1–12 locators, at most 6 anchors, 5 frame and 5 shadow hops and 12 attributes; the whole descriptor stays under 16 384 characters. Capture (Phase 5) will also redact emails and long digit runs. Pages are stored as URLPattern init objects (`:projectId`), never as raw URLs, because captured signals can carry personal data from customer applications. `minScore` and `minMargin` are starting values, to be calibrated against a fixture corpus.
+Rules (Implemented, `packages/shared/src/target-descriptor.ts`): unknown versions and unknown keys are rejected on write. Captured strings are capped at 80 characters, selectors at 512; 1–12 locators, at most 6 anchors, 5 frame and 5 shadow hops and 12 attributes; the whole descriptor stays under 16 384 characters. Capture (Implemented, Phase 5) also redacts emails and runs of 5+ digits, never uses a redacted or cut value as a locator, and generalizes dynamic path segments of the page URL ([ADR 0014](adr/0014-element-targeting-strategy.md)). Pages are stored as URLPattern init objects (`:projectId`), never as raw URLs, because captured signals can carry personal data from customer applications. `minScore` and `minMargin` are starting values, to be calibrated against a fixture corpus.
 
 ### Rich-text body v1
 

@@ -29,3 +29,22 @@ test('registers no content script before a site is turned on', async ({ serviceW
   const manifest = await serviceWorker.evaluate(() => chrome.runtime.getManifest())
   expect(manifest.content_scripts).toBeUndefined()
 })
+
+test('extension pages trigger no CSP eval violation (zod runs jitless)', async ({
+  context,
+  extensionId,
+}) => {
+  // Without `z.config({ jitless: true })` first, this page reported two
+  // `script-src eval` violations from zod's `new Function` probe.
+  await context.addInitScript({
+    content: `globalThis.__cspViolations = []
+      document.addEventListener('securitypolicyviolation', (event) => {
+        globalThis.__cspViolations.push(event.violatedDirective + ' ' + event.blockedURI)
+      })`,
+  })
+  const popup = await context.newPage()
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`)
+  await expect(popup.getByTestId('api-status')).toHaveText('Operational')
+
+  expect(await popup.evaluate('globalThis.__cspViolations')).toEqual([])
+})

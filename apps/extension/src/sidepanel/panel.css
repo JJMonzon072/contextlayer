@@ -1,0 +1,24 @@
+@import 'tailwindcss';
+@import '@contextlayer/ui/theme.css';
+
+@layer components {
+  .btn {
+    @apply rounded-lg bg-brand-600 px-3 py-1.5 font-medium text-white transition-colors hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:opacity-60;
+  }
+
+  .btn-secondary {
+    @apply rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-800 transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:opacity-60;
+  }
+
+  .btn-danger {
+    @apply rounded-lg bg-rose-700 px-3 py-1.5 font-medium text-white transition-colors hover:bg-rose-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700;
+  }
+
+  .btn-icon {
+    @apply grid size-7 place-items-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-600 disabled:opacity-40;
+  }
+
+  .field {
+    @apply rounded-lg border border-slate-300 px-2.5 py-1.5 text-slate-900 placeholder:text-slate-400 focus-visible:border-brand-600 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-brand-600 aria-invalid:border-rose-600;
+  }
+}

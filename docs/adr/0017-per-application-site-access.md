@@ -53,18 +53,23 @@ Measured in this repository's harness (Playwright's Chromium 153.0.8010.12, new 
 
 - **Positive:** the install-time grant is the API origin alone; each customer origin is granted by a click, only for registered applications; every change converges through one function that the unit tests drive with a fake Chrome and the e2e suite checks in Chromium.
 - **Negative:** an application deleted or an origin edited in the dashboard is noticed when the popup opens or a page asks after the cache expires, not instantly. The application list is bounded at 100 per workspace. Chrome's prompt was not automated in this harness: the prompt for an origin not yet granted stayed open and the means tried did not answer it (the `--apps-gallery-install-auto-confirm-for-tests` switch, spike item 8), and the toolbar popup can only be opened there with `chrome.action.openPopup()`, which grants no `activeTab`, so the popup cannot even see the address of a site without access. Other setups (a headed browser driven at the OS level, for instance) were not tried. The e2e build therefore pre-grants one stand-in site, where the popup's real request resolves without a prompt; those tests show the worker's side, not the prompt.
-- **Manual check:** Chrome's own prompt is checked by hand, with the procedure below. Status: **not run yet** (pending for JJ); the automated suites do not cover it.
+- **Manual check:** Chrome's own prompt was checked by hand by JJ on 2026-10-05 (evidence in the [PR #3 comment](https://github.com/JJMonzon072/contextlayer/pull/3#issuecomment-6001208200)), in Google Chrome 153.0.8010.52 (Official Build, arm64) on macOS with the regular unpacked build (popup 0.1.0):
+  - **Allow** on `http://localhost:8081`: Chrome showed its native prompt, JJ chose Allow, the popup closed; reopened, the site was On with its published guide, without a second activation click, and **Check this page** showed the active notice on the page.
+  - **Deny** on `http://127.0.0.1:8082`: Chrome showed its native prompt, JJ chose Deny; reopened, the popup still showed the site Off, without guides or active-state controls, and the allowed site stayed On.
+  - An earlier attempt on `http://localhost:8082` showed no prompt and does not count as a Deny check; no rule about permissions across ports is drawn from it.
+  - Not covered by that check: the 3-minute expiry of a pending request, reloads and restarts, and Chrome 120.
+    These are JJ's observations in a real browser, not results of the automated suites.
 - **Follow-ups:** **Proposed:** `permissions.addHostAccessRequest` (Chrome 133+) to ask again from the page when access was withheld. **Planned (Phase 6):** the player uses the same `page.hello` gate and reads guides through the worker.
 
 ### Manual check of Chrome's permission prompt
 
-Use the regular build, not the e2e one, in a Chrome or Chromium profile where the sites below were never granted. Do not open the popup's DevTools: the point is its normal life cycle.
+Use the regular build, not the e2e one. The sites must not have been granted before: use a clean Chrome profile, or two different hosts that were never granted in this profile (for example `localhost` and `127.0.0.1`). Do not rely only on a different port of a host already used: the first run of this check saw no prompt on `localhost:8082` after `localhost:8081` was granted, and that case was not investigated. Do not open the popup's DevTools: the point is its normal life cycle.
 
 Setup:
 
 1. `pnpm dev` (API, dashboard and `apps/extension/dist`), then `chrome://extensions` → Developer mode → **Load unpacked** → `apps/extension/dist`; pin ContextLayer.
-2. Serve two empty test sites that no extension has access to: `python3 -m http.server 8081` and, in another terminal, `python3 -m http.server 8082`.
-3. In the dashboard, in one workspace, register two applications, `http://localhost:8081` and `http://localhost:8082`, and publish one guide for each.
+2. Serve two empty test sites that no extension has access to: `python3 -m http.server 8081` and, in another terminal, `python3 -m http.server 8082 --bind 127.0.0.1`.
+3. In the dashboard, in one workspace, register two applications, `http://localhost:8081` and `http://127.0.0.1:8082`, and publish one guide for each.
 4. Click the ContextLayer icon → **Connect to ContextLayer** → approve in the dashboard. The popup shows the workspace and both applications, Off.
 
 Allow:
@@ -75,11 +80,11 @@ Allow:
 
 Deny, in clean conditions (the second site was never granted nor turned on):
 
-8. Open `http://localhost:8082`, click the icon, **Turn on for this site**, and click **Deny** (or close the prompt).
-9. Reopen the popup if it closed. Expected: the site is still off ("Chrome will ask you to allow access to this site only." and the **Turn on** button, no guides and no **Check this page**); Applications shows `http://localhost:8082` Off; if the popup stayed open it said that Chrome did not allow access.
-10. Reload the page: no toast, nothing from ContextLayer. If `chrome://extensions` → ContextLayer → Details lists the sites ContextLayer may access, `localhost:8082` is not among them. After 3 minutes, reopen the popup: still off (the request lapsed).
+8. Open `http://127.0.0.1:8082`, click the icon, **Turn on for this site**, and click **Deny** (or close the prompt). If Chrome shows no prompt, the site was already granted: start again in a clean profile; that run does not count as a Deny check.
+9. Reopen the popup if it closed. Expected: the site is still off ("Chrome will ask you to allow access to this site only." and the **Turn on** button, no guides and no **Check this page**); Applications shows `http://127.0.0.1:8082` Off; if the popup stayed open it said that Chrome did not allow access.
+10. Reload the page: no toast, nothing from ContextLayer. If `chrome://extensions` → ContextLayer → Details lists the sites ContextLayer may access, `127.0.0.1:8082` is not among them.
 
-Record the Chrome version and the outcome of steps 7, 9 and 10 in the roadmap when the check is run.
+Record the Chrome version and the observed outcomes when the check is run again (only after a change to site access).
 
 ## References
 

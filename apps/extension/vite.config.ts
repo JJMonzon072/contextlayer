@@ -18,7 +18,8 @@ import {
  * The extension is produced by two Vite builds that share this file
  * (orchestrated by scripts/build.ts, see docs/adr/0009-extension-build-tooling.md):
  *
- * 1. Extension pages + service worker: popup.html and background.js, as ES modules.
+ * 1. Extension pages + service worker: popup.html, sidepanel.html and background.js,
+ *    as ES modules.
  * 2. Content script: a single self-contained IIFE, because content scripts
  *    declared in the manifest are classic scripts and cannot `import` chunks.
  */
@@ -127,6 +128,7 @@ export function createPagesConfig(options: BuildOptions): InlineConfig {
       rolldownOptions: {
         input: {
           popup: fileURLToPath(new URL('./popup.html', import.meta.url)),
+          sidepanel: fileURLToPath(new URL('./sidepanel.html', import.meta.url)),
           background: fileURLToPath(new URL('./src/background/index.ts', import.meta.url)),
         },
         output: {

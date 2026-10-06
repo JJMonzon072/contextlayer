@@ -1,6 +1,7 @@
-import { extensionApplicationSchema } from '@contextlayer/shared'
+import { extensionApplicationSchema, targetDescriptorSchema } from '@contextlayer/shared'
 import { z } from 'zod'
 
+import { AUTHORING_END_REASONS, CAPTURE_STATES, localDraftSchema } from '../messaging/protocol'
 import type { ExtensionStorage, StorageArea } from './storage'
 
 /**
@@ -18,6 +19,9 @@ const KEYS = {
   siteIntent: 'cl.siteIntent',
   applications: 'cl.applications',
   pages: 'cl.pages',
+  authoring: 'cl.authoring',
+  authoringEnded: 'cl.authoringEnded',
+  authoringDraft: 'cl.authoringDraft',
 } as const
 
 export const attemptSchema = z.object({
@@ -75,6 +79,60 @@ const applicationsCacheSchema = z.object({
 /** Pages whose content script was authorized, by tab: told to stop when access ends. */
 const pagesSchema = z.record(z.string(), z.object({ origin: z.string(), documentId: z.string() }))
 
+/**
+ * The Edit Mode session (Phase 5): one side panel, bound to the connection,
+ * one tab and the document it showed when the panel attached. Kept in
+ * `storage.session` so it survives the worker stopping between events.
+ */
+export const authoringSessionSchema = z.object({
+  id: z.string(),
+  panelId: z.string(),
+  grantId: z.string(),
+  workspaceId: z.string(),
+  tabId: z.number().int(),
+  origin: z.string(),
+  documentId: z.string(),
+  /** Applications registered for `origin` when the panel attached. */
+  applicationIds: z.array(z.string()),
+  /** Set when the page was reloaded or left; cleared by an explicit "continue". */
+  paused: z.enum(['navigated', 'page-gone']).nullable(),
+  guide: z.object({ applicationId: z.string(), guideId: z.string() }).nullable(),
+  /** The latest guide load: an older load that answers late is ignored. */
+  loadId: z.string().nullable(),
+  capture: z
+    .object({
+      id: z.string(),
+      guideId: z.string(),
+      expiresAt: z.number(),
+      state: z.enum(CAPTURE_STATES),
+      descriptor: targetDescriptorSchema.nullable(),
+      reason: z.string().nullable(),
+    })
+    .nullable(),
+  createdAt: z.number(),
+})
+
+/** Why the last session ended, for the panel that owned it. */
+const authoringEndedSchema = z.object({
+  panelId: z.string(),
+  reason: z.enum(AUTHORING_END_REASONS),
+  /** What the session was bound to, for the copy its panel sends while closing. */
+  grantId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  guide: z.object({ applicationId: z.string(), guideId: z.string() }).nullable().optional(),
+})
+
+/**
+ * Unsaved steps, bound to the connection and workspace they were written in,
+ * and to the panel and edit version that wrote them.
+ */
+const storedDraftSchema = localDraftSchema.extend({
+  grantId: z.string(),
+  workspaceId: z.string(),
+  panelId: z.string(),
+  version: z.number().int().nonnegative(),
+})
+
 /** Why the last connection ended without the user disconnecting. */
 const endedSchema = z.object({ reason: z.enum(['ended']), at: z.number() })
 
@@ -85,6 +143,9 @@ export type ConnectionRecord = z.infer<typeof connectionRecordSchema>
 export type ApplicationsCache = z.infer<typeof applicationsCacheSchema>
 export type PageRecords = z.infer<typeof pagesSchema>
 export type SiteIntent = z.infer<typeof siteIntentSchema>
+export type AuthoringSession = z.infer<typeof authoringSessionSchema>
+export type AuthoringEnded = z.infer<typeof authoringEndedSchema>
+export type StoredDraft = z.infer<typeof storedDraftSchema>
 
 async function read<T>(
   area: StorageArea,
@@ -145,6 +206,18 @@ export function createVault(storage: ExtensionStorage) {
     readPages: async () => (await read(storage.session, KEYS.pages, pagesSchema)) ?? {},
     writePages: (pages: PageRecords) => storage.session.set({ [KEYS.pages]: pages }),
 
+    readAuthoring: () => read(storage.session, KEYS.authoring, authoringSessionSchema),
+    writeAuthoring: (session: AuthoringSession) =>
+      storage.session.set({ [KEYS.authoring]: session }),
+    clearAuthoring: () => storage.session.remove(KEYS.authoring),
+    readAuthoringEnded: () => read(storage.session, KEYS.authoringEnded, authoringEndedSchema),
+    writeAuthoringEnded: (ended: AuthoringEnded) =>
+      storage.session.set({ [KEYS.authoringEnded]: ended }),
+
+    readDraft: () => read(storage.session, KEYS.authoringDraft, storedDraftSchema),
+    writeDraft: (draft: StoredDraft) => storage.session.set({ [KEYS.authoringDraft]: draft }),
+    clearDraft: () => storage.session.remove(KEYS.authoringDraft),
+
     /** Stores a full credential set; the refresh token only in the protected area. */
     async saveConnection(values: {
       access: AccessRecord
@@ -167,6 +240,9 @@ export function createVault(storage: ExtensionStorage) {
         KEYS.sites,
         KEYS.siteIntent,
         KEYS.applications,
+        // Edit Mode belongs to the connection: no session or unsaved copy outlives it.
+        KEYS.authoring,
+        KEYS.authoringDraft,
       ])
       if (ended) await storage.session.set({ [KEYS.ended]: { reason: 'ended', at } })
       else await storage.session.remove(KEYS.ended)

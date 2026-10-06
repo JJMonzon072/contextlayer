@@ -48,7 +48,7 @@ There are no real users yet; these personas are hypotheses, not research results
 | Guide version     | Immutable snapshot of a guide and its steps, frozen at publish; learners see only versions, never drafts.                                                         | Implemented (Phase 3)                                         |
 | Run               | One learner's attempt at one guide version: `in_progress`, `completed` or `abandoned`.                                                                            | Planned (Phase 7)                                             |
 | Event             | Append-only run record (`run_started`, `step_viewed`, `step_completed`, `target_not_found`, `run_completed`, `run_abandoned`), deduplicated by a client id.       | Planned (Phase 7)                                             |
-| Edit Mode         | Authoring state: picking elements on the page, typing in the side panel (unobservable by the host page).                                                          | Planned (Phase 5)                                             |
+| Edit Mode         | Authoring state: picking elements on the page, typing in the side panel (unobservable by the host page).                                                          | Implemented (Phase 5)                                         |
 | Player            | In-page runtime that finds published guides for the URL, resolves targets, highlights them and shows instructions.                                                | Planned (Phase 6)                                             |
 
 ## Key journeys
@@ -68,12 +68,12 @@ flowchart LR
 
 Precondition: the application is registered (Phase 3); the author's extension is connected, with site access to its origin (Phase 4).
 
-1. Open the target application and the ContextLayer side panel. (Phase 5)
-2. Enter Edit Mode for a new or draft guide. (Phase 5)
-3. Click the element the step is about; ContextLayer intercepts the click so the application does not act on it. (Phase 5)
-4. ContextLayer captures a target descriptor and warns when the target is weak (no unique test attribute, stable id, or role plus accessible name). (Phase 5)
-5. Type the title and instructions in the side panel; repeat 3–5, reorder, preview. (Phase 5)
-6. Save the draft through the service worker to the API; publishing freezes an immutable version. (API Phase 3, extension Phase 5)
+1. Open the target application and click **Edit Mode** in the ContextLayer popup: the side panel opens for that tab. (Implemented, Phase 5)
+2. Choose a draft guide of the page's application, or create one. (Implemented, Phase 5)
+3. Click the element the step is about; ContextLayer intercepts the click so the application does not act on it. (Implemented, Phase 5)
+4. ContextLayer captures a target descriptor, shows what it stores and warns when the target is weak (no unique test attribute, stable id, or name), with the reason. (Implemented, Phase 5)
+5. Type the title and instructions in the side panel; repeat 3–5, reorder, preview one step. (Implemented, Phase 5)
+6. Save the draft through the service worker to the API; publishing, in the dashboard, freezes an immutable version. (Implemented, Phases 3 and 5)
 
 ### (b) Learner follows a guide
 
@@ -94,7 +94,7 @@ Precondition: the application is registered (Phase 3); the author's extension is
 | Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2) |
 | Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3) |
 | Extension connected to a workspace; per-application site access                                | Implemented (Phase 4) |
-| Edit Mode: element picking, target capture, instructions, save                                 | Planned (Phase 5)     |
+| Edit Mode: element picking, target capture, instructions, preview, save                        | Implemented (Phase 5) |
 | Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Planned (Phase 6)     |
 | Events (start, progress, completion, abandonment, target not found); basic dashboard analytics | Planned (Phase 7)     |
 | Production packaging and distribution                                                          | Planned (Phase 8)     |

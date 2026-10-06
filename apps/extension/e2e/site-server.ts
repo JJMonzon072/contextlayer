@@ -2,9 +2,12 @@
  * Stand-ins for customer web applications (playwright.config.ts starts it):
  * plain pages on GRANTED_SITE and UNGRANTED_SITE. `/frame` embeds a
  * same-origin iframe, so tests can check that nothing runs in subframes.
+ * `/demo/` is the Edit Mode demo application (`pnpm demo:site`), and
+ * `/demo/strict/` the same under a strict Content Security Policy.
  */
 import { createServer } from 'node:http'
 
+import { serveDemo } from '../scripts/demo-handler'
 import { GRANTED_SITE, UNGRANTED_SITE } from './environment'
 
 const escape = (value: string) =>
@@ -17,7 +20,16 @@ function page(title: string, body: string): string {
 for (const site of [GRANTED_SITE, UNGRANTED_SITE]) {
   const { port } = new URL(site)
   createServer((request, response) => {
-    const path = escape(new URL(request.url ?? '/', site).pathname)
+    const pathname = new URL(request.url ?? '/', site).pathname
+    if (pathname.startsWith('/demo/')) {
+      void serveDemo(pathname.slice('/demo/'.length), request, response).then((served) => {
+        if (served) return
+        response.statusCode = 404
+        response.end()
+      })
+      return
+    }
+    const path = escape(pathname)
     response.setHeader('content-type', 'text/html; charset=utf-8')
     response.setHeader('cache-control', 'no-store')
     response.end(

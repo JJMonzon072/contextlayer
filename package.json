@@ -20,7 +20,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @contextlayer/api run db:generate",
-    "db:migrate": "pnpm --filter @contextlayer/api run db:migrate"
+    "db:migrate": "pnpm --filter @contextlayer/api run db:migrate",
+    "demo:site": "pnpm --filter @contextlayer/extension demo:site"
   },
   "devDependencies": {
     "prettier": "catalog:",

@@ -92,6 +92,33 @@ async function disable() {
   }
 }
 
+/** Chrome 116+ (`sidePanel.open`) and the `sidePanel` permission. */
+const canEdit = typeof (chrome as { sidePanel?: { open?: unknown } }).sidePanel?.open === 'function'
+
+/**
+ * Edit Mode (ADR 0018). `sidePanel.open()` needs this click's user gesture, so
+ * nothing is awaited before it: the panel is enabled for this tab and opened
+ * in the same task (Chrome applies the two calls in order). The page's
+ * readiness was checked when the popup loaded (`active`); the panel attaches
+ * through the worker, which checks everything again.
+ */
+function openEditMode() {
+  const tab = tabId.value
+  if (tab === undefined) return
+  notice.value = undefined
+  void chrome.sidePanel
+    .setOptions({ tabId: tab, path: `sidepanel.html?tab=${String(tab)}`, enabled: true })
+    .catch(() => undefined)
+  chrome.sidePanel.open({ tabId: tab }).then(
+    () => {
+      window.close()
+    },
+    () => {
+      notice.value = 'Chrome could not open the Edit Mode panel. Try again.'
+    },
+  )
+}
+
 async function check() {
   if (tabId.value === undefined) return
   const result = await pingTab(tabId.value)
@@ -204,6 +231,19 @@ const steps = (count: number) => `${String(count)} step${count === 1 ? '' : 's'}
       </ul>
       <p v-if="status.moreGuides" class="mt-1 text-xs text-slate-500">
         More guides are listed in the dashboard.
+      </p>
+      <button
+        v-if="canEdit"
+        type="button"
+        class="popup-button mt-3 w-full"
+        :disabled="busy"
+        data-testid="edit-mode"
+        @click="openEditMode"
+      >
+        Edit Mode
+      </button>
+      <p v-if="canEdit" class="mt-1 text-xs text-slate-500">
+        Create or edit guides for this page in a side panel. Publish them from the dashboard.
       </p>
       <div class="mt-3 flex gap-2">
         <button type="button" class="popup-button-secondary" :disabled="busy" @click="check">

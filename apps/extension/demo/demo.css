@@ -1,0 +1,103 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+  color: #1f2937;
+  background: #f8fafc;
+}
+
+body {
+  margin: 0;
+}
+
+.topbar {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  padding: 12px 24px;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.topbar a {
+  margin-right: 12px;
+  color: #c7d2fe;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.notice {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fef3c7;
+}
+
+.hint {
+  color: #6b7280;
+  font-size: 0.85em;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  padding: 8px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  border-color: #4338ca;
+  background: #4f46e5;
+  color: #ffffff;
+}
+
+.card {
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+form {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+}
+
+input,
+textarea {
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.recent li {
+  margin: 6px 0;
+}
+
+.lights {
+  display: flex;
+  gap: 8px;
+}
+
+.lights div {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+.spacer {
+  height: 1200px;
+}

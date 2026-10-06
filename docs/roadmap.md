@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-05: **Phases 1–4 are done; Phases 5–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-05: **Phases 1–5 are done; Phases 6–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -15,7 +15,7 @@ Status on 2026-10-05: **Phases 1–4 are done; Phases 5–8 are Planned.** A pha
 | 2     | Identity and workspaces   | Done    | 2a API + CI, 2b dashboard                       |
 | 3     | Guides API and management | Done    | 3a API, 3b dashboard                            |
 | 4     | Extension connection      | Done    | 4a spike, 4b API, 4c connection, 4d site access |
-| 5     | Edit Mode (guide builder) | Planned | none                                            |
+| 5     | Edit Mode (guide builder) | Done    | none                                            |
 | 6     | Guide player              | Planned | 6a playback, 6b dynamic pages, 6c shadow/frames |
 | 7     | Analytics                 | Planned | none                                            |
 | 8     | Hardening and delivery    | Planned | 8a packaging, 8b security/ops, 8c distribution  |
@@ -191,13 +191,13 @@ Verification (at commit `bc3183a`):
   - 86 extension tests (handoff sender matrix, connection manager, refresh, site access with a fake Chrome) and 108 dashboard tests.
 - `pnpm test:e2e` passes dashboard 12/12 and extension 22/22 in Playwright's Chromium 153.0.8010.12, on the dedicated `contextlayer_e2e` database; the extension suite also passed `--repeat-each=3` (66/66). axe: 0 violations on the popup and the connect page.
 - Migrations `0000`–`0005` apply to an empty database (throwaway, dropped afterwards) and `drizzle-kit check` is clean.
-- Manual check of Chrome's own permission prompt: documented in [ADR 0017](adr/0017-per-application-site-access.md), not run by the suites (still pending after the review fixes below).
+- Manual check of Chrome's own permission prompt: run by JJ in Google Chrome 153.0.8010.52 on macOS with the regular build, after the review fixes below (Allow on `http://localhost:8081`: the site was On with its guide after the popup closed; Deny on `http://127.0.0.1:8082`: the site stayed Off). Details and limits in [ADR 0017](adr/0017-per-application-site-access.md); the automated suites do not cover Chrome's prompt.
 
 Review fixes (after `5ed6613`, PR #3 review):
 
 - **Late connection answers.** A code exchange still in flight could install its connection after Disconnect or Cancel, a newer attempt could be overwritten by an older exchange, two simultaneous messages could exchange one code twice, an older connection's late 401 could clear a newer one, and Disconnect waited for a refresh before clearing anything. Fixed with an explicit life cycle (two generations, transitions that never wait for the network; [ADR 0015](adr/0015-authentication-strategy.md)); an exchange that loses is never installed and its grant is revoked, best effort.
 - **"Turn on" outlived by the popup.** The popup waited for Chrome's answer before telling the worker, so closing it during the prompt could leave the origin granted but off. The worker now holds a pending request (connection, exact origin, tab, 3 minutes) and completes it when Chrome grants the origin, including on `permissions.onAdded`; a grant without a request turns nothing on ([ADR 0017](adr/0017-per-application-site-access.md)).
-- Verification: `pnpm test` 524 tests in 54 files (extension 107, ten of the new life-cycle tests failed before the fix); `pnpm test:e2e` dashboard 12/12 and extension 25/25 (`--repeat-each=3`: 75/75). The manual check of Chrome's own prompt is described in ADR 0017 and is **still pending**.
+- Verification: `pnpm test` 524 tests in 54 files (extension 107, ten of the new life-cycle tests failed before the fix); `pnpm test:e2e` dashboard 12/12 and extension 25/25 (`--repeat-each=3`: 75/75). JJ then ran the manual check of Chrome's own prompt (Allow and Deny, see above).
 
 Out of scope: Edit Mode (Phase 5), playback (Phase 6), `launchWebAuthFlow`, other browsers, "log out everywhere".
 
@@ -205,24 +205,66 @@ Risks addressed: R-01 (state in storage, worker restarts tested), R-02 (open tab
 
 ## Phase 5 — Edit Mode (guide builder)
 
-**Planned (Phase 5).** Depends on Phases 3 and 4. Goal: an admin picks elements on a granted application and saves a draft whose targets carry enough signals to be found again.
+**Done (Implemented, Phase 5).** Goal: an editor picks elements on a granted application and saves a draft whose targets carry enough signals to be found again.
 
-- [ ] Side panel for step list, titles and instructions, so the host page cannot observe typing.
-- [ ] Picker in the content script: hover highlight, click capture, Esc to cancel, promotion to the interactive ancestor.
-- [ ] Descriptor capture per ADR 0014 (test attributes, filtered ids, role + accessible name, labels, text, structural path, match counts) with a "weak target" warning.
-- [ ] Single-step preview; save through the service worker, which accepts privileged commands only from extension pages.
-- [ ] Content-script size budget enforced by a build test (`zod/mini` or hand-written guards); zod `jitless` mode, since the MV3 CSP blocks its `new Function` probe.
+- [x] Side panel for the guide, its steps, titles and instructions, so the host page cannot observe typing ([ADR 0018](adr/0018-side-panel-edit-mode.md)): opened from the popup's **Edit Mode** button on an active site, bound to its tab; application choice when several share the origin; open or create a guide; add, edit, reorder and delete steps; select, reselect and remove a target; inline confirmations; Exit.
+- [x] Picker in the content script: hover highlight with a tag/role label, click capture without executing the element, Escape and a 2-minute limit to cancel, Tab and Enter from the keyboard, promotion to the interactive ancestor, page-dispatched events ignored, our own UI skipped, full cleanup.
+- [x] Descriptor capture per [ADR 0014](adr/0014-element-targeting-strategy.md) (test attributes, filtered ids and classes, own bounded role and accessible name, labels, text, stable classes, anchors, container, anchored CSS path, counted locators, capture metadata), with privacy filters and stable / found-by-name / weak categories and their reasons, reviewed before use.
+- [x] Single-step preview on the element selected on the page (text only, close button, marked as a draft); saves through the service worker with the revision the edits started from, which accepts Edit Mode requests only from the side panel and captures only under its own request ids.
+- [x] Recoverable copy of unsaved steps in `storage.session`, conflict handling, and checking a save whose answer was lost.
+- [x] Content-script size budget enforced by the build (hand-written guards instead of zod in the content script); zod `jitless` in every extension page and the worker.
+- [x] `pnpm demo:site`: a fictitious application on 127.0.0.1:4400 (and under a strict CSP) to try Edit Mode.
+- [x] Authoring endpoints for the extension, bearer only ([API 3.5](api.md#35-phase-5-guide-authoring-from-the-extension)).
 
-Out of scope: picking inside shadow roots and iframes (6c), full playback, hand-edited selectors.
+Changed from the plan:
 
-Exit criteria:
+- **A small authoring API for the extension** (`/v1/extension/authoring/…`) instead of letting the extension call workspace routes: workspace routes never accept a bearer token, and the facade reuses the guides service, so revisions and isolation are the dashboard's.
+- **Shadow DOM and iframes are refused, not captured.** The plan left them out of scope; the picker now says so for the element instead of storing a wrong target. `framePath` and `shadowPath` are always empty.
+- **No XPath locators.** In the light DOM they would repeat the CSS path; the schema still accepts them ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- **Generated ids** are kept only as flagged hints (`generated: true`), and record-like ids (UUIDs, 4+ digits) are not stored at all.
+- **A captured target waits for review** ("Use this element") instead of being applied at once.
+- **No forced reload on `runtime.onUpdateAvailable`**, which would lose the author's work; unsaved steps are kept in the browser session instead ([R-02](technical-risks.md)).
 
-- Capture unit tests: generated ids (React `useId`, CSS Modules, CSS-in-JS hashes) are never used.
-- Playwright: pick three elements, save, reload → the API returns three steps with v1 descriptors; a positional-only fixture shows the warning.
-- A strict-CSP fixture (`style-src 'self'`) renders the picker; a forged `window.postMessage` has no effect.
-- The build fails when `content.js` exceeds the budget.
+Verification (on the final Phase 5 code, branch `JJ`):
 
-Risks: R-04, R-09, R-10, R-11, R-15. ADRs: capture part of 0014 → Accepted; revisit [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) (shadow-safe Tailwind vs plain CSS) and [ADR 0006](adr/0006-vue-3-frontend-framework.md); new ADR: side panel as authoring surface.
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint` and `pnpm build` pass; the build reports `content.js` at 26 267 bytes minified (10 098 gzip) of a 65 536-byte budget.
+- `pnpm test` runs 691 tests in 63 files: 73 shared, 3 ui, 55 API unit, 189 API integration on PostgreSQL 18 (11 new for the authoring endpoints: editor loop as the dashboard sees it, reorder keeps ids, stale revision 409, member and demoted editor 403 on every route, no cookie fallback, other tenant and other application 404, foreign step 404, archived 409, invalid descriptor 400, rollback on a failure halfway, published version unchanged), 108 dashboard and 263 extension (capture on jsdom pages, picker, the worker session with controlled promises, the side panel's draft, save, conflict and lost-answer logic).
+- `pnpm test:e2e` passes dashboard 12/12 and extension 36/36 in Playwright's Chromium 153, on the dedicated `contextlayer_e2e` database; a tab-switch scenario added afterwards brings the extension suite to 37/37. The 11 Edit Mode scenarios passed `--repeat-each=2` (22/22; the first 10 also `--repeat-each=3`, 30/30). axe: 0 violations on the side panel with a target under review.
+- `drizzle-kit check` is clean; Phase 5 adds no migration.
+- Found by CI: in one run on GitHub's Linux runners the hidden side panel's page was closed when another tab came to the front, which the macOS spike had not shown (a later Linux run, which logs the behaviour, kept it: not consistent); the tab-switch scenario now checks the guarantees that hold either way (nothing happens in the other tab, the panel stays enabled for its own tab only, and a closed panel leaves nothing on the page and offers the unsaved step back), and [ADR 0018](adr/0018-side-panel-edit-mode.md) records the difference.
+- Found by the e2e suite and fixed: the demo page first used a random id suffix that is sometimes made only of letters, which the generated-id heuristic cannot tell from a word (now documented in ADR 0014); the demo uses a React-style `:r…:` id.
+
+Not covered by automation (manual checks for JJ): Edit Mode in Google Chrome with the regular build on `pnpm demo:site`; opening the panel with the toolbar icon click (the e2e opens the popup with `chrome.action.openPopup`); closing the panel with Chrome's own close button in Chrome 142+ and older (`sidePanel.onClosed` versus `pagehide`); Chrome 120; a real customer application.
+
+Review fixes (after `4f81962`, PR #4 review):
+
+- **Editable content through auxiliary paths.** The text extractor checked form controls and editable regions only below its root, so the heading before a target, a label or an `aria-labelledby` reference inside an editable region, or a container named by an editable heading could put text a user typed into the descriptor. The root now goes through the same checks, editability is inherited as browsers do (including `plaintext-only`, `false` islands, `inherit` and design mode), and nodes inside an editable region are not read at all ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- **Order of the last copy and the close.** On `pagehide` the panel queued its last copy behind any copy still waiting for an answer and sent the detach at once, so the worker could end the session first and refuse the last copy; a new edit also kept showing the previous copy as kept. The close now carries the unconfirmed copy in the same message, kept and ended in one transition; copies are versioned per panel; writes and clears run inside life-cycle transitions with the ownership check ([ADR 0018](adr/0018-side-panel-edit-mode.md)).
+- Verification: the new tests were run against the code of `4f81962` first and failed for the expected reason:
+  - capture: 7 tests, the private text reached the descriptor;
+  - worker: 5 tests:
+    - a copy reappeared after Disconnect;
+    - an old clear deleted a later session's copy;
+    - an older write replaced a newer one;
+    - the closing copy was lost;
+    - a page that never answers held the session up;
+  - panel: 2 tests, "kept" was shown for a newer edit;
+  - panel-to-worker integration: 2 tests, the copy offered back was an older version, or none.
+
+  Tests added after the fix and only run with it:
+  - three more integration cases (native close first, Disconnect, Exit);
+  - a save that leaves later edits (checked failing by removing that one change);
+  - two e2e scenarios.
+
+- Verification (final review-fix code):
+  - `pnpm test`: 718 tests in 64 files (extension 290);
+  - `pnpm test:e2e`: dashboard 12/12 and extension 39/39, including a demo page with a fictitious editable note whose text never reaches the saved descriptor, and an edit typed right before the real side panel closed that is offered back;
+  - `content.js` is 26 805 bytes;
+  - `drizzle-kit check` is clean; no migration.
+
+Out of scope (unchanged): picking inside shadow roots and iframes (6c), playback and the resolver (6), hand-edited selectors, Previous/Next/Finish, analytics, screenshots.
+
+Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (strict CSP verified, `jitless`), R-11 (authoring in the side panel, bound captures), R-15 (budget). ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) capture Accepted (resolution still Proposed); [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the picker and preview; new [ADR 0018](adr/0018-side-panel-edit-mode.md); [ADR 0006](adr/0006-vue-3-frontend-framework.md): the side panel uses Vue, the in-page UI stays framework-free.
 
 ## Phase 6 — Guide player
 

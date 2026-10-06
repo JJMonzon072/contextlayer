@@ -1,4 +1,5 @@
 import {
+  apiErrorSchema,
   EXTENSION_PATHS,
   extensionTokenResponseSchema,
   type ExtensionTokenRequest,
@@ -6,7 +7,7 @@ import {
 } from '@contextlayer/shared'
 import type { z } from 'zod'
 
-import { ApiUnreachableError, type ApiClient } from './api-client'
+import { ApiStatusError, ApiUnreachableError, type ApiClient } from './api-client'
 import type { Lifecycle } from './lifecycle'
 import type { AccessRecord, Vault } from './vault'
 
@@ -175,7 +176,14 @@ export function createAuth(deps: {
           throw new ConnectionEndedError('The connection was revoked.')
         }
       }
-      if (!response.ok) throw new ApiUnreachableError(`API answered ${String(response.status)}`)
+      if (!response.ok) {
+        const body = apiErrorSchema.safeParse(await response.json().catch(() => undefined))
+        throw new ApiStatusError(
+          response.status,
+          body.success ? body.data.error.code : undefined,
+          body.success ? body.data.error.message : `API answered ${String(response.status)}`,
+        )
+      }
       if (schema === undefined || response.status === 204) return undefined
       return schema.parse(await response.json())
     },

@@ -10,7 +10,8 @@
     "typecheck": "vue-tsc --build --force",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "tsx --conditions=@contextlayer/source scripts/build.ts --e2e && playwright test"
+    "test:e2e": "tsx --conditions=@contextlayer/source scripts/build.ts --e2e && playwright test",
+    "demo:site": "tsx scripts/demo-site.ts"
   },
   "dependencies": {
     "@contextlayer/shared": "workspace:*",
