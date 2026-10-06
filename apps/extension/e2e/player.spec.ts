@@ -21,7 +21,9 @@ import {
 } from './support/api'
 import {
   clickInPlayer,
+  connectedBrowsers,
   connectExtension,
+  contentScriptState,
   focusedInPlayer,
   openActionPopup,
   openEditMode,
@@ -126,14 +128,23 @@ async function play(extensionBrowser: ExtensionBrowser, page: Page, title: strin
   await closed
 }
 
-async function storedRun(context: BrowserContext) {
+/** The runs stored by the worker: the run of `page`'s tab, and which tabs have one. */
+async function storedRun(context: BrowserContext, page: Page) {
   const worker = await extensionWorker(context)
-  return worker.evaluate(async () => {
-    const run = (await chrome.storage.session.get('cl.player'))['cl.player'] as
-      Record<string, unknown> | undefined
-    const local = await chrome.storage.local.get('cl.player')
-    return { run: run ?? null, local: Object.keys(local) }
-  })
+  return worker.evaluate(async (url) => {
+    const runs = ((await chrome.storage.session.get('cl.players'))['cl.players'] ?? {}) as Record<
+      string,
+      Record<string, unknown>
+    >
+    const [tab] = await chrome.tabs.query({ url })
+    const local = await chrome.storage.local.get(['cl.players', 'cl.player'])
+    return {
+      run: tab?.id === undefined ? null : (runs[String(tab.id)] ?? null),
+      tabId: tab?.id ?? null,
+      tabs: Object.keys(runs).map(Number),
+      local: Object.keys(local),
+    }
+  }, page.url())
 }
 
 /** The page's own state: the player never clicks, types or submits for the user. */
@@ -205,7 +216,7 @@ test('authors a guide, publishes it and plays it step by step from the popup', a
   expect(first.text).toContain('Click New customer to open the form.')
   await expectHighlighted(page, page.getByTestId('new-customer'))
   // Run state: local to this browser session, bound to the tab and version.
-  const { run, local } = await storedRun(context)
+  const { run, local } = await storedRun(context, page)
   expect(run).toMatchObject({
     origin: GRANTED_SITE,
     guideId: guide.id,
@@ -233,7 +244,7 @@ test('authors a guide, publishes it and plays it step by step from the popup', a
       buttons: ['Previous', 'Finish', 'Close guide'],
     })
   await expectHighlighted(page, page.getByRole('button', { name: 'Save customer' }))
-  expect((await storedRun(context)).run).toMatchObject({ step: 2, generation: 2 })
+  expect((await storedRun(context, page)).run).toMatchObject({ step: 2, generation: 2 })
 
   await clickInPlayer(page, 'Previous')
   await expect.poll(async () => (await playerView(page)).step).toBe('1')
@@ -242,7 +253,7 @@ test('authors a guide, publishes it and plays it step by step from the popup', a
 
   await clickInPlayer(page, 'Finish')
   await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
-  await expect.poll(async () => (await storedRun(context)).run).toBeNull()
+  await expect.poll(async () => (await storedRun(context, page)).run).toBeNull()
   await expectPageUntouched(page)
 })
 
@@ -353,7 +364,7 @@ test('plays a guide with the keyboard alone, with an accessible card', async ({
   await page.bringToFront()
   await page.keyboard.press('Escape')
   await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
-  await expect.poll(async () => (await storedRun(context)).run).toBeNull()
+  await expect.poll(async () => (await storedRun(context, page)).run).toBeNull()
 
   // With the focus in a field, the guide never takes it, and Escape stays the page's.
   await page.locator('#customer-name').focus()
@@ -396,7 +407,7 @@ test('lists only guides for this page, and never overlaps Edit Mode', async ({
   const panel = await openEditMode(extensionBrowser, page)
   await expect(panel.getByTestId('guide-chooser')).toBeVisible()
   await expect.poll(async () => (await playerView(page)).cards).toBe(0)
-  await expect.poll(async () => (await storedRun(context)).run).toBeNull()
+  await expect.poll(async () => (await storedRun(context, page)).run).toBeNull()
 
   // While Edit Mode is open, no guide starts on this tab.
   const again = await openActionPopup(extensionBrowser, page)
@@ -421,8 +432,13 @@ test('a reload or Disconnect ends the guide and leaves nothing on the page', asy
 
   await play(extensionBrowser, page, 'Tour')
   await expect.poll(async () => (await playerView(page)).open).toBe(true)
+  const { tabId } = await storedRun(context, page)
+  expect(tabId).not.toBeNull()
   await page.reload()
-  await expect.poll(async () => (await storedRun(context)).run).toBeNull()
+  // The new document's script said hello: the tab is known and has no run.
+  await expect.poll(async () => (await contentScriptState(page))?.state).toBe('active')
+  await expect.poll(async () => (await storedRun(context, page)).tabs).toEqual([])
+  expect((await storedRun(context, page)).tabId).toBe(tabId)
   expect((await playerView(page)).hosts).toBe(0)
 
   await play(extensionBrowser, page, 'Tour')
@@ -431,7 +447,7 @@ test('a reload or Disconnect ends the guide and leaves nothing on the page', asy
   await popup.getByRole('button', { name: 'Disconnect' }).click()
   await expect(popup.getByTestId('connection')).toHaveAttribute('data-state', 'disconnected')
   await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
-  await expect.poll(async () => (await storedRun(context)).run).toBeNull()
+  await expect.poll(async () => (await storedRun(context, page)).tabs).toEqual([])
 })
 
 test('plays under a strict CSP with Trusted Types, without a single violation', async ({
@@ -474,4 +490,82 @@ test('plays under a strict CSP with Trusted Types, without a single violation', 
   await expect
     .poll(async () => (await page.evaluate<string[]>('globalThis.__cspViolations')).length)
     .toBeGreaterThan(0)
+})
+
+test('plays two guides in two tabs, each on its own', async ({ context, extensionBrowser }) => {
+  const workspace = await acme(context)
+  const { account, workspaceId, applicationId } = workspace
+  await publishGuide(account, workspaceId, applicationId, 'Tour', ['Welcome', 'Where to start'])
+  await publishGuide(account, workspaceId, applicationId, 'Second tour', ['One', 'Two', 'Three'])
+  const first = await demoPage(context, extensionBrowser)
+  // The same application in a second tab (another URL, so each tab is told apart).
+  const second = await context.newPage()
+  await second.goto(`${DEMO}index.html`)
+  await expect.poll(async () => (await contentScriptState(second))?.state).toBe('active')
+
+  await play(extensionBrowser, first, 'Tour')
+  await play(extensionBrowser, second, 'Second tour')
+
+  await expect.poll(async () => (await playerView(first)).text).toContain('Step 1 of 2')
+  await expect.poll(async () => (await playerView(second)).text).toContain('Step 1 of 3')
+  const [one, two] = [await storedRun(context, first), await storedRun(context, second)]
+  expect(one.run).toMatchObject({ step: 0, tabId: one.tabId })
+  expect(two.run).toMatchObject({ step: 0, tabId: two.tabId })
+  expect(one.tabs.sort()).toEqual([one.tabId, two.tabId].sort())
+
+  // Next in the first tab moves only the first guide.
+  await first.bringToFront()
+  await clickInPlayer(first, 'Next')
+  await expect.poll(async () => (await playerView(first)).step).toBe('1')
+  expect((await playerView(second)).step).toBe('0')
+  expect((await storedRun(context, second)).run).toMatchObject({ step: 0, generation: 0 })
+
+  // Closing the first tab leaves the second guide playing.
+  const secondTab = two.tabId
+  await first.close()
+  await expect.poll(async () => (await storedRun(context, second)).tabs).toEqual([secondTab])
+  await second.bringToFront()
+  expect((await playerView(second)).open).toBe(true)
+  await clickInPlayer(second, 'Next')
+  await expect.poll(async () => (await playerView(second)).step).toBe('1')
+})
+
+test('a connection revoked from Connected browsers ends the guide at the next step', async ({
+  context,
+  extensionBrowser,
+}) => {
+  const workspace = await acme(context)
+  await publishGuide(workspace.account, workspace.workspaceId, workspace.applicationId, 'Tour', [
+    'Welcome',
+    'Where to start',
+  ])
+  const page = await demoPage(context, extensionBrowser)
+  await play(extensionBrowser, page, 'Tour')
+  await expect.poll(async () => (await playerView(page)).open).toBe(true)
+  // No other page may find the revocation first: an open popup refreshes its
+  // status (a bearer request) whenever the worker broadcasts a change.
+  for (const other of context.pages()) if (other !== page) await other.close()
+
+  // Revoked on the server, from the dashboard, while the guide is on screen.
+  const list = await connectedBrowsers(context, workspace.workspaceId)
+  await list.getByRole('button', { name: /^Revoke/ }).click()
+  await list.getByRole('button', { name: 'Confirm revoke' }).click()
+  await expect(list.getByTestId('connection-status')).toHaveText('Revoked')
+
+  // Nothing has told the extension yet: the guide is still on screen.
+  await page.bringToFront()
+  expect((await storedRun(context, page)).run).toMatchObject({ step: 0 })
+  expect((await playerView(page)).open).toBe(true)
+  await clickInPlayer(page, 'Next')
+
+  // The worker found the revocation, cleared the run and the connection, and
+  // the page stopped: no card, then no ContextLayer UI at all.
+  await expect.poll(async () => (await playerView(page)).open).toBe(false)
+  await expect.poll(async () => (await storedRun(context, page)).tabs).toEqual([])
+  await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
+  const worker = await extensionWorker(context)
+  expect(
+    await worker.evaluate(async () => Object.keys(await chrome.storage.session.get('cl.ended'))),
+  ).toEqual(['cl.ended'])
+  await expect.poll(async () => (await contentScriptState(page))?.state).toBe('stopped')
 })
