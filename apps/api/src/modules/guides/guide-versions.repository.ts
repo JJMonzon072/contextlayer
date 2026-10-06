@@ -1,4 +1,4 @@
-import type { GuideSnapshot } from '@contextlayer/shared'
+import type { GuideSnapshot, UrlPattern } from '@contextlayer/shared'
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
 
 import type { DbExecutor } from '../../infrastructure/database/client.js'
@@ -79,6 +79,8 @@ export interface PublishedRow {
   title: string
   description: string
   stepCount: number
+  /** The published version's start page; null means any page of the origin. */
+  startUrlPattern: UrlPattern | null
   publishedAt: Date
 }
 
@@ -93,6 +95,8 @@ const publishedColumns = {
   title: sql<string>`"guide_versions"."snapshot" -> 'guide' ->> 'title'`,
   description: sql<string>`"guide_versions"."snapshot" -> 'guide' ->> 'description'`,
   stepCount: sql<number>`jsonb_array_length("guide_versions"."snapshot" -> 'steps')`,
+  // JSON null and a missing key both read as null: no start page.
+  startUrlPattern: sql<UrlPattern | null>`"guide_versions"."snapshot" -> 'guide' -> 'startUrlPattern'`,
   publishedAt: guideVersions.publishedAt,
 }
 

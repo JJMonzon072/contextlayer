@@ -43,6 +43,7 @@ const guide: PublishedGuideSummary = {
   description: '',
   stepCount: 2,
   publishedAt: '2026-10-05T12:00:00.000Z',
+  startUrlPattern: null,
 }
 
 /** Chrome as site access sees it: grants, tabs, registrations, injections, messages. */

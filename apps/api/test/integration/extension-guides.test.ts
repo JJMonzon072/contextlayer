@@ -102,6 +102,34 @@ describe('published guides for an extension connection', () => {
     expect(response.body).not.toMatch(/publishedBy|email|editor@/)
   })
 
+  it('carries the start page of the published version, never the draft one', async () => {
+    const { a, tokens, published } = await tenants()
+    const editor = a.people.editor.cookie
+    const start = { protocol: 'https', hostname: 'crm.shared.test', pathname: '/customers' }
+    await call(app, 'PATCH', published.base, editor, { startUrlPattern: start })
+    expect((await call(app, 'POST', `${published.base}/publish`, editor)).statusCode).toBe(201)
+    // A later draft edit is not what learners get.
+    await call(app, 'PATCH', published.base, editor, { startUrlPattern: { pathname: '/draft' } })
+
+    const list = publishedGuideListSchema.parse(
+      (await guides(tokens.accessToken, `origin=${encodeURIComponent(SHARED_ORIGIN)}`)).json(),
+    )
+
+    expect(list.items).toEqual([
+      expect.objectContaining({ guideId: published.id, version: 2, startUrlPattern: start }),
+    ])
+  })
+
+  it('reports no start page as null: the guide starts on any page of the origin', async () => {
+    const { tokens } = await tenants()
+
+    const list = publishedGuideListSchema.parse(
+      (await guides(tokens.accessToken, `origin=${encodeURIComponent(SHARED_ORIGIN)}`)).json(),
+    )
+
+    expect(list.items[0]?.startUrlPattern).toBeNull()
+  })
+
   it('serves the published snapshot even after the draft changes', async () => {
     const { tokens, published, a } = await tenants()
     await call(app, 'PATCH', published.base, a.people.editor.cookie, { title: 'Draft rename' })
