@@ -64,13 +64,14 @@ export async function createApplication(
   return application.id
 }
 
-/** A guide with one step per title, published once. */
+/** A guide with one step per title (no target), published once. */
 export async function publishGuide(
   account: Account,
   workspaceId: string,
   applicationId: string,
   title: string,
   steps: string[] = ['Open the menu'],
+  startUrlPattern?: Record<string, string>,
 ): Promise<string> {
   const guide = await ok<{ id: string; revision: number }>(
     await account.api.post(at(guidesPath(workspaceId)), { data: { applicationId, title } }),
@@ -89,6 +90,25 @@ export async function publishGuide(
       },
     }),
   )
+  if (startUrlPattern) {
+    await ok(
+      await account.api.patch(at(guidesPath(workspaceId, guide.id)), {
+        data: { startUrlPattern },
+      }),
+    )
+  }
   await ok(await account.api.post(at(guidePublishPath(workspaceId, guide.id))))
   return guide.id
+}
+
+/** Publishes a guide's current draft as a new version; returns its number. */
+export async function publishDraft(
+  account: Account,
+  workspaceId: string,
+  guideId: string,
+): Promise<number> {
+  const published = await ok<{ version: { version: number } }>(
+    await account.api.post(at(guidePublishPath(workspaceId, guideId))),
+  )
+  return published.version.version
 }
