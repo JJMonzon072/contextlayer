@@ -273,9 +273,10 @@ Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (
 - [x] 6a: playback of published guides with static resolution in the page's light DOM.
   - **Discovery:** the popup lists the published guides for the tab's origin (API) whose start page matches the tab's URL (URLPattern, in the worker; no start page means any page of the origin), each with **Play**.
   - **Start:** the worker fetches the version the popup listed, checks the site, the guide's application and the start page again, and sends the first step to the page; the popup closes.
-  - **Run state:** one run in `chrome.storage.session` (run id, tab, origin, document, guide and version with its snapshot, step index, generation), never in PostgreSQL. It survives the worker stopping and ends on Finish, Close, a new document in the tab, the tab closing, Edit Mode on the tab, the site turned off, Disconnect and revocation.
-  - **Messages:** the page asks for Previous / Next / Finish / Close with the run id and generation it shows; anything from another tab, frame, document or origin, or about an ended run, changes nothing, and a late answer never brings a guide back.
-  - **Resolution** ([ADR 0014](adr/0014-element-targeting-strategy.md)): outcomes `resolved`, `ambiguous`, `not-found`, `wrong-page`, plus `unsupported` for frame and shadow paths; candidates by capture's own definitions, at most 50; visibility filter; ADR weights; vetoes; an identity rule; identical candidates never told apart by position; two-frame stability; occlusion as a warning.
+  - **Run state:** at most one run per tab, in `chrome.storage.session` by tab id (run id, tab, origin, document, guide and version with its snapshot, step index, generation), never in PostgreSQL; two tabs play two guides independently. A run survives the worker stopping. A tab's run ends on Finish, Close, a new document in that tab, that tab closing, Edit Mode on that tab or a new Play on that tab; the runs of a site end when it is turned off or its access is withdrawn; every run ends on Disconnect and on a revocation.
+  - **Messages:** the page asks for Previous / Next / Finish / Close with the run id and generation it shows; anything from another tab, frame, document or origin, or about an ended run, changes nothing, and a late answer never brings a guide back: a run's hide reaches its page after its show, the page refuses a show for a run it was told to hide, and an older or ended start never reports success or replaces a newer run.
+  - **Revocation:** Previous and Next first check the connection with the existing bearer request (`GET /v1/extension/session`, as the popup's status does); a connection the server refuses ends every run it had and removes each guide from its page. An unreachable API is not taken for a revocation.
+  - **Resolution** ([ADR 0014](adr/0014-element-targeting-strategy.md)): outcomes `resolved`, `ambiguous`, `not-found`, `wrong-page`, plus `unsupported` for frame and shadow paths; candidates by capture's own definitions, at most 50; visibility filter; ADR weights; vetoes; an identity rule; identical candidates never told apart by position; two-frame stability (a target that never holds still is not anchored); occlusion as a warning.
   - **Player UI** ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)): highlight and a card with the guide, progress, title, instructions, Previous, Next or Finish and Close. Unanchored steps follow the descriptor's `onAmbiguous` / `onNotFound` (unanchored with a hint, skip or end). Scrolling only when the target is out of view.
   - **Accessibility:** a labelled non-modal dialog, a polite live region, native buttons, no focus trap, focus taken only when the page has none, Escape only from inside the card, no animation, instant scrolling under reduced motion.
   - **Never acts:** the player does not click, type or submit; clicks and keys in the card stay in it and forged events are ignored.
@@ -296,7 +297,7 @@ Changed from the plan (6a):
 
 - **No Floating UI.** The card needs two behaviours, flip and shift inside the viewport, written as a small pure module (`src/content/player/position.ts`) with its own tests, instead of a dependency in every page ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)).
 - **The start page is matched in the extension.** The published guide list carries the published version's `startUrlPattern` ([API 3.4](api.md#34-phase-4-extension-connection-and-published-guides)); the API still filters by exact origin only.
-- **Run state keyed by one run, not per tab.** One guide plays at a time; starting another (in any tab) replaces it and removes its UI.
+- **Revocation found at the next step.** A loaded guide needs no API call to move, so the worker asks the API whether the connection stands on Previous and Next (no polling, no push channel, no new permission).
 - **An identity rule in resolution.** A best score above `minScore` is not enough: the candidate must match by what says which element it is, and candidates that match equally are never separated by their position ([ADR 0014](adr/0014-element-targeting-strategy.md)).
 - **No `webNavigation` or other new permission**, and no migration.
 
@@ -315,7 +316,21 @@ Verification (6a, branch `JJ`):
   - the demo page under a strict CSP with Trusted Types: highlight and card styled, 0 violations, with an inline-style control.
 - `drizzle-kit check` is clean; 6a adds no migration and no manifest permission.
 
-Not covered by automation (manual checks for JJ): playing "Crear un cliente" in Google Chrome with the regular build on `pnpm demo:site`, opening the popup with the toolbar icon; a screen reader (VoiceOver) reading the card; Chrome 120; a real customer application.
+Review fixes (PR #5 review, after `153ab9d`):
+
+- `a793a37` **One run per tab.** The first version kept a single run for the whole browser (a Play in tab B replaced tab A's guide). Runs are now stored by tab (`cl.players`, each entry validated on its own) and every action affects only its own tab; a site turned off ends the runs on that origin; Disconnect ends them all. The worker sends a run's show from inside the transition that stores it and every hide from inside the transition that ends or replaces it; a start whose run was ended or replaced while its page answered reports STALE, and an older start that loads slowly never replaces a newer one.
+- `97d1770` **Revocation during playback.** Previous and Next check the connection with `GET /v1/extension/session` through the auth module (single refresh, strict rotation); a refused connection ends every run it had and tells each page; an unreachable or failing API is not a revocation.
+- `f5bc2a6` **Hide before show.** The page ignored a hide for a run it was not showing yet, so a show arriving after it could draw an ended guide; a hide now marks the run as ended on the page (bounded to the 20 most recent), and a later show for it draws nothing.
+- `e7bb393` **Unstable targets.** A target whose box never held still across two frames within the bounded checks was anchored anyway; it is now `not-found` with reason `unstable` under the descriptor's policy ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- `050f193` e2e: two guides in two tabs; a revocation from Connected browsers ends the guide at the next step (with every other extension page closed, so only the player's check can find it; the scenario fails with that check removed).
+- The new unit tests were checked by removing each fix in turn: the matching tests failed (per-tab storage: 7; superseded start: 1; check after the page's answer: 3; revocation check: 2; unreachable taken for a revocation: 1; page tombstone: 3; anchoring an unstable target: 1).
+- Verification (final review-fix code):
+  - `pnpm test`: 848 tests in 70 files (extension 418);
+  - `pnpm test:e2e`: dashboard 12/12 and extension 47/47; the 8 player scenarios `--repeat-each=3` 24/24. During the first such repetition the reload scenario failed once and its output was not kept; it was not reproduced in about 110 later runs, and the scenario now waits for the new document's script and a known tab before checking that the run is gone;
+  - `content.js` is 45 304 bytes minified (16 093 gzip) of the unchanged 65 536-byte budget;
+  - `drizzle-kit check` is clean; no migration and no new permission.
+
+Not covered by automation (manual checks for JJ): playing "Crear un cliente" in Google Chrome with the regular build on `pnpm demo:site`, opening the popup with the toolbar icon, in two tabs at once, and revoking the connection from Connected browsers mid-guide; a screen reader (VoiceOver) reading the card; Chrome 120; a real customer application.
 
 Risks: R-01, R-04–R-11, R-15, R-16. ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) resolution Accepted for static light-DOM resolution (6a), thresholds still starting values to calibrate in 6b; [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the player (host modals still 6b); new ADR in 6b: SPA navigation detection (Navigation API vs `webNavigation` and its "Read your browsing history" warning).
 

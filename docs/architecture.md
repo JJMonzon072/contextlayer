@@ -416,14 +416,17 @@ sequenceDiagram
   SW-->>P: started, the popup closes
   U->>CS: Next / Previous
   CS->>SW: player.go {runId, generation, direction}
-  SW-->>CS: the next step, if the run, page and generation still match
+  SW->>A: GET /v1/extension/session (Bearer): does the connection still stand?
+  SW-->>CS: the next step, if the connection, run, page and generation still match
   U->>CS: Finish / Close / Escape
   CS->>CS: UI removed at once
   CS->>SW: player.end {runId, reason}
 ```
 
-- **Run state.** One run in `storage.session` (`cl.player`): run id, connection, tab, origin, document, guide, version and its snapshot, step index and generation. It survives the worker stopping between events and is never stored in the API. It ends on Finish, Close, a new document in its tab (`page.hello`), the tab closing, Edit Mode attaching to the tab, the site turned off or its access withdrawn, Disconnect and revocation (cleared with the connection; the page is told to stop).
-- **Stale requests.** `player.go` and `player.end` are accepted only from the run's tab, top frame, document and origin as Chrome reports them, and only for the stored run id; a request about an older generation changes nothing and returns the step now shown. The page ignores answers about a run it closed and refuses a later `player.show` for it, so a late answer never brings a guide back.
+- **Run state.** At most one run per tab, in `storage.session` under `cl.players` keyed by tab id; each entry is validated on its own (a malformed or misfiled one is dropped without touching the others). A run holds its id, connection, tab, origin, document, guide, version and its snapshot, step index and generation. Runs survive the worker stopping between events and are never stored in the API. A tab's run ends on Finish, Close, a new document in that tab (`page.hello`), that tab closing, Edit Mode attaching to that tab or a new Play on that tab; the runs of a site end when it is turned off or its access is withdrawn; every run ends on Disconnect (cleared with the connection; pages are told to stop).
+- **Revocation.** A loaded guide moves without the API, so Previous and Next first make the bearer request the popup's status already makes (`GET /v1/extension/session`, through the auth module's single refresh and strict rotation). A connection the server refuses is cleared as for any request; every run it had ends and each page is told to remove its guide; the page gets STALE. An unreachable or failing API is not a revocation: the step moves. No polling and no push channel.
+- **Stale requests.** `player.go` and `player.end` are accepted only from the run's tab, top frame, document and origin as Chrome reports them, and only for that tab's stored run id; a request about an older generation changes nothing and returns the step now shown. A start remembers the latest Play per tab (in memory), so an older one that loads slowly never replaces a newer run, and one whose run was ended or replaced while its page answered reports STALE.
+- **Ordering.** A run's `player.show` is sent from inside the transition that stores it and every `player.hide` from inside the transition that ends or replaces it, so a tab receives a run's hide after its show. The page also refuses a show for a run it was told to hide or closed itself (the last 20 are remembered), so a late message never brings a guide back.
 - **Edit Mode exclusivity.** A guide does not start on a tab with an Edit Mode session; Edit Mode attaching to a tab ends its guide first; the page refuses `player.show` during a selection or preview, and starting a selection or preview removes the guide.
 
 **Planned (Phase 7).** Run events (`run_started`, `step_viewed`, `target_not_found`, `run_completed`, `run_abandoned`) queued in `storage.local` and flushed in idempotent batches.
