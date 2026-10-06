@@ -19,6 +19,7 @@ import { createAuthoring, type AuthoringChrome } from './authoring'
 import { createWorkerCore } from './core'
 import { handleBackgroundMessage } from './handle-message'
 import { CONTENT_SCRIPT_FILES } from '../content-files'
+import { createPlayer } from './player'
 import { createSiteAccess, type SiteChrome } from './site-access'
 import { chromeStorage } from './storage'
 
@@ -94,6 +95,9 @@ function verifyAuthoring(): void {
   authoring.verify().catch((error: unknown) => {
     logger.warn('could not check the Edit Mode session', error)
   })
+  player.verify().catch((error: unknown) => {
+    logger.warn('could not check the guide being played', error)
+  })
 }
 
 // Not awaited: a reconcile may itself end the connection and call this again.
@@ -127,6 +131,17 @@ const authoring = createAuthoring({
   notify: () => {
     chrome.runtime.sendMessage(AUTHORING_CHANGED).catch(() => undefined)
   },
+})
+const player = createPlayer({
+  vault,
+  auth,
+  lifecycle,
+  chrome: authoringChrome,
+  now,
+  applicationsFor: async (origin) =>
+    (await site.applications()).applications?.filter((app) =>
+      app.origins.some((entry) => entry.origin === origin && entry.on),
+    ),
 })
 
 // Restrict chrome.storage.local before anything can write a credential to it.
@@ -170,6 +185,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     connection,
     site,
     authoring,
+    player,
     onApiError: (error) => {
       logger.warn('API request failed', error)
     },
@@ -197,6 +213,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void connection.tabClosed(tabId).then(broadcastChange)
   void site.pageClosed(tabId)
   void authoring.tabClosed(tabId)
+  void player.tabClosed(tabId)
 })
 
 // Chrome 142+: the author closed the panel. Earlier versions rely on the

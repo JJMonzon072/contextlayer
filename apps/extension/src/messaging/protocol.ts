@@ -108,6 +108,16 @@ export type FinalCopy = z.infer<typeof finalCopySchema>
 
 const panel = { panelId: panelIdSchema }
 
+/** One run of a published guide (Phase 6a), issued by the worker when it starts. */
+export const runIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)
+/** Changes with every step change: a request about an older step is stale. */
+export const runGenerationSchema = z.number().int().nonnegative()
+/**
+ * How a run ends from its page: Finish on the last step, or Close (button or
+ * Escape). Both end the run the same way; the reason is for later analytics.
+ */
+export const PLAYER_END_REASONS = ['finished', 'closed'] as const
+
 export const backgroundRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('api.health.get') }),
   // Privileged: extension pages only (see ALLOWED_SENDERS in the worker).
@@ -186,6 +196,26 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
     type: z.literal('authoring.detach'),
     ...panel,
     final: finalCopySchema.optional(),
+  }),
+  // Guide Player: the popup starts a published guide on its tab (Phase 6a).
+  z.strictObject({
+    type: z.literal('player.start'),
+    tabId: z.number().int().nonnegative(),
+    guideId: z.uuid(),
+    /** The version the popup listed: a run never plays another one. */
+    version: z.number().int().min(1),
+  }),
+  // The page's Previous / Next / Finish / Close, for the run and step it shows.
+  z.strictObject({
+    type: z.literal('player.go'),
+    runId: runIdSchema,
+    generation: runGenerationSchema,
+    direction: z.enum(['next', 'previous']),
+  }),
+  z.strictObject({
+    type: z.literal('player.end'),
+    runId: runIdSchema,
+    reason: z.enum(PLAYER_END_REASONS),
   }),
   // What a content script may send: "may I run on this page?", and the answer
   // to the capture the worker asked it for (checked against the session).
@@ -395,6 +425,33 @@ export const AUTHORING_CHANGED = { type: 'authoring.changed' } as const
  */
 export const CONNECTION_CHANGED = { type: 'connection.changed' } as const
 
+// --- Guide Player (Phase 6a) -------------------------------------------------
+
+/**
+ * One step of a running guide, as the worker sends it to the page: the
+ * published snapshot's step, its instructions as lines of text, and where it
+ * stands in the guide. The page resolves `target` itself; nothing comes back.
+ */
+export const playerStepSchema = z
+  .strictObject({
+    runId: runIdSchema,
+    generation: runGenerationSchema,
+    guideTitle: z.string().max(120),
+    index: z.number().int().min(0),
+    count: z.number().int().min(1).max(MAX_GUIDE_STEPS),
+    title: z.string().min(1).max(120),
+    lines: previewTextSchema.lines,
+    target: targetDescriptorSchema.nullable(),
+    urlPattern: urlPatternSchema.nullable(),
+    placement: stepPlacementSchema,
+  })
+  .refine((step) => step.index < step.count, { message: 'The step is outside the guide.' })
+
+export type PlayerStep = z.infer<typeof playerStepSchema>
+
+export const playerStartResultSchema = messageResultSchema(z.object({ runId: runIdSchema }))
+export const playerStepResultSchema = messageResultSchema(playerStepSchema)
+
 // --- Requests handled by the content script ----------------------------------
 
 export const contentRequestSchema = z.discriminatedUnion('type', [
@@ -415,6 +472,10 @@ export const contentRequestSchema = z.discriminatedUnion('type', [
     ...previewTextSchema,
   }),
   z.strictObject({ type: z.literal('preview.hide') }),
+  // Worker only: show this step of a run (replacing whatever run was shown).
+  z.strictObject({ type: z.literal('player.show'), step: playerStepSchema }),
+  // Removes the run's UI, if that run is the one shown.
+  z.strictObject({ type: z.literal('player.hide'), runId: runIdSchema }),
 ])
 
 export type ContentRequest = z.infer<typeof contentRequestSchema>

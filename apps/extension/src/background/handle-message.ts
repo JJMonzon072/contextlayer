@@ -11,6 +11,7 @@ import {
   type SiteStatusData,
 } from '../messaging/protocol'
 import type { Authoring } from './authoring'
+import type { Player } from './player'
 import type { HelloResult, PageSender } from './site-access'
 
 /**
@@ -61,6 +62,10 @@ const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[
   // The answer to a capture request; the worker checks it against the session.
   'picker.result': ['content-script'],
   'picker.cancelled': ['content-script'],
+  // The popup starts a guide; only the run's own page moves or ends it.
+  'player.start': ['extension-page'],
+  'player.go': ['content-script'],
+  'player.end': ['content-script'],
 }
 
 type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'> & PageSender
@@ -95,6 +100,7 @@ export interface BackgroundDeps {
     hello(sender: PageSender): Promise<HelloResult>
   }
   authoring: Authoring
+  player: Player
   onApiError?: (error: unknown) => void
 }
 
@@ -149,17 +155,25 @@ export async function handleBackgroundMessage(
       return success(await deps.site.cancelActivation(request.data.intentId))
     case 'site.disable': {
       const status = await deps.site.disable(request.data.tabId)
-      // Edit Mode ends on a site that was turned off.
+      // Edit Mode and the guide playing end on a site that was turned off.
       await deps.authoring.verify()
+      await deps.player.verify()
       return success(status)
     }
     case 'page.hello': {
       const hello = await deps.site.hello(sender)
-      if (hello.active) await deps.authoring.pageHello(sender)
+      if (hello.active) {
+        await deps.authoring.pageHello(sender)
+        await deps.player.pageHello(sender)
+      }
       return success(hello)
     }
-    case 'authoring.attach':
-      return deps.authoring.attach(request.data.tabId)
+    case 'authoring.attach': {
+      const attached = await deps.authoring.attach(request.data.tabId)
+      // Edit Mode and the Guide Player never overlap on a page.
+      if (attached.ok) await deps.player.endOnTab(request.data.tabId)
+      return attached
+    }
     case 'authoring.state':
       return success(await deps.authoring.state(request.data.panelId))
     case 'authoring.guides':
@@ -225,5 +239,16 @@ export async function handleBackgroundMessage(
       return success(
         await deps.authoring.pickerCancelled(sender, request.data.captureId, request.data.reason),
       )
+    case 'player.start':
+      return deps.player.start(request.data.tabId, request.data.guideId, request.data.version)
+    case 'player.go':
+      return deps.player.go(
+        sender,
+        request.data.runId,
+        request.data.generation,
+        request.data.direction,
+      )
+    case 'player.end':
+      return deps.player.end(sender, request.data.runId)
   }
 }

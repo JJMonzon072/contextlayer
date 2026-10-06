@@ -2,6 +2,7 @@ import type { HealthReport } from '@contextlayer/shared'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Authoring } from '../src/background/authoring'
+import type { Player } from '../src/background/player'
 import type { MessageResult } from '../src/messaging/protocol'
 import { classifySender, handleBackgroundMessage } from '../src/background/handle-message'
 
@@ -58,7 +59,22 @@ function deps(fetchApiHealth = vi.fn(() => Promise.resolve(report))) {
       hello: vi.fn(() => Promise.resolve({ active: true })),
     },
     authoring: fakeAuthoring(),
+    player: fakePlayer(),
   }
+}
+
+/** Every player entry point, recording calls. */
+function fakePlayer() {
+  const answer = () => Promise.resolve({ ok: true, data: { done: true } } as MessageResult<never>)
+  return {
+    start: vi.fn(answer),
+    go: vi.fn(answer),
+    end: vi.fn(answer),
+    pageHello: vi.fn(() => Promise.resolve()),
+    tabClosed: vi.fn(() => Promise.resolve()),
+    endOnTab: vi.fn(() => Promise.resolve()),
+    verify: vi.fn(() => Promise.resolve()),
+  } satisfies Player
 }
 
 /** Every authoring entry point, recording calls; answers do not matter to the router. */
@@ -138,6 +154,8 @@ const AUTHORING = [
 ] as const
 
 const siteStatus = { state: 'unsupported' } as const
+
+const RUN = 'Rn1_run-id-0123456789abcdef'
 
 const PRIVILEGED = [
   { type: 'api.health.get' },
@@ -364,5 +382,84 @@ describe('handleBackgroundMessage', () => {
     await handleBackgroundMessage({ type: 'page.hello' }, contentScriptSender, handlers)
 
     expect(handlers.authoring.pageHello).toHaveBeenCalledWith(contentScriptSender)
+  })
+
+  it('starts a guide from extension pages only', async () => {
+    const start = { type: 'player.start', tabId: 7, guideId: GUIDE, version: 2 }
+
+    for (const sender of [contentScriptSender, panelSender]) {
+      const handlers = deps()
+      expect(await handleBackgroundMessage(start, sender, handlers)).toMatchObject({
+        ok: false,
+        error: { code: 'FORBIDDEN' },
+      })
+      expect(handlers.player.start).not.toHaveBeenCalled()
+    }
+    const handlers = deps()
+    await handleBackgroundMessage(start, popupSender, handlers)
+    expect(handlers.player.start).toHaveBeenCalledWith(7, GUIDE, 2)
+    expect(
+      await handleBackgroundMessage({ ...start, version: 0 }, popupSender, deps()),
+    ).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('moves and ends a run from content scripts only, with the sender Chrome reports', async () => {
+    const go = { type: 'player.go', runId: RUN, generation: 3, direction: 'next' }
+    const end = { type: 'player.end', runId: RUN, reason: 'closed' }
+
+    for (const sender of [popupSender, panelSender]) {
+      const handlers = deps()
+      for (const request of [go, end]) {
+        expect(await handleBackgroundMessage(request, sender, handlers)).toMatchObject({
+          ok: false,
+          error: { code: 'FORBIDDEN' },
+        })
+      }
+      expect(handlers.player.go).not.toHaveBeenCalled()
+      expect(handlers.player.end).not.toHaveBeenCalled()
+    }
+    const handlers = deps()
+    await handleBackgroundMessage(go, contentScriptSender, handlers)
+    await handleBackgroundMessage(end, contentScriptSender, handlers)
+    expect(handlers.player.go).toHaveBeenCalledWith(contentScriptSender, RUN, 3, 'next')
+    expect(handlers.player.end).toHaveBeenCalledWith(contentScriptSender, RUN)
+    // A page cannot jump to a step, pick a guide or skip the generation.
+    for (const forged of [
+      { ...go, direction: 'last' },
+      { ...go, generation: -1 },
+      { ...go, step: 2 },
+      { ...end, guideId: GUIDE },
+      { ...end, reason: 'skipped' },
+      { type: 'player.go', runId: RUN, direction: 'next' },
+    ]) {
+      expect(await handleBackgroundMessage(forged, contentScriptSender, deps())).toMatchObject({
+        ok: false,
+        error: { code: 'BAD_REQUEST' },
+      })
+    }
+  })
+
+  it('ends the guide playing on a tab once Edit Mode attached to it, never before', async () => {
+    const handlers = deps()
+    await handleBackgroundMessage({ type: 'authoring.attach', tabId: 7 }, panelSender, handlers)
+    expect(handlers.player.endOnTab).toHaveBeenCalledWith(7)
+
+    const refused = deps()
+    refused.authoring.attach.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'NOT_AVAILABLE', message: 'No.' },
+    })
+    await handleBackgroundMessage({ type: 'authoring.attach', tabId: 7 }, panelSender, refused)
+    expect(refused.player.endOnTab).not.toHaveBeenCalled()
+  })
+
+  it('tells the player when a page says hello and when a site is turned off', async () => {
+    const handlers = deps()
+
+    await handleBackgroundMessage({ type: 'page.hello' }, contentScriptSender, handlers)
+    await handleBackgroundMessage({ type: 'site.disable', tabId: 7 }, popupSender, handlers)
+
+    expect(handlers.player.pageHello).toHaveBeenCalledWith(contentScriptSender)
+    expect(handlers.player.verify).toHaveBeenCalledOnce()
   })
 })
