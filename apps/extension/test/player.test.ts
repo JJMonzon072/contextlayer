@@ -101,6 +101,8 @@ interface Sent {
   doc: string
 }
 
+const call = (entry: { method: string; path: string }) => `${entry.method} ${entry.path}`
+
 async function world(options: { guide?: () => Response | Promise<Response>; url?: string } = {}) {
   const storage = memoryStorage()
   /** `ok`, revoked on the server (bearer 401, refresh refused), or unreachable. */
@@ -753,5 +755,87 @@ describe('late messages never bring a run back', () => {
       `player.hide:${String(TAB)}:${a}`,
     ])
     expect(await w.run()).toBeUndefined()
+  })
+})
+
+describe('a connection revoked on the server', () => {
+  it('ends every run of that connection at the next step, and nothing brings them back', async () => {
+    const w = await world()
+    const a = await started(w, TAB)
+    const b = await started(w, OTHER_TAB)
+    // Revoked from Connected browsers: the API refuses the access token and the refresh.
+    w.serverSays('revoked')
+    const before = w.calls.length
+
+    const next = await w.player.go(page(), a, 0, 'next')
+
+    expect(next).toMatchObject({
+      ok: false,
+      error: { code: 'STALE', message: 'The connection to ContextLayer ended.' },
+    })
+    // Found by the existing bearer check, then the refused refresh (strict rotation).
+    expect(w.calls.slice(before).map(call)).toEqual([
+      `GET ${EXTENSION_PATHS.session}`,
+      `POST ${EXTENSION_PATHS.token}`,
+    ])
+    expect(await w.vault.readConnection()).toBeUndefined()
+    expect(await w.vault.readEnded()).toBeDefined()
+    expect(await w.vault.readPlayers()).toEqual({})
+    // Both pages are told to remove their guide.
+    expect(
+      w.hidden().map((entry) => `${String(entry.tabId)}:${entry.message.runId ?? ''}`),
+    ).toEqual([`${String(TAB)}:${a}`, `${String(OTHER_TAB)}:${b}`])
+
+    // A late request, even after the worker restarted, finds nothing.
+    for (const player of [w.player, w.restart().player]) {
+      expect(await player.go(page(), a, 0, 'next')).toMatchObject({
+        ok: false,
+        error: { code: 'STALE' },
+      })
+      expect(await player.go(page({}, OTHER_TAB), b, 0, 'next')).toMatchObject({
+        ok: false,
+        error: { code: 'STALE' },
+      })
+    }
+    expect(await w.vault.readPlayers()).toEqual({})
+  })
+
+  it('does not take an unreachable API for a revocation', async () => {
+    const w = await world()
+    const runId = await started(w)
+    w.serverSays('unreachable')
+
+    expect(await w.player.go(page(), runId, 0, 'next')).toMatchObject({
+      ok: true,
+      data: { index: 1, generation: 1 },
+    })
+    expect(await w.vault.readConnection()).toBeDefined()
+    expect((await w.run())?.step).toBe(1)
+  })
+
+  it('checks the connection on Previous and Next with the access token', async () => {
+    const w = await world()
+    const runId = await started(w)
+    const before = w.calls.length
+
+    await w.player.go(page(), runId, 0, 'next')
+    await w.player.go(page(), runId, 1, 'previous')
+
+    expect(w.calls.slice(before).map(call)).toEqual([
+      `GET ${EXTENSION_PATHS.session}`,
+      `GET ${EXTENSION_PATHS.session}`,
+    ])
+    expect(w.calls.slice(before).every((entry) => entry.bearer?.startsWith('cla_'))).toBe(true)
+  })
+
+  it('never calls the API for a request that is not about the page’s own run', async () => {
+    const w = await world()
+    const runId = await started(w)
+    const before = w.calls.length
+
+    await w.player.go(page({ documentId: 'doc-2' }), runId, 0, 'next')
+    await w.player.go(page(), 'Rn1_other-run-0123456789', 0, 'next')
+
+    expect(w.calls.length).toBe(before)
   })
 })

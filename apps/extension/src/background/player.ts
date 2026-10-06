@@ -1,4 +1,9 @@
-import { extensionGuidePath, originMatchPattern, publishedGuideSchema } from '@contextlayer/shared'
+import {
+  EXTENSION_PATHS,
+  extensionGuidePath,
+  originMatchPattern,
+  publishedGuideSchema,
+} from '@contextlayer/shared'
 
 import { richTextLines } from '../lib/rich-text-lines'
 import { matchPage } from '../lib/url-pattern'
@@ -29,8 +34,10 @@ import type { PlayerRun, PlayerRuns, Vault } from './vault'
  * between events. A tab's run ends with Finish, Close, a new document in that
  * tab, that tab closing, Edit Mode opening on that tab, or a newer start on
  * that tab; the runs of a site end when it is turned off or its access is
- * withdrawn; every run ends with Disconnect. The player never clicks, types
- * or acts on the page.
+ * withdrawn; every run ends with Disconnect, and with a revocation, found at
+ * the latest on the next Previous or Next (`GET /v1/extension/session`, the
+ * bearer check the popup's status already makes). The player never clicks,
+ * types or acts on the page.
  *
  * Fail-closed ordering: a run's `player.show` is sent from inside the
  * transition that stores it, and every `player.hide` from inside the
@@ -143,6 +150,26 @@ export function createPlayer(deps: PlayerDeps) {
       if (options.hide) for (const run of matching) hide(run)
       return matching
     })
+  }
+
+  /**
+   * Whether the API still accepts the connection. Only a refused one is
+   * `ended` (the auth module then cleared it, as for any request); an
+   * unreachable or failing API is `unknown`, never taken for a revocation
+   * (Phase 4 policy), and playback goes on with the guide already loaded.
+   */
+  async function checkConnection(): Promise<'valid' | 'ended' | 'unknown'> {
+    try {
+      await auth.authorized(EXTENSION_PATHS.session, undefined)
+      return 'valid'
+    } catch (error) {
+      // Revoked, expired, reused, or replaced or disconnected meanwhile.
+      if (error instanceof ConnectionEndedError || error instanceof NotConnectedError) {
+        return 'ended'
+      }
+      if (error instanceof ApiUnreachableError || error instanceof ApiStatusError) return 'unknown'
+      throw error
+    }
   }
 
   async function start(
@@ -279,7 +306,9 @@ export function createPlayer(deps: PlayerDeps) {
     },
 
     /**
-     * Previous or Next from a run's page. A request about an older step (`generation`) changes
+     * Previous or Next from a run's page. The API is asked first whether the
+     * connection still stands, so a revoked one ends every run it had instead
+     * of playing on. A request about an older step (`generation`) changes
      * nothing and gets the step now shown back, so the page catches up; a
      * request from anywhere but the run's own page is stale.
      */
@@ -292,8 +321,22 @@ export function createPlayer(deps: PlayerDeps) {
       const stale = failure('STALE', 'This guide is no longer playing.')
       const tabId = sender.tab?.id
       if (tabId === undefined) return stale
-      const run = (await vault.readPlayers())[String(tabId)]
+      const before = await vault.readPlayers()
+      const run = before[String(tabId)]
       if (run?.id !== runId || !fromRunPage(sender, run)) return stale
+
+      if ((await checkConnection()) === 'ended') {
+        const ofGrant = (current: PlayerRun) => current.grantId === run.grantId
+        // Usually already cleared with the connection; every page is told.
+        const ended = await endRuns(ofGrant, { hide: false })
+        const told = new Set<string>()
+        for (const current of [...Object.values(before).filter(ofGrant), ...ended]) {
+          if (told.has(current.id)) continue
+          told.add(current.id)
+          hide(current)
+        }
+        return failure('STALE', 'The connection to ContextLayer ended.')
+      }
 
       return lifecycle.exclusive(async () => {
         const runs = await vault.readPlayers()
