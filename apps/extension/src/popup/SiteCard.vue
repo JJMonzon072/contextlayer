@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, shallowRef } from 'vue'
 
+import type { PublishedGuideSummary } from '@contextlayer/shared'
+
 import {
   cancelActivation,
   disableSite,
   requestActivation,
   requestSiteStatus,
+  startGuide,
 } from '../messaging/background-client'
 import { CONNECTION_CHANGED, type MessageResult, type SiteStatusData } from '../messaging/protocol'
 import { activeTabId, pingTab } from './active-tab'
@@ -119,6 +122,33 @@ function openEditMode() {
   )
 }
 
+/**
+ * Plays a guide on this tab (Phase 6a). The worker fetches the published
+ * version listed here and shows its first step on the page; this popup then
+ * closes, so the page has the focus. Anything that stops it is said here.
+ */
+async function play(guide: PublishedGuideSummary) {
+  const tab = tabId.value
+  if (tab === undefined) return
+  busy.value = true
+  notice.value = undefined
+  try {
+    const started = await startGuide(tab, guide.guideId, guide.version)
+    if (started.ok) {
+      window.close()
+      return
+    }
+    error.value = started.error.message
+    // Published again or unpublished meanwhile: list what is there now.
+    if (started.error.code === 'STALE' || started.error.code === 'NOT_FOUND') {
+      const latest = await requestSiteStatus(tab)
+      if (latest.ok) status.value = latest.data
+    }
+  } finally {
+    busy.value = false
+  }
+}
+
 async function check() {
   if (tabId.value === undefined) return
   const result = await pingTab(tabId.value)
@@ -224,9 +254,26 @@ const steps = (count: number) => `${String(count)} step${count === 1 ? '' : 's'}
         No published guides for this site yet.
       </p>
       <ul v-else class="mt-1 divide-y divide-slate-100" data-testid="guides">
-        <li v-for="guide in status.guides" :key="guide.guideId" class="py-1.5" data-testid="guide">
-          <p class="font-medium text-slate-900">{{ guide.title }}</p>
-          <p class="text-xs text-slate-500">{{ steps(guide.stepCount) }}</p>
+        <li
+          v-for="guide in status.guides"
+          :key="guide.guideId"
+          class="flex items-center gap-2 py-1.5"
+          data-testid="guide"
+        >
+          <div class="min-w-0 flex-1">
+            <p class="truncate font-medium text-slate-900">{{ guide.title }}</p>
+            <p class="text-xs text-slate-500">{{ steps(guide.stepCount) }}</p>
+          </div>
+          <button
+            type="button"
+            class="popup-button-secondary shrink-0"
+            :aria-label="`Play ${guide.title}`"
+            :disabled="busy"
+            data-testid="play"
+            @click="play(guide)"
+          >
+            Play
+          </button>
         </li>
       </ul>
       <p v-if="status.moreGuides" class="mt-1 text-xs text-slate-500">

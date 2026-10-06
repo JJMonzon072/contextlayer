@@ -9,6 +9,7 @@ import {
   connectionStatusResultSchema,
   disconnectResultSchema,
   failure,
+  playerStartResultSchema,
   siteStatusResultSchema,
   type ApplicationListData,
   type BackgroundRequest,
@@ -83,4 +84,16 @@ export function cancelActivation(intentId: string): Promise<MessageResult<{ canc
 
 export function disableSite(tabId: number): Promise<MessageResult<SiteStatusData>> {
   return sendToBackground({ type: 'site.disable', tabId }, siteStatusResultSchema)
+}
+
+/** Plays a published guide on the tab: the worker checks the page and the version again. */
+export function startGuide(
+  tabId: number,
+  guideId: string,
+  version: number,
+): Promise<MessageResult<{ runId: string }>> {
+  return sendToBackground(
+    { type: 'player.start', tabId, guideId, version },
+    playerStartResultSchema,
+  )
 }

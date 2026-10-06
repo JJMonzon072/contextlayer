@@ -120,8 +120,8 @@ test('turns ContextLayer on for a registered site and lists its published guides
   await expect(guides).toHaveCount(1)
   await expect(guides).toContainText('Create a customer')
   await expect(guides).toContainText('2 steps')
-  // No play button in Phase 4.
-  await expect(popup.getByRole('button', { name: /play|start/i })).toHaveCount(0)
+  // Each guide valid for this page can be played (Phase 6a).
+  await expect(popup.getByRole('button', { name: 'Play Create a customer' })).toBeVisible()
   await expectAccessiblePopup(popup)
 
   // Injected into the tabs that were already open, top frames only.
