@@ -418,6 +418,29 @@ describe('modal dialogs (Phase 6b)', () => {
     })
   })
 
+  it('never takes a copy outside a modal dialog for a target picked inside one', () => {
+    page(`
+      <section role="dialog" aria-label="Import"><button type="button">Confirm import</button></section>
+      <div role="dialog" aria-modal="true" aria-label="Import" id="modal">
+        <button type="button">Confirm import</button>
+      </div>
+    `)
+    const target = capture('#modal button')
+    expect(target.container).toMatchObject({ kind: 'dialog', modal: true })
+
+    // The modal is closed: only the inline copy is on screen, and it does not qualify.
+    element('#modal').setAttribute('hidden', '')
+    const closed = resolve(target)
+    expect(closed).toMatchObject({ outcome: 'not-found' })
+    expect(closed.diagnostics.vetoed).toBe(1)
+
+    // Open again: the copy inside the modal is the target.
+    element('#modal').removeAttribute('hidden')
+    const open = resolve(target)
+    expect(open.outcome).toBe('resolved')
+    expect(open.element).toBe(element('#modal button'))
+  })
+
   it('treats a page without modal support as having no modal', () => {
     expect(topModal(document)).toBeNull()
   })

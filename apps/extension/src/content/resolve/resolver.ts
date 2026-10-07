@@ -24,7 +24,8 @@ import { capturedText } from '../capture/text'
  * 5. Each candidate is described by the functions capture used
  *    (`describeElement`) and scored `Σ wᵢ·simᵢ / Σ wᵢ` over the signals the
  *    stored descriptor has; a different value for the same test attribute,
- *    or a different role, vetoes it.
+ *    or a different role, vetoes it, and so does a candidate outside any modal
+ *    dialog for a target picked inside one.
  * 6. A unique test-id match resolves at once. Otherwise the best candidate
  *    must match the element by identity (`MIN_IDENTITY`), or, for a target
  *    with nothing but its position, sit exactly where it was; reach
@@ -325,6 +326,11 @@ function signalsOf(
   }
   if (target.container) {
     const container = now.container
+    // A target picked inside a modal dialog is only ever that dialog's: a copy
+    // outside one (an inline panel, a page form) is another element.
+    if (target.container.modal === true && container?.modal !== true) {
+      return { signals, veto: 'modal' }
+    }
     signals.container =
       container?.kind !== target.container.kind
         ? 0
