@@ -19,7 +19,8 @@
  *    memory, for the step preview, and is never sent anywhere.
  * 5. When a guide plays, the worker sends `player.show` with one step; the
  *    target is resolved and shown here (`player/`, `resolve/`), and the card's
- *    buttons ask the worker for the next step. Edit Mode and the player never
+ *    buttons ask the worker for the next step. Same-document navigation shows
+ *    the step again for the new URL (`navigation.ts`, ADR 0019). Edit Mode and the player never
  *    overlap: selecting or previewing removes the guide, and a guide is not
  *    shown while selecting or previewing.
  */
@@ -27,7 +28,8 @@ import { EXTENSION_VERSION } from '../config'
 import { failure } from '../messaging/result'
 import { captureTarget, type CaptureContext } from './capture/descriptor'
 import { handleContentMessage } from './handle-message'
-import { askWorker, readHelloAnswer } from './messages'
+import { askWorker, readHelloAnswer, readResumeAnswer } from './messages'
+import { followNavigation } from './navigation'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
 import { startPicker, type Picker } from './picker'
 import { createPlayer } from './player/player'
@@ -92,6 +94,10 @@ function start(instance: ContentInstance): void {
   let preview: Preview | undefined
   const remembered = new Map<string, WeakRef<Element>>()
   const player = createPlayer({ window, overlay, send: askWorker })
+  // Same-document navigation: the step shown follows the URL (ADR 0019).
+  const stopFollowing = followNavigation(window, () => {
+    player.urlChanged()
+  })
 
   function hidePreview() {
     preview?.stop()
@@ -170,15 +176,40 @@ function start(instance: ContentInstance): void {
     stopCapture()
     hidePreview()
     player.stop()
+    stopFollowing()
     remembered.clear()
     overlay.destroy()
     document.removeEventListener('visibilitychange', checkContext)
-    window.removeEventListener('pageshow', checkContext)
+    window.removeEventListener('pageshow', onPageShow)
+    window.removeEventListener('pagehide', onPageHide)
     if (contextAlive()) chrome.runtime.onMessage.removeListener(onMessage)
   }
 
   function checkContext() {
     if (!contextAlive()) stop()
+  }
+
+  /** Into bfcache: the guide's UI and waits go now; the document may come back (ADR 0019). */
+  function onPageHide(event: PageTransitionEvent) {
+    if (event.persisted) player.suspend()
+  }
+
+  /**
+   * Back from bfcache: the same document and this same script, not run again.
+   * It says hello again, so the worker records this document for the tab and
+   * checks the site is still on, then asks for the tab's guide.
+   */
+  function onPageShow(event: PageTransitionEvent) {
+    checkContext()
+    if (event.persisted && instance.state === 'active') void helloAgain()
+  }
+
+  async function helloAgain() {
+    const active = readHelloAnswer(await askWorker({ type: 'page.hello' }))
+    if (instance.state !== 'active') return
+    if (active === true) await resumeGuide()
+    else if (active === false) stop('inactive')
+    else checkContext()
   }
 
   function onMessage(
@@ -214,6 +245,7 @@ function start(instance: ContentInstance): void {
           hidePlayer: (runId) => {
             player.hide(runId)
           },
+          focusPlayer: () => player.focus(),
         },
       )
     } catch {
@@ -225,11 +257,26 @@ function start(instance: ContentInstance): void {
 
   chrome.runtime.onMessage.addListener(onMessage)
   document.addEventListener('visibilitychange', checkContext)
-  window.addEventListener('pageshow', checkContext)
+  window.addEventListener('pageshow', onPageShow)
+  window.addEventListener('pagehide', onPageHide)
+
+  /**
+   * Asks for this tab's guide, if one is playing: a link, a form, a reload or
+   * bfcache brought this document, and the run continues here (ADR 0019).
+   */
+  async function resumeGuide() {
+    const step = readResumeAnswer(await askWorker({ type: 'player.resume' }))
+    if (!step || instance.state !== 'active') return
+    // Never over Edit Mode's selection or preview.
+    if (picker === undefined && preview === undefined) player.show(step)
+  }
 
   void askWorker({ type: 'page.hello' }).then((answer) => {
     if (instance.state !== 'starting') return
-    if (readHelloAnswer(answer) === true) instance.state = 'active'
+    if (readHelloAnswer(answer) === true) {
+      instance.state = 'active'
+      void resumeGuide()
+    }
     // Not authorized, or the worker is unreachable (orphaned copy): stay silent.
     else stop(contextAlive() ? 'inactive' : 'stopped')
   })

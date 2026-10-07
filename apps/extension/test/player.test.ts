@@ -103,7 +103,13 @@ interface Sent {
 
 const call = (entry: { method: string; path: string }) => `${entry.method} ${entry.path}`
 
-async function world(options: { guide?: () => Response | Promise<Response>; url?: string } = {}) {
+async function world(
+  options: {
+    guide?: () => Response | Promise<Response>
+    url?: string
+    answerTimeoutMs?: number
+  } = {},
+) {
   const storage = memoryStorage()
   /** `ok`, revoked on the server (bearer 401, refresh refused), or unreachable. */
   let server: 'ok' | 'revoked' | 'unreachable' = 'ok'
@@ -139,6 +145,11 @@ async function world(options: { guide?: () => Response | Promise<Response>; url?
   }
   const vault = createVault(storage)
   await vault.ready()
+  /** Applications registered for each origin (both sites belong to the guide's here). */
+  const registered = new Map<string, string[] | undefined>([
+    [CRM, [APP]],
+    [WIKI, [APP]],
+  ])
   const make = () => {
     const lifecycle = createLifecycle()
     const auth = createAuth({
@@ -155,6 +166,8 @@ async function world(options: { guide?: () => Response | Promise<Response>; url?
       chrome,
       now: () => NOW,
       applicationsFor: () => Promise.resolve([{ id: APP }]),
+      applicationsOn: (origin) => Promise.resolve(registered.get(origin)),
+      ...(options.answerTimeoutMs !== undefined && { answerTimeoutMs: options.answerTimeoutMs }),
     })
     return { lifecycle, auth, player }
   }
@@ -210,6 +223,12 @@ async function world(options: { guide?: () => Response | Promise<Response>; url?
       access.delete(originMatchPattern(origin))
     },
     editModeOn: (tabId: number) => vault.writeAuthoring(authoringOn(tabId)),
+    registered,
+    /** A new document in the tab said hello (a link, a form, a reload or bfcache). */
+    async newDocument(documentId: string, tabId = TAB, origin = TABS[tabId]?.origin ?? CRM) {
+      const pages = await vault.readPages()
+      await vault.writePages({ ...pages, [String(tabId)]: { origin, documentId } })
+    },
     run: async (tabId = TAB) => (await vault.readPlayers())[String(tabId)],
     shown: () => sent.filter((entry) => entry.message.type === 'player.show'),
     hidden: () => sent.filter((entry) => entry.message.type === 'player.hide'),
@@ -467,11 +486,16 @@ describe('guides in two tabs', () => {
     expect((await closed.run(OTHER_TAB))?.id).toBe(kept)
 
     const reloaded = await world()
-    await started(reloaded, TAB)
+    const mine = await started(reloaded, TAB)
     const other = await started(reloaded, OTHER_TAB)
-    await reloaded.player.pageHello(page({ documentId: 'doc-2' }))
-    expect(await reloaded.run(TAB)).toBeUndefined()
-    expect((await reloaded.run(OTHER_TAB))?.id).toBe(other)
+    await reloaded.newDocument('doc-2')
+    await reloaded.player.resume(page({ documentId: 'doc-2' }))
+    expect(await reloaded.run(TAB)).toMatchObject({ id: mine, documentId: 'doc-2' })
+    expect(await reloaded.run(OTHER_TAB)).toMatchObject({
+      id: other,
+      documentId: OTHER_DOC,
+      generation: 0,
+    })
   })
 
   it('replacing the run of one tab replaces only that run', async () => {
@@ -631,19 +655,6 @@ describe('ending a guide', () => {
     expect(await w.run()).toBeUndefined()
   })
 
-  it('ends when a new document says hello in its tab, not for the same document', async () => {
-    const w = await world()
-    await started(w)
-
-    await w.player.pageHello(page())
-    expect(await w.run()).toBeDefined()
-    await w.player.pageHello(page({ documentId: 'x' }, OTHER_TAB))
-    expect(await w.run()).toBeDefined()
-
-    await w.player.pageHello(page({ documentId: 'doc-2' }))
-    expect(await w.run()).toBeUndefined()
-  })
-
   it('ends and removes its UI when the site is turned off or access is withdrawn', async () => {
     const off = await world()
     await started(off)
@@ -678,6 +689,215 @@ describe('ending a guide', () => {
 
     expect((await w.run())?.id).toBe(runId)
     expect(w.hidden()).toHaveLength(0)
+  })
+})
+
+describe('new documents (Phase 6b)', () => {
+  it('resumes the current step in a new document of its tab; the old one is stale', async () => {
+    const w = await world()
+    const runId = await started(w)
+    await w.player.go(page(), runId, 0, 'next')
+
+    // A link or a form loaded another page of the application in the tab.
+    await w.newDocument('doc-2')
+    const resumed = await w.player.resume(
+      page({ documentId: 'doc-2', url: `${CRM}/customers/new` }),
+    )
+
+    expect(resumed).toMatchObject({ ok: true, data: { runId, index: 1, generation: 2 } })
+    expect(await w.run()).toMatchObject({ documentId: 'doc-2', step: 1, generation: 2 })
+    // The document it was bound to can no longer move or end it.
+    expect(await w.player.go(page(), runId, 2, 'next')).toMatchObject({
+      ok: false,
+      error: { code: 'STALE' },
+    })
+    expect(await w.player.end(page(), runId)).toEqual({ ok: true, data: { done: false } })
+    expect(await w.run()).toMatchObject({ step: 1 })
+  })
+
+  it('resumes after a reload, never from the first step', async () => {
+    const w = await world()
+    const runId = await started(w)
+    await w.player.go(page(), runId, 0, 'next')
+    await w.player.go(page(), runId, 1, 'next')
+
+    await w.newDocument('doc-reloaded')
+    const resumed = await w.player.resume(page({ documentId: 'doc-reloaded' }))
+
+    expect(resumed).toMatchObject({ ok: true, data: { index: 2, title: 'Save the customer' } })
+  })
+
+  it('gives nothing to a document page.hello did not authorize, or to a tab without a run', async () => {
+    const w = await world()
+    const runId = await started(w)
+
+    // The page record still names the first document.
+    expect(await w.player.resume(page({ documentId: 'doc-2' }))).toEqual({ ok: true, data: null })
+    expect(await w.run()).toMatchObject({ id: runId, documentId: DOC })
+    expect(await w.player.resume(page({}, OTHER_TAB))).toEqual({ ok: true, data: null })
+    for (const sender of [page({ frameId: 2 }), page({ origin: 'https://evil.test' })]) {
+      expect(await w.player.resume(sender)).toEqual({ ok: true, data: null })
+    }
+    expect(await w.run()).toMatchObject({ id: runId, documentId: DOC, generation: 0 })
+  })
+
+  it('continues on another origin of the same application', async () => {
+    const w = await world()
+    const runId = await started(w)
+
+    await w.newDocument('doc-wiki', TAB, WIKI)
+    const resumed = await w.player.resume(
+      page({ documentId: 'doc-wiki', url: `${WIKI}/home`, origin: WIKI }),
+    )
+
+    expect(resumed).toMatchObject({ ok: true, data: { runId } })
+    expect(await w.run()).toMatchObject({ origin: WIKI, documentId: 'doc-wiki' })
+  })
+
+  it('ends the run on a page of another application', async () => {
+    const w = await world()
+    await started(w)
+    w.registered.set(WIKI, ['01a10a2e-864b-75bc-8800-aa3f01a05399'])
+
+    await w.newDocument('doc-wiki', TAB, WIKI)
+    const resumed = await w.player.resume(
+      page({ documentId: 'doc-wiki', url: `${WIKI}/home`, origin: WIKI }),
+    )
+
+    expect(resumed).toEqual({ ok: true, data: null })
+    expect(await w.run()).toBeUndefined()
+  })
+
+  it('keeps the run when the application list cannot be known, without moving it', async () => {
+    const w = await world()
+    const runId = await started(w)
+    w.registered.set(CRM, undefined)
+
+    await w.newDocument('doc-2')
+
+    expect(await w.player.resume(page({ documentId: 'doc-2' }))).toEqual({ ok: true, data: null })
+    expect(await w.run()).toMatchObject({ id: runId, documentId: DOC })
+  })
+
+  it('ends the run when Edit Mode is open on the tab', async () => {
+    const w = await world()
+    await started(w)
+    await w.editModeOn(TAB)
+
+    await w.newDocument('doc-2')
+
+    expect(await w.player.resume(page({ documentId: 'doc-2' }))).toEqual({ ok: true, data: null })
+    expect(await w.run()).toBeUndefined()
+  })
+
+  it('ends every run of a connection revoked on the server instead of following the user', async () => {
+    const w = await world()
+    const a = await started(w, TAB)
+    const b = await started(w, OTHER_TAB)
+    w.serverSays('revoked')
+
+    await w.newDocument('doc-2')
+    const resumed = await w.player.resume(page({ documentId: 'doc-2' }))
+
+    expect(resumed).toMatchObject({ ok: false, error: { code: 'STALE' } })
+    expect(await w.vault.readPlayers()).toEqual({})
+    expect(await w.vault.readConnection()).toBeUndefined()
+    // Every page that showed a guide of that connection is told (the tab's previous document too).
+    expect(
+      w.hidden().map((entry) => `${String(entry.tabId)}:${entry.doc}:${entry.message.runId ?? ''}`),
+    ).toEqual([`${String(TAB)}:${DOC}:${a}`, `${String(OTHER_TAB)}:${OTHER_DOC}:${b}`])
+    expect(await w.player.resume(page({ documentId: 'doc-2' }))).toEqual({ ok: true, data: null })
+  })
+
+  it('does not take an unreachable API for a revocation when resuming', async () => {
+    const w = await world()
+    const runId = await started(w)
+    w.serverSays('unreachable')
+
+    await w.newDocument('doc-2')
+
+    expect(await w.player.resume(page({ documentId: 'doc-2' }))).toMatchObject({
+      ok: true,
+      data: { runId },
+    })
+  })
+
+  it('binds back to a document bfcache brings back; the one left becomes stale', async () => {
+    const w = await world()
+    const runId = await started(w)
+    // A → B: B resumes.
+    await w.newDocument('doc-b')
+    await w.player.resume(page({ documentId: 'doc-b' }))
+    // Back to A from bfcache: same document as before, it says hello again and resumes.
+    await w.newDocument(DOC)
+    const back = await w.player.resume(page())
+
+    expect(back).toMatchObject({ ok: true, data: { runId, generation: 2 } })
+    expect(await w.run()).toMatchObject({ documentId: DOC })
+    expect(await w.player.go(page({ documentId: 'doc-b' }), runId, 2, 'next')).toMatchObject({
+      ok: false,
+      error: { code: 'STALE' },
+    })
+    // A resume from the document already bound returns the step without a new generation.
+    expect(await w.player.resume(page())).toMatchObject({ ok: true, data: { generation: 2 } })
+  })
+
+  it('a resume in one tab never touches the run of another', async () => {
+    const w = await world()
+    await started(w, TAB)
+    const b = await started(w, OTHER_TAB)
+
+    await w.newDocument('doc-2')
+    await w.player.resume(page({ documentId: 'doc-2' }))
+
+    expect(await w.run(OTHER_TAB)).toMatchObject({ id: b, documentId: OTHER_DOC, generation: 0 })
+  })
+
+  it('resumes after the worker stopped and started again', async () => {
+    const w = await world()
+    const runId = await started(w)
+    await w.player.go(page(), runId, 0, 'next')
+
+    const { player } = w.restart()
+    await w.newDocument('doc-2')
+
+    expect(await player.resume(page({ documentId: 'doc-2' }))).toMatchObject({
+      ok: true,
+      data: { runId, index: 1 },
+    })
+  })
+
+  it('never waits for ever on a page that does not answer (a document in bfcache)', async () => {
+    const w = await world({ answerTimeoutMs: 30 })
+    w.hold('player.show')
+
+    const start = await w.player.start(TAB, GUIDE, 2)
+
+    expect(start).toMatchObject({ ok: false, error: { code: 'PAGE_CHANGED' } })
+    expect(await w.run()).toBeUndefined()
+  })
+})
+
+describe('the keyboard shortcut into the guide (Phase 6b)', () => {
+  it('asks the page showing the tab’s guide to move the focus to its card', async () => {
+    const w = await world()
+    await started(w, TAB)
+    await started(w, OTHER_TAB)
+
+    expect(await w.player.command('focus-guide', TAB)).toBe(true)
+
+    expect(w.sent.filter((entry) => entry.message.type === 'player.focus')).toEqual([
+      { tabId: TAB, doc: DOC, message: { type: 'player.focus' } },
+    ])
+  })
+
+  it('does nothing on a tab without a guide, or for another command', async () => {
+    const w = await world()
+    await started(w, OTHER_TAB)
+
+    expect(await w.player.command('focus-guide', TAB)).toBe(false)
+    expect(await w.player.command('something-else', OTHER_TAB)).toBe(false)
+    expect(w.sent.filter((entry) => entry.message.type === 'player.focus')).toEqual([])
   })
 })
 

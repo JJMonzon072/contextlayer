@@ -54,6 +54,17 @@ Verified by the extension e2e suite (`apps/extension/e2e/site.spec.ts`, on an en
 - Accessibility ([R-16](../technical-risks.md)): the card is labelled by the step title and described by its instructions, both inside the same root (ARIA references cannot cross it); it takes the focus only when nothing on the page has it, never traps it, and Escape closes the guide only from inside the card. No animation; scrolling to an off-screen target is instant under `prefers-reduced-motion`.
 - Verified in Chromium 153 (`apps/extension/e2e/player.spec.ts`), including on the strict-CSP demo page with 0 violations and the same inline-style control.
 
+**Implemented (Phase 6b): pages that change** ([ADR 0019](0019-spa-navigation-and-player-resume.md)):
+
+- **Host modals.** While the page has a modal `<dialog>` open (`dialog:modal`), the host moves into it: modality makes everything outside the dialog inert, our popovers included, and the dialog's own top-layer entry covers them. Moved, the popovers close, so the player shows them again; the card is then on top and takes pointer events and the focus. When the dialog closes, the host moves back to `documentElement`. The closed root, the adopted sheet and `:host { all: initial !important }` travel with the host; the dialog's styles do not reach inside.
+- **A keyboard shortcut into the card.** `chrome.commands` `focus-guide`, suggested as Alt+Shift+G on Windows, Linux and ChromeOS and Control+Shift+G (`MacCtrl`) on macOS. The worker sends `player.focus` to the document showing the tab's guide; nothing happens on a tab without one. Why this key:
+  - Chrome requires Ctrl or Alt in a command and forbids Ctrl+Alt (AltGr); `commands` is a manifest key, not a permission, with no install warning, and users can change or remove the key in `chrome://extensions/shortcuts`.
+  - Chrome's documented shortcuts use neither Alt+Shift+G nor Control+Shift+G on macOS (its Alt+Shift ones are I and A; Cmd+Shift+G is Find previous on macOS). A modifier with Shift is not typed text, so it does not take a key from a field; Option on macOS types characters (Option+G is ©), hence `MacCtrl`. VoiceOver's keys are Control+Option.
+  - Not a `keydown` listener in the page: the application sees keys first and can stop them, and it would take a key the application may use, with no way for the user to change it.
+  - Limits: an operating-system or browser shortcut always wins over an extension's, and Chrome does not assign a suggested key that another extension already holds; the user then sets one in `chrome://extensions/shortcuts`. CDP input cannot press a browser shortcut, so e2e checks the command's path (`player.focus`) and the key itself is a manual check.
+- **Focus restore.** When the card takes the focus (the shortcut, or the page had none), it remembers the element that had it, if any; Close, Escape and Finish give it back, with `preventScroll`, if that element is still connected, and only while the focus is still in the card. An element that left the page is not replaced by another one; a guide that ends on its own (Disconnect, revocation, another tab's Edit Mode) moves no focus; a new document starts with nothing to restore.
+- **Waiting states.** While a step waits for its target or for the user to reach its page, the card shows a polite hint ("Looking for this step's element…", "This step is on another page. Navigate there to continue.") and no highlight.
+
 **Styling the larger UI.** Phase 1 uses plain CSS. Tailwind v4 utilities that rely on `@property` (shadows, rings, transforms) compute to `none` inside a shadow root (measured in Chromium 153; tailwindcss#15005). **Planned (Phase 6):** evaluate a build-time transform that turns each `@property` initial value into a declaration on `:host, *, ::before, ::after, ::backdrop` and converts rem to px. The alternative, hoisting `@property` into the page, writes to the host page's global registry and can collide with its own Tailwind.
 
 ## Alternatives considered
@@ -79,12 +90,12 @@ Verified by the extension e2e suite (`apps/extension/e2e/site.spec.ts`, on an en
 
 - **Testing.** Playwright cannot pierce closed roots, so e2e tests assert effects (host attributes, message results, `shadowRoot === null`) and read the UI through CDP, which page scripts cannot use (`DOM.getDocument` with `pierce`, computed styles, box models, the accessibility tree). **Decided (Phase 6a):** no open-root test build, so the build under test is the shipped one: the player's buttons are clicked with the real mouse at their CDP box, its focus is read from the isolated world (`chrome.dom.openOrClosedShadowRoot`), and axe audits a copy of the card's markup with the live adopted styles, since axe cannot enter a closed root.
 - **Leaks `all` does not stop:** custom properties, `direction` and `unicode-bidi`. Implemented (Phase 6a): `direction: ltr !important` on `:host`; the player uses no custom properties.
-- **Host modals.** A page `showModal()` dialog makes everything outside it inert, including our popover. **Planned (Phase 6b):** move the host into the modal and re-show the popover.
+- **Host modals.** A page `showModal()` dialog makes everything outside it inert, including our popover. **Implemented (Phase 6b):** the host moves into the open modal dialog and shows the popovers again, then moves back when the dialog closes. Limit: only `<dialog>` modals are detected; an overlay made modal with `aria-modal` and `inert` is not, though inert candidates are already left out by the visibility filter ([ADR 0014](0014-element-targeting-strategy.md)).
 - No shared Tailwind tokens with the dashboard until the transform exists, and a page can still detect that ContextLayer is showing UI.
 
 ### Follow-ups
 
-- **Implemented (Phase 6a):** accessibility of the player ([R-16](../technical-risks.md)): an `aria-live` region, a non-modal labelled card, no focus stealing and reduced motion. **Planned (6b):** a keyboard shortcut into the card and focus restore on close.
+- **Implemented (Phase 6a):** accessibility of the player ([R-16](../technical-risks.md)): an `aria-live` region, a non-modal labelled card, no focus stealing and reduced motion. **Implemented (Phase 6b):** a keyboard shortcut into the card (`focus-guide`) and focus restore on Close, Escape and Finish. axe still audits a copy of the card out of the closed root, now also in the waiting, on-another-page, inside-a-modal and resumed states. Not automated: a screen reader (VoiceOver) and the shortcut key itself.
 
 ## References
 

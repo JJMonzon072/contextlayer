@@ -288,6 +288,13 @@ export interface Overlay {
   playerCard(): HTMLElement
   showPlayerCard(): void
   hidePlayerCard(): void
+  /**
+   * Where the host lives: inside an open modal dialog while one is open (the
+   * dialog makes everything outside it inert and covers it in the top layer),
+   * `documentElement` otherwise (ADR 0019). True when the host moved, which
+   * closes its popovers: the caller shows what it needs again.
+   */
+  setContainer(container: Element | null): boolean
   /** True for our own host: hit tests and pickers skip it. */
   isOwn(node: Node): boolean
   destroy(): void
@@ -305,6 +312,8 @@ interface MountedOverlay {
 
 export function createOverlay(doc: Document): Overlay {
   let mounted: MountedOverlay | undefined
+  /** An open modal dialog the host must live in, if any. */
+  let container: Element | null = null
   let hideTimer: ReturnType<typeof setTimeout> | undefined
   let toastVisible = false
   /** The content on screen: repositioning does not rebuild it (focus stays on its button). */
@@ -328,6 +337,10 @@ export function createOverlay(doc: Document): Overlay {
       close,
     )
   }
+
+  /** Where the host goes: the given container while it is in the page. */
+  const parentFor = (next: Element | null): Element =>
+    next?.isConnected ? next : doc.documentElement
 
   function mount(): MountedOverlay {
     const host = doc.createElement('div')
@@ -355,7 +368,7 @@ export function createOverlay(doc: Document): Overlay {
     const toast = part('toast', 'status')
 
     // documentElement survives SPA frameworks that replace <body> content.
-    doc.documentElement.append(host)
+    parentFor(container).append(host)
     return { host, toast, box, label, banner, callout, player }
   }
 
@@ -465,6 +478,15 @@ export function createOverlay(doc: Document): Overlay {
     },
 
     playerCard: () => ensure().player,
+
+    setContainer(next) {
+      container = next
+      if (!mounted?.host.isConnected) return false
+      const parent = parentFor(next)
+      if (mounted.host.parentNode === parent) return false
+      parent.append(mounted.host)
+      return true
+    },
 
     showPlayerCard() {
       const { player } = ensure()

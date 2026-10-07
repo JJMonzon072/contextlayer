@@ -7,18 +7,35 @@ import { fileURLToPath } from 'node:url'
  * else: a fixed list of files, read from that folder, never a path taken from
  * the request. `strict/` serves the same pages under a strict Content
  * Security Policy with Trusted Types, to check that ContextLayer's injected
- * UI works without relaxing a page's policy. Used by `pnpm demo:site` and by
- * the end-to-end tests.
+ * UI works without relaxing a page's policy. `flow/` is a small single-page
+ * application whose routes (`flow/`, `flow/customers/new`) all serve the same
+ * page, so a reload or a link lands on any of them (Phase 6b). Used by
+ * `pnpm demo:site` and by the end-to-end tests.
  */
 
 const DEMO_DIR = fileURLToPath(new URL('../demo/', import.meta.url))
 
-const FILES: Record<string, { file: string; type: string }> = {
-  '': { file: 'index.html', type: 'text/html; charset=utf-8' },
-  'index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
-  'reports.html': { file: 'reports.html', type: 'text/html; charset=utf-8' },
-  'demo.js': { file: 'demo.js', type: 'text/javascript; charset=utf-8' },
-  'demo.css': { file: 'demo.css', type: 'text/css; charset=utf-8' },
+const HTML = 'text/html; charset=utf-8'
+const JS = 'text/javascript; charset=utf-8'
+const CSS = 'text/css; charset=utf-8'
+
+/**
+ * `cacheable`: served without `no-store`, which would keep the page out of
+ * Chrome's back/forward cache (the flow pages exercise it).
+ */
+const FILES: Record<string, { file: string; type: string; cacheable?: boolean }> = {
+  '': { file: 'index.html', type: HTML },
+  'index.html': { file: 'index.html', type: HTML },
+  'reports.html': { file: 'reports.html', type: HTML },
+  'demo.js': { file: 'demo.js', type: JS },
+  'demo.css': { file: 'demo.css', type: CSS },
+  'flow/': { file: 'flow.html', type: HTML, cacheable: true },
+  'flow/index.html': { file: 'flow.html', type: HTML, cacheable: true },
+  'flow/customers/new': { file: 'flow.html', type: HTML, cacheable: true },
+  'flow/flow.js': { file: 'flow.js', type: JS, cacheable: true },
+  'flow/customers/flow.js': { file: 'flow.js', type: JS, cacheable: true },
+  'flow/demo.css': { file: 'demo.css', type: CSS, cacheable: true },
+  'flow/customers/demo.css': { file: 'demo.css', type: CSS, cacheable: true },
 }
 
 export const STRICT_CSP = [
@@ -49,7 +66,7 @@ export async function serveDemo(
   if (!entry || (request.method !== 'GET' && request.method !== 'HEAD')) return false
   const body = await readFile(`${DEMO_DIR}${entry.file}`)
   response.setHeader('content-type', entry.type)
-  response.setHeader('cache-control', 'no-store')
+  response.setHeader('cache-control', entry.cacheable ? 'no-cache' : 'no-store')
   response.setHeader('x-content-type-options', 'nosniff')
   if (strict) response.setHeader('content-security-policy', STRICT_CSP)
   response.end(request.method === 'HEAD' ? undefined : body)

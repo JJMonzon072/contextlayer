@@ -399,6 +399,22 @@ export function createSiteAccess(deps: {
     },
 
     /**
+     * The applications of the connection registered for an origin, from the
+     * cached list (as `hello` uses it); `undefined` when nothing is known.
+     */
+    async applicationIdsFor(origin: string): Promise<string[] | undefined> {
+      const connection = await vault.readConnection()
+      if (!connection) return undefined
+      let apps: ExtensionApplication[] | undefined
+      try {
+        apps = await applications(connection, false)
+      } catch {
+        return undefined
+      }
+      return apps?.filter((app) => app.origins.includes(origin)).map((app) => app.id)
+    },
+
+    /**
      * A content script asks whether it may run. Only Chrome's facts about the
      * sender count (top frame, document, origin), never the message.
      */

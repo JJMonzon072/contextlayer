@@ -17,6 +17,7 @@ function fakeOverlay(own: Element[] = []) {
     playerCard: () => document.createElement('div'),
     showPlayerCard: vi.fn(),
     hidePlayerCard: vi.fn(),
+    setContainer: vi.fn(() => false),
   }
   return { overlay, drawn, banners }
 }

@@ -2,7 +2,7 @@ import type { TargetDescriptor } from '@contextlayer/shared'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { captureTarget } from '../src/content/capture/descriptor'
-import { resolveTarget, stepPagePattern, WEIGHTS } from '../src/content/resolve/resolver'
+import { resolveTarget, stepPagePattern, topModal, WEIGHTS } from '../src/content/resolve/resolver'
 
 /**
  * The Phase 6a fixture corpus: each case captures a descriptor from a page
@@ -366,10 +366,88 @@ describe('scoring, vetoes and thresholds', () => {
   })
 })
 
-describe.skip('Phase 6b and 6c (planned, not supported in 6a)', () => {
-  it.todo('waits for a late-rendered target (MutationObserver, ~10 s)')
-  it.todo('follows a pushState navigation (Navigation API)')
-  it.todo('resumes from bfcache')
+describe('modal dialogs (Phase 6b)', () => {
+  const withModal = (target: TargetDescriptor, modal: Element) =>
+    resolveTarget(target, stepPagePattern(null, target), {
+      document,
+      href: PAGE,
+      isRendered,
+      modal,
+    })
+
+  it('takes the copy inside an open modal dialog over an identical one it makes inert', () => {
+    page(`
+      <div role="dialog" aria-label="Customer"><button type="submit">Save</button></div>
+      <dialog open aria-label="Customer"><button type="submit">Save</button></dialog>
+    `)
+    const inside = element('dialog button')
+    const target = capture('dialog button')
+
+    // Without knowing about the modal, nothing tells the two apart.
+    expect(resolve(target)).toMatchObject({ outcome: 'ambiguous', reason: 'identical-candidates' })
+    const result = withModal(target, element('dialog'))
+
+    expect(result).toMatchObject({ outcome: 'resolved' })
+    expect(result.element).toBe(inside)
+    expect(result.diagnostics.blocked).toBe(1)
+  })
+
+  it('waits for a target behind an open modal instead of taking a copy inside it', () => {
+    page(`
+      <form aria-label="Customer"><button type="submit">Save</button></form>
+      <dialog open aria-label="Confirm"><button type="submit">Save</button></dialog>
+    `)
+    const target = capture('form button')
+
+    expect(resolve(target).element).toBe(element('form button'))
+    expect(withModal(target, element('dialog'))).toMatchObject({
+      outcome: 'not-found',
+      reason: 'behind-modal',
+    })
+  })
+
+  it('never resolves a unique test id behind an open modal', () => {
+    page(
+      `<button type="button" data-testid="archive">Archive</button><dialog open><p>Busy</p></dialog>`,
+    )
+    const target = capture('button')
+
+    expect(withModal(target, element('dialog'))).toMatchObject({
+      outcome: 'not-found',
+      reason: 'behind-modal',
+    })
+  })
+
+  it('never takes a copy outside a modal dialog for a target picked inside one', () => {
+    page(`
+      <section role="dialog" aria-label="Import"><button type="button">Confirm import</button></section>
+      <div role="dialog" aria-modal="true" aria-label="Import" id="modal">
+        <button type="button">Confirm import</button>
+      </div>
+    `)
+    const target = capture('#modal button')
+    expect(target.container).toMatchObject({ kind: 'dialog', modal: true })
+
+    // The modal is closed: only the inline copy is on screen, and it does not qualify.
+    element('#modal').setAttribute('hidden', '')
+    const closed = resolve(target)
+    expect(closed).toMatchObject({ outcome: 'not-found' })
+    expect(closed.diagnostics.vetoed).toBe(1)
+
+    // Open again: the copy inside the modal is the target.
+    element('#modal').removeAttribute('hidden')
+    const open = resolve(target)
+    expect(open.outcome).toBe('resolved')
+    expect(open.element).toBe(element('#modal button'))
+  })
+
+  it('treats a page without modal support as having no modal', () => {
+    expect(topModal(document)).toBeNull()
+  })
+})
+
+// Waiting, navigation and bfcache (Phase 6b) are the player's: test/player-ui.test.ts.
+describe.skip('Phase 6c (planned)', () => {
   it.todo('resolves inside an open or closed shadow root')
   it.todo('resolves inside a same-origin iframe')
 })

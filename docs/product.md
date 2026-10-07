@@ -49,18 +49,18 @@ There are no real users yet; these personas are hypotheses, not research results
 | Run               | One learner's attempt at one guide version: `in_progress`, `completed` or `abandoned`.                                                                            | Planned (Phase 7)                                                             |
 | Event             | Append-only run record (`run_started`, `step_viewed`, `step_completed`, `target_not_found`, `run_completed`, `run_abandoned`), deduplicated by a client id.       | Planned (Phase 7)                                                             |
 | Edit Mode         | Authoring state: picking elements on the page, typing in the side panel (unobservable by the host page).                                                          | Implemented (Phase 5)                                                         |
-| Player            | In-page runtime that finds published guides for the URL, resolves targets, highlights them and shows instructions.                                                | Implemented (Phase 6a; waits, navigation, shadow roots and frames in 6b–6c)   |
+| Player            | In-page runtime that finds published guides for the URL, resolves targets, highlights them and shows instructions.                                                | Implemented (Phases 6a–6b; shadow roots and frames in 6c)                     |
 
 ## Key journeys
 
-The product loop has eleven steps, numbered continuously across three journeys.
+The product loop has twelve steps, numbered continuously across three journeys.
 
 ```mermaid
 flowchart LR
   A["Author, Edit Mode (1-5)"] --> S["Save, publish version (6)"]
-  S --> P["Learner, player (7-10)"]
+  S --> P["Learner, player (7-11)"]
   P --> E[(Run events)]
-  E --> O["Owner, analytics (11)"]
+  E --> O["Owner, analytics (12)"]
   O -. "fix failing steps" .-> A
 ```
 
@@ -79,25 +79,26 @@ Precondition: the application is registered (Phase 3); the author's extension is
 
 7. The learner opens the same application and the ContextLayer popup, which lists the published guides whose start page matches the page, each with **Play**. (Implemented, Phase 6a)
 8. The learner starts a guide; the popup closes and the first step appears on the page. A run begins, kept in the browser session only; `run_started` is recorded in Phase 7. (Implemented, Phase 6a; events Phase 7)
-9. The player resolves each step's target on the page as it is. On an ambiguous or missing match it never guesses: it shows the step unanchored with a short reason (or skips or ends, if the step says so); `target_not_found` is recorded in Phase 7. Waiting for late-rendered content and in-app navigation comes in 6b. (Implemented, Phase 6a; 6b and 7 Planned)
+9. The player resolves each step's target on the page. A target that is not there yet is waited for, within the step's limit (10 s by default); one that a re-render replaces or that goes away is looked for again. On an ambiguous or missing match it never guesses: it shows the step unanchored with a short reason (or skips or ends, if the step says so); `target_not_found` is recorded in Phase 7. (Implemented, Phases 6a–6b; events Phase 7)
 10. The player highlights the element and shows a card with Previous / Next / Finish and Close; it never clicks or types for the learner. Finish ends the guide; completion and abandonment are recorded in Phase 7. (Implemented, Phase 6a; events Phase 7)
+11. The guide follows the learner through the application: in-app routes, links, forms, a reload, back and forward. A step that belongs to another page says "This step is on another page. Navigate there to continue." and waits; the player never navigates for the learner. A keyboard shortcut (Control+Shift+G on macOS, Alt+Shift+G elsewhere) moves the focus to the card, and closing the guide gives it back. (Implemented, Phase 6b)
 
 ### (c) Owner reviews completion
 
-11. The owner reviews per-version analytics in the dashboard: runs, completion rate, per-step drop-off, target-not-found rate. A failing step goes back to the author; the fix ships as a new version. (Phase 7)
+12. The owner reviews per-version analytics in the dashboard: runs, completion rate, per-step drop-off, target-not-found rate. A failing step goes back to the author; the fix ships as a new version. (Phase 7)
 
 ## MVP scope
 
-| Capability                                                                                     | Phase                                 |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------- |
-| Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1)                 |
-| Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2)                 |
-| Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3)                 |
-| Extension connected to a workspace; per-application site access                                | Implemented (Phase 4)                 |
-| Edit Mode: element picking, target capture, instructions, preview, save                        | Implemented (Phase 5)                 |
-| Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Implemented (Phase 6a; 6b–6c Planned) |
-| Events (start, progress, completion, abandonment, target not found); basic dashboard analytics | Planned (Phase 7)                     |
-| Production packaging and distribution                                                          | Planned (Phase 8)                     |
+| Capability                                                                                     | Phase                                  |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Monorepo, tooling, health checks, extension skeleton, tests                                    | Implemented (Phase 1)                  |
+| Registration, login, sessions; workspaces and members                                          | Implemented (Phase 2)                  |
+| Applications; guide CRUD with ordered steps; publish to versions                               | Implemented (Phase 3)                  |
+| Extension connected to a workspace; per-application site access                                | Implemented (Phase 4)                  |
+| Edit Mode: element picking, target capture, instructions, preview, save                        | Implemented (Phase 5)                  |
+| Guide detection for the current site; playback (highlight, popover, Previous / Next / Finish)  | Implemented (Phases 6a–6b; 6c Planned) |
+| Events (start, progress, completion, abandonment, target not found); basic dashboard analytics | Planned (Phase 7)                      |
+| Production packaging and distribution                                                          | Planned (Phase 8)                      |
 
 ## Non-goals
 
@@ -141,7 +142,7 @@ Run events are reported by a content script inside pages ContextLayer does not c
 3. **When is a run abandoned?** Explicit close only, or also inactivity or leaving the application? This moves the completion rate.
 4. **Default for a missing target**: unanchored, skip or end (ADR 0014 allows a per-step policy). Phase 6a follows the descriptor's policy; captures default to unanchored, and the dashboard cannot change it yet.
 5. **Advance on action?** Advancing when the learner uses the target mirrors real work; a Next button is simpler.
-6. **Multi-page guides**: run state across full page loads, in the first player release or later? Phase 6a ends the guide when the tab loads a new document; 6b decides.
+6. **Multi-page guides**: answered in Phase 6b. A run follows its tab across new documents of the same application (links, forms, reloads, bfcache) and resumes at its current step, never step 1; it never asks for site access on its own ([ADR 0019](adr/0019-spa-navigation-and-player-resume.md)).
 7. **Role permissions**: can `member` see aggregates? (Phase 3 lets `editor` and above publish; it can be narrowed to `admin` later.)
 8. **Republish mid-run**: the run keeps its version; tell the learner?
 9. **Localization** of guide text and of text-based targeting signals.

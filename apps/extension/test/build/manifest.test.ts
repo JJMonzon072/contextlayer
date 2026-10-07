@@ -49,6 +49,16 @@ describe('createManifest', () => {
     expect(manifest.optional_host_permissions).toEqual(['https://*/*', 'http://*/*'])
   })
 
+  it('declares one keyboard command, into the guide, and no permission for it', () => {
+    expect(manifest.commands).toEqual({
+      'focus-guide': {
+        suggested_key: { default: 'Alt+Shift+G', mac: 'MacCtrl+Shift+G' },
+        description: 'Move the focus to the guide on this page',
+      },
+    })
+    expect(manifest.permissions).not.toContain('webNavigation')
+  })
+
   it('declares no static content script: they would grant host access too', () => {
     expect(manifest.content_scripts).toBeUndefined()
   })

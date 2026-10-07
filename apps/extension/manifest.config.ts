@@ -7,6 +7,8 @@ import {
   originMatchPattern,
 } from '@contextlayer/shared'
 
+import { FOCUS_GUIDE_COMMAND, FOCUS_GUIDE_KEYS } from './src/commands'
+
 /**
  * Typed source of `dist/manifest.json`. Evaluated at build time by vite.config.ts.
  *
@@ -24,6 +26,8 @@ import {
  *   match patterns would grant host access too.
  * - `optional_host_permissions`: customer sites, requested one exact origin at
  *   a time from a click in the popup.
+ * - `commands` is not a permission: a keyboard shortcut into the Guide
+ *   Player's card (ADR 0013), with no install warning.
  */
 interface ManifestOptions {
   version: string
@@ -75,6 +79,14 @@ export function createManifest({
     // Customer sites are asked for one exact origin at a time, from a click in
     // the popup, and only for applications registered in the workspace (ADR 0017).
     optional_host_permissions: ['https://*/*', 'http://*/*'],
+    // A shortcut into the guide's card (Phase 6b); users can change it in
+    // chrome://extensions/shortcuts.
+    commands: {
+      [FOCUS_GUIDE_COMMAND]: {
+        suggested_key: { ...FOCUS_GUIDE_KEYS },
+        description: 'Move the focus to the guide on this page',
+      },
+    },
   }
 }
 

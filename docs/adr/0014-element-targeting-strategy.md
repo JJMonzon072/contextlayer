@@ -1,6 +1,6 @@
 # ADR 0014: Multi-signal target descriptors for element targeting
 
-- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3), for capture (implemented in Phase 5) and for static resolution in the light DOM (implemented in Phase 6a); Proposed for waiting, navigation, shadow roots and frames (6b, 6c). The thresholds are starting values, not calibrated.
+- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3), for capture (implemented in Phase 5), for static resolution in the light DOM (implemented in Phase 6a) and for waiting, re-resolution and navigation in the light DOM (implemented in Phase 6b); Proposed for shadow roots and frames (6c). The thresholds are starting values, not calibrated.
 - Date: 2026-10-04
 - Deciders: JJ
 
@@ -12,7 +12,7 @@ Prior art: Playwright's selector generator scores a test id 1, role plus name 10
 
 ## Decision
 
-Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by scoring. Never guess silently. The storage half is **Accepted and implemented** (Phase 3) and capture is **Accepted and implemented** (Phase 5, below); resolution stays **Proposed** until it is built against a fixture corpus.
+Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by scoring. Never guess silently. The storage half is **Accepted and implemented** (Phase 3) and capture is **Accepted and implemented** (Phase 5, below); resolution is **Accepted and implemented** for the light DOM (Phases 6a and 6b, below) and stays **Proposed** for shadow roots and frames (6c).
 
 ### What is stored where
 
@@ -20,7 +20,7 @@ Store a versioned, multi-signal `TargetDescriptor` per step and resolve it by sc
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | `TargetDescriptor` v1   | `guide_steps.target jsonb`, validated by a zod union on `version` in `packages/shared/src/target-descriptor.ts`. Unknown versions and unknown keys are rejected, strings and arrays capped, the whole descriptor ≤ 16 384 characters. Null until captured. | Implemented (Phase 3 contract, Phase 5 capture) |
 | Frozen copy for players | `guide_versions.snapshot` ([ADR 0016](0016-immutable-published-guide-versions.md))                                                                                                                                                                         | Implemented (Phase 3)                           |
-| Page matching           | URLPattern init objects (descriptor `page.urlPattern`, optionally overridden by `guide_steps.url_pattern`), evaluated in the extension. Node 22 has no URLPattern, so the API narrows by origin (`applications.origins`).                                  | Planned (Phase 6)                               |
+| Page matching           | URLPattern init objects (descriptor `page.urlPattern`, optionally overridden by `guide_steps.url_pattern`), evaluated in the extension. Node 22 has no URLPattern, so the API narrows by origin (`applications.origins`).                                  | Implemented (Phases 6a–6b)                      |
 | Resolution outcome      | `guide_events` of type `target_not_found`, with `metadata.reason` and per-strategy counts. Page text is never stored.                                                                                                                                      | Planned (Phase 7)                               |
 
 ### Example (light-DOM target in a modal)
@@ -127,7 +127,7 @@ Code: `apps/extension/src/content/capture/` (descriptor) and `src/content/picker
 
 Work is bounded: hover does one hit test and one promotion per frame; the full descriptor is built only for the selected element; counts stop above 5 000 candidates; a descriptor over 16 384 characters drops its anchors, then refuses. The whole content script stays under its build-enforced budget (`apps/extension/scripts/budget.ts`).
 
-### Resolution (Accepted for the light DOM, Implemented in Phase 6a; steps 2 and 9 Planned)
+### Resolution (Accepted for the light DOM, Implemented in Phases 6a–6b; step 2 Planned for 6c)
 
 1. If `page.urlPattern` does not match `location.href`, the outcome is `wrong-page`.
 2. Resolve the roots: frame, then shadow hosts (`shadowRoot` or `chrome.dom.openOrClosedShadowRoot`), then the container.
@@ -146,7 +146,7 @@ Work is bounded: hover does one hit test and one promotion per frame; the full d
 | `not-found` (counts per strategy) | Step per `onNotFound`                           | `target_not_found`, reason `not-found`  |
 | `wrong-page`                      | Waits for navigation; can show a hint           | `target_not_found`, reason `wrong-page` |
 
-The thresholds are starting values, to be calibrated against a fixture corpus in Phase 6.
+The thresholds are starting values. Phases 6a and 6b checked them against fixture corpora and did not change them; calibration on a real application is still to do.
 
 **As implemented in Phase 6a** (`apps/extension/src/content/resolve/resolver.ts`, static resolution of the top document's light DOM, called when a step is shown):
 
@@ -163,11 +163,21 @@ The thresholds are starting values, to be calibrated against a fixture corpus in
    - a runner-up that matches by identity at least as well is `ambiguous` unless their context (anchors, named container) tells them apart: a CSS path or a position never breaks such a tie (two "Edit" buttons in a list stay ambiguous at any margin);
    - otherwise the lead over the runner-up must reach the stored `minMargin` (0.15), else `ambiguous`.
 8. **Stability** (in the player): the box must hold still across two animation frames before the highlight and the card are anchored to it. The checks are bounded (five pairs of frames); a target that is still moving after them, or that disappears meanwhile, is `not-found` with reason `unstable` and follows the descriptor's `onNotFound`; no other element is ever taken instead. Occlusion, found with `elementFromPoint` at the box's centre, is only a warning (recorded on the card for tests; events are Phase 7).
-9. **No waiting** in 6a: no `MutationObserver`, no navigation listener; this step stays Planned for 6b.
+9. **Waiting** is the player's (Phase 6b, below); the resolver itself stays a pure function of the page as it is.
 
 Diagnostics carry counts per strategy, the number of rendered and vetoed candidates and the top three rounded scores with their strategies, never page text. The player follows the descriptor's `onAmbiguous` / `onNotFound`: unanchored with a short hint, skip in the direction the user was going, or end with a notice; `wrong-page` and `unsupported` are shown unanchored with a hint.
 
 Why Accepted for this part: the algorithm is implemented as decided, with the two additions above (identity, no structural tie-break) that the fixture corpus showed were needed. Without them, a candidate found only by its CSS path and position cleared `minScore` under another name, and of two identical "Edit" buttons the one at the captured position won by its structure alone. It is covered by a 16-case corpus captured with the real capture code (generated ids, renamed controls, hidden and inert copies, duplicates, a moved positional target, removed elements, wrong page, no target) and by Playwright on the demo application. The thresholds stay starting values: they were checked against that corpus, not calibrated on real applications.
+
+**As implemented in Phase 6b** (`apps/extension/src/content/player/player.ts` around the same resolver, [ADR 0019](0019-spa-navigation-and-player-resume.md) for navigation):
+
+1. **What waits.** `not-found` (including `unstable` and `behind-modal`) and `ambiguous` wait; `none` is shown at once; `unsupported` never waits; `wrong-page` waits for navigation, not for the DOM. A step whose descriptor has `timeoutMs` 0 applies its policy at once.
+2. **How.** One `MutationObserver` per showing on `documentElement` (children, subtree, attributes, text), the light DOM only. Mutations only schedule a look; at most one resolution runs per 150 ms however many arrive, each one the full resolution above. The deadline is the descriptor's `resolution.timeoutMs` (10 s by default). Each showing has an `AbortController`; another step, Close, Finish, a hide, navigation, bfcache or the script stopping abort it and disconnect the observer, timers and frame callbacks.
+3. **At the limit.** The last outcome decides: `ambiguous` follows `onAmbiguous`, anything else `onNotFound` (unanchored with a hint, skip or end). While waiting, the card is shown on its own with "Looking for this step's element…".
+4. **A target that goes away.** On every redraw and mutation the anchored element must still be usable: connected, rendered and not behind an open modal. If it is not, the highlight is removed at once and the descriptor is resolved again for a grace period of 1.5 s, never longer than `timeoutMs`. A new element is anchored only if resolution accepts it (score, identity, margin, two stable frames); otherwise the step is shown on its own with the not-found hint. A lost target never skips or ends a step, since the user saw it already.
+5. **Modal dialogs.** While a modal `<dialog>` is open (the topmost `dialog:modal`), candidates outside it are scored but never accepted, because modality makes them inert though they pass `checkVisibility()`: if the best one is behind the modal the outcome is `not-found` (`behind-modal`) and the step waits; a copy inside the modal never wins over it, and a candidate behind it is never a runner-up. A target captured inside a modal (`container.modal`) vetoes a candidate outside any modal, so an inline copy of a dialog's button is never taken while the dialog is closed.
+
+Why Accepted for this part: the rules are those proposed in step 9 with the grace period at 1.5 s (inside the proposed 1–2 s: long enough for a framework to put a re-rendered node back, short enough not to leave the card pointing at nothing), and they are covered by unit tests with fake timers (late, near the limit, never, ambiguous then unique, replaced, back within grace, not back, the throttle, cleanup on every exit) and by Playwright on the demo's flow page (a late target, a re-render, a modal with an identical copy outside). No weight or threshold changed: the 6a corpus passes as it was, and the modal veto was the only rule a new fixture called for.
 
 ## Alternatives considered
 
@@ -183,13 +193,13 @@ Why Accepted for this part: the algorithm is implemented as decided, with the tw
 
 - **Positive:** survives the loss of individual signals, and failures are explainable through scores and per-strategy counts. The version field allows schema evolution.
 - **Negative:** a few KB of JSON per step; complex capture; accessible-name computation and scoring add content-script weight ([R-15](../technical-risks.md)) and CPU on large DOMs (bounded by the candidate cap); captured text may contain personal data; thresholds need tuning.
-- **Follow-ups:** resolution in the light DOM accepted and implemented in Phase 6a; waiting, navigation and calibration on real applications are 6b, shadow roots and frames 6c. Storage shape accepted and implemented in Phase 3. Its limits, in `packages/shared/src/target-descriptor.ts`:
+- **Follow-ups:** resolution in the light DOM accepted and implemented in Phase 6a, waiting and navigation in 6b; shadow roots and frames are 6c; calibration on a real application is still Planned. Storage shape accepted and implemented in Phase 3. Its limits, in `packages/shared/src/target-descriptor.ts`:
   - captured strings ≤ 80 characters, selectors ≤ 512;
   - 1–12 locators of 11 known strategies;
   - ≤ 6 anchors, ≤ 5 frame and ≤ 5 shadow hops, ≤ 12 attributes;
   - strict objects everywhere.
 
-  A step's `target` is null until captured, which also allows unanchored steps. Capture is implemented (Phase 5) and covered by unit tests and a demo page; static resolution (Phase 6a, [roadmap](../roadmap.md)) passes a light-DOM fixture corpus; the remaining fixtures (late rendering, CSS-in-JS on real apps, shadow roots, iframes, virtualized lists, modals) come with 6b and 6c, and will also tell whether the capture heuristics above need a v2.
+  A step's `target` is null until captured, which also allows unanchored steps. Capture is implemented (Phase 5) and covered by unit tests and a demo page; static resolution (Phase 6a, [roadmap](../roadmap.md)) passes a light-DOM fixture corpus; late rendering, re-renders and modals came with 6b; the remaining fixtures (CSS-in-JS on real apps, shadow roots, iframes, virtualized lists) come with 6c and a real application, and will also tell whether the capture heuristics above need a v2.
 
 ## References
 

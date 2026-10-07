@@ -142,6 +142,7 @@ const player = createPlayer({
     (await site.applications()).applications?.filter((app) =>
       app.origins.some((entry) => entry.origin === origin && entry.on),
     ),
+  applicationsOn: (origin) => site.applicationIdsFor(origin),
 })
 
 // Restrict chrome.storage.local before anything can write a credential to it.
@@ -214,6 +215,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void site.pageClosed(tabId)
   void authoring.tabClosed(tabId)
   void player.tabClosed(tabId)
+})
+
+// The shortcut into the guide's card (Phase 6b): only a tab playing a guide reacts.
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (tab?.id !== undefined) void player.command(command, tab.id)
 })
 
 // Chrome 142+: the author closed the panel. Earlier versions rely on the

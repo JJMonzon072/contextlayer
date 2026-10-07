@@ -10,7 +10,9 @@
  * only ContextLayer's own code (3 086 bytes). With the Phase 5 capture, picker
  * and preview it is 26 267 bytes (10 098 gzip). The Phase 6a resolver and
  * player brought it to 45 277 bytes (16 078 gzip); the player positions its
- * card with its own small module instead of a positioning library. The limit
+ * card with its own small module instead of a positioning library. Phase 6b
+ * (waits, navigation, resume, bfcache, host modals, the shortcut and focus
+ * restore) brought it to 49 949 bytes (17 502 gzip). The limit
  * stays well under the 100 KiB target, and it is far below what zod alone
  * would take, so reintroducing a schema library in the content script fails
  * the build.

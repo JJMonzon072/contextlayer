@@ -66,6 +66,7 @@ const ALLOWED_SENDERS: Record<BackgroundRequest['type'], readonly SenderContext[
   'player.start': ['extension-page'],
   'player.go': ['content-script'],
   'player.end': ['content-script'],
+  'player.resume': ['content-script'],
 }
 
 type Sender = Pick<chrome.runtime.MessageSender, 'id' | 'url' | 'tab'> & PageSender
@@ -162,10 +163,7 @@ export async function handleBackgroundMessage(
     }
     case 'page.hello': {
       const hello = await deps.site.hello(sender)
-      if (hello.active) {
-        await deps.authoring.pageHello(sender)
-        await deps.player.pageHello(sender)
-      }
+      if (hello.active) await deps.authoring.pageHello(sender)
       return success(hello)
     }
     case 'authoring.attach': {
@@ -250,5 +248,7 @@ export async function handleBackgroundMessage(
       )
     case 'player.end':
       return deps.player.end(sender, request.data.runId)
+    case 'player.resume':
+      return deps.player.resume(sender)
   }
 }

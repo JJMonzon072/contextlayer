@@ -258,6 +258,7 @@ export async function openEditMode(extensionBrowser: ExtensionBrowser, page: Pag
 
 interface DomNode {
   nodeId: number
+  parentId?: number
   nodeType: number
   localName: string
   nodeValue: string
@@ -335,6 +336,10 @@ export interface PlayerView {
   hosts: number
   cards: number
   open: boolean
+  /** The card's `data-state` (resolving, waiting, anchored, regaining, off-page, shown). */
+  state: string | undefined
+  /** The element the overlay host lives in (`html`, or `dialog` while a modal is open). */
+  hostParent: string | undefined
   outcome: string | undefined
   step: string | undefined
   side: string | undefined
@@ -350,6 +355,8 @@ export interface PlayerView {
 
 interface PlayerNodes {
   hosts: DomNode[]
+  /** The tag of each host's parent element. */
+  hostParents: (string | undefined)[]
   card: DomNode | undefined
   box: DomNode | undefined
   buttons: { name: string; node: DomNode }[]
@@ -381,6 +388,10 @@ async function playerNodes(session: CDPSession): Promise<PlayerNodes> {
   }
   walk(root)
   const hosts = all.filter((node) => attributeOf(node, 'data-contextlayer-root') !== undefined)
+  const byId = new Map(all.map((node) => [node.nodeId, node]))
+  const hostParents = hosts.map((host) =>
+    host.parentId === undefined ? undefined : byId.get(host.parentId)?.localName,
+  )
   const parts = hosts.flatMap((host) => host.shadowRoots?.[0]?.children ?? [])
   const card = parts.find((node) => attributeOf(node, 'class') === 'player')
   const box = parts.find((node) => attributeOf(node, 'class') === 'box')
@@ -392,7 +403,7 @@ async function playerNodes(session: CDPSession): Promise<PlayerNodes> {
     for (const child of node.children ?? []) collect(child)
   }
   if (card) collect(card)
-  return { hosts, card, box, buttons }
+  return { hosts, hostParents, card, box, buttons }
 }
 
 async function displayOf(session: CDPSession, node: DomNode): Promise<string> {
@@ -436,7 +447,7 @@ async function readPlayerView(page: Page): Promise<PlayerView> {
   try {
     await session.send('DOM.enable')
     await session.send('CSS.enable')
-    const { hosts, card, box, buttons } = await playerNodes(session)
+    const { hosts, hostParents, card, box, buttons } = await playerNodes(session)
     const cards = hosts.flatMap((host) =>
       (host.shadowRoots?.[0]?.children ?? []).filter(
         (node) => attributeOf(node, 'class') === 'player',
@@ -451,6 +462,8 @@ async function readPlayerView(page: Page): Promise<PlayerView> {
       hosts: hosts.length,
       cards,
       open,
+      state: card && attributeOf(card, 'data-state'),
+      hostParent: hostParents.at(-1),
       outcome: card && attributeOf(card, 'data-outcome'),
       step: card && attributeOf(card, 'data-step'),
       side: card && attributeOf(card, 'data-side'),

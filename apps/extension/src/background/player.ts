@@ -5,6 +5,7 @@ import {
   publishedGuideSchema,
 } from '@contextlayer/shared'
 
+import { FOCUS_GUIDE_COMMAND } from '../commands'
 import { richTextLines } from '../lib/rich-text-lines'
 import { matchPage } from '../lib/url-pattern'
 import { failure, success, type MessageResult, type PlayerStep } from '../messaging/protocol'
@@ -31,13 +32,20 @@ import type { PlayerRun, PlayerRuns, Vault } from './vault'
  * run, that binding and the run's generation; anything else is stale and
  * changes nothing, and no page can reach another tab's run. Runs live in
  * `storage.session` (`cl.players`, by tab): they survive the worker stopping
- * between events. A tab's run ends with Finish, Close, a new document in that
- * tab, that tab closing, Edit Mode opening on that tab, or a newer start on
- * that tab; the runs of a site end when it is turned off or its access is
+ * between events. A tab's run ends with Finish, Close, that tab closing, Edit
+ * Mode opening on that tab, a newer start on that tab, or a page of another
+ * application in that tab; the runs of a site end when it is turned off or its access is
  * withdrawn; every run ends with Disconnect, and with a revocation, found at
  * the latest on the next Previous or Next (`GET /v1/extension/session`, the
  * bearer check the popup's status already makes). The player never clicks,
  * types or acts on the page.
+ *
+ * New documents (Phase 6b, ADR 0019): a link, a form or a reload loads a new
+ * document, and bfcache brings one back. Each document `page.hello`
+ * authorized asks for its tab's run with `player.resume`; the run is bound to
+ * it (document, origin, next generation) and its current step returned,
+ * never step 1, after the same connection check as Previous / Next. The
+ * document it was bound to before is stale from then on.
  *
  * Fail-closed ordering: a run's `player.show` is sent from inside the
  * transition that stores it, and every `player.hide` from inside the
@@ -59,8 +67,18 @@ export interface PlayerDeps {
   chrome: PlayerChrome
   /** The connection's applications registered (and on) for an origin. */
   applicationsFor: (origin: string) => Promise<{ id: string }[] | undefined>
+  /** The ids of the applications registered for an origin, from the cached list. */
+  applicationsOn: (origin: string) => Promise<string[] | undefined>
   now: () => number
+  /** How long a page's answer to `player.show` is awaited (default `ANSWER_TIMEOUT_MS`). */
+  answerTimeoutMs?: number
 }
+
+/**
+ * A message to a document in the back/forward cache is never answered (ADR
+ * 0019), so a page's answer is awaited this long at most.
+ */
+export const ANSWER_TIMEOUT_MS = 5_000
 
 const STEP_LINE_MAX = 2_000
 
@@ -271,7 +289,14 @@ export function createPlayer(deps: PlayerDeps) {
       return failure('NOT_AVAILABLE', 'Too many guides are playing. Close one and try again.')
     }
 
-    const answer = await installed.shown
+    const answer = await Promise.race([
+      installed.shown,
+      new Promise<undefined>((resolve) => {
+        setTimeout(() => {
+          resolve(undefined)
+        }, deps.answerTimeoutMs ?? ANSWER_TIMEOUT_MS)
+      }),
+    ])
     // Ended or replaced while the page was answering: never reported as started.
     if ((await vault.readPlayers())[String(tabId)]?.id !== run.id) {
       return failure('STALE', 'This guide was ended or replaced before it appeared.')
@@ -365,13 +390,93 @@ export function createPlayer(deps: PlayerDeps) {
       return success({ done: ended.length > 0 })
     },
 
-    /** A content script was authorized: a new document in a tab ends that tab's run. */
-    async pageHello(sender: PageSender): Promise<void> {
+    /**
+     * A document `page.hello` authorized asks for its tab's run: a link, a
+     * form, a reload or bfcache brought it. The run is bound to this document
+     * (and origin) with the next generation, and its current step returned.
+     * Nothing to resume is `null`. A revoked connection ends the runs it had
+     * (the same check as Previous / Next); a page of another application ends
+     * this tab's run; ContextLayer never turns a site on or asks for access
+     * here (`page.hello` only authorizes sites already on and granted).
+     */
+    async resume(sender: PageSender): Promise<MessageResult<PlayerStep | null>> {
       const tabId = sender.tab?.id
-      if (tabId === undefined) return
-      await endRuns((run) => run.tabId === tabId && run.documentId !== sender.documentId, {
-        hide: false,
+      const origin = siteOrigin(sender.url)
+      if (
+        tabId === undefined ||
+        sender.frameId !== 0 ||
+        sender.documentId === undefined ||
+        origin === undefined ||
+        sender.origin !== origin
+      ) {
+        return success(null)
+      }
+      const before = await vault.readPlayers()
+      const run = before[String(tabId)]
+      if (!run) return success(null)
+      // Only the document `page.hello` authorized for this tab.
+      const page = (await vault.readPages())[String(tabId)]
+      if (page?.documentId !== sender.documentId || page.origin !== origin) return success(null)
+
+      if ((await checkConnection()) === 'ended') {
+        const ofGrant = (current: PlayerRun) => current.grantId === run.grantId
+        const ended = await endRuns(ofGrant, { hide: false })
+        const told = new Set<string>()
+        for (const current of [...Object.values(before).filter(ofGrant), ...ended]) {
+          if (told.has(current.id) || current.documentId === sender.documentId) continue
+          told.add(current.id)
+          hide(current)
+        }
+        return failure('STALE', 'The connection to ContextLayer ended.')
+      }
+      const applications = await deps.applicationsOn(origin)
+
+      return lifecycle.exclusive(async () => {
+        const runs = await vault.readPlayers()
+        const current = runs[String(tabId)]
+        if (current?.id !== run.id) return success(null)
+        const drop = async () => {
+          await vault.writePlayers(without(runs, (other) => other.id === current.id))
+          return success(null)
+        }
+        const connection = await vault.readConnection()
+        if (connection?.id !== current.grantId || connection.workspace.id !== current.workspaceId) {
+          return drop()
+        }
+        if ((await vault.readPages())[String(tabId)]?.documentId !== sender.documentId) {
+          return success(null)
+        }
+        if ((await vault.readAuthoring())?.tabId === tabId) return drop()
+        // A page of another application: this guide does not belong here.
+        if (applications !== undefined && !applications.includes(current.applicationId)) {
+          return drop()
+        }
+        if (applications === undefined) return success(null)
+        if (current.documentId === sender.documentId && current.origin === origin) {
+          return success(stepOf(current))
+        }
+        const next = {
+          ...current,
+          documentId: sender.documentId ?? current.documentId,
+          origin,
+          generation: current.generation + 1,
+        }
+        await vault.writePlayers({ ...runs, [String(tabId)]: next })
+        return success(stepOf(next))
       })
+    },
+
+    /**
+     * A keyboard command (`chrome.commands`) on a tab: `focus-guide` asks the
+     * page that shows the tab's guide to move the focus to its card. Nothing
+     * happens on a tab without a guide. Returns whether a page was asked.
+     */
+    async command(name: string, tabId: number): Promise<boolean> {
+      if (name !== FOCUS_GUIDE_COMMAND) return false
+      const run = (await vault.readPlayers())[String(tabId)]
+      if (!run) return false
+      chrome.sendToTab(tabId, { type: 'player.focus' }, run.documentId).catch(() => undefined)
+      return true
     },
 
     /** The tab closed: its run ends, and a start still on its way for it does not land. */

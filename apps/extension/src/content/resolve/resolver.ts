@@ -16,11 +16,16 @@ import { capturedText } from '../capture/text'
  * 3. Candidates come from the stored locators, strongest first, by the same
  *    definitions capture counted them with (`capture/locate.ts`); at most
  *    `MAX_CANDIDATES`, never a scan of the whole page.
- * 4. Disconnected, inert, invisible and empty candidates are dropped.
+ * 4. Disconnected, inert, invisible and empty candidates are dropped. While a
+ *    modal dialog is open, candidates outside it (inert, though they still
+ *    pass `checkVisibility()`) are scored but never accepted: if the best one
+ *    is behind the modal the outcome is `not-found` (`behind-modal`), and
+ *    they never compete with one inside it.
  * 5. Each candidate is described by the functions capture used
  *    (`describeElement`) and scored `Σ wᵢ·simᵢ / Σ wᵢ` over the signals the
  *    stored descriptor has; a different value for the same test attribute,
- *    or a different role, vetoes it.
+ *    or a different role, vetoes it, and so does a candidate outside any modal
+ *    dialog for a target picked inside one.
  * 6. A unique test-id match resolves at once. Otherwise the best candidate
  *    must match the element by identity (`MIN_IDENTITY`), or, for a target
  *    with nothing but its position, sit exactly where it was; reach
@@ -47,6 +52,8 @@ export interface ResolutionDiagnostics {
   /** Candidates left after the visibility filter. */
   rendered: number
   vetoed: number
+  /** Rendered candidates shut out by an open modal dialog. */
+  blocked: number
   /** The best scores, rounded, with the strategies that found each candidate. */
   top: { score: number; strategies: TargetLocator['strategy'][] }[]
 }
@@ -65,6 +72,12 @@ export interface ResolveOptions {
   href: string
   /** Visible and rendered; replaced in tests (jsdom has no layout). */
   isRendered?: (element: Element) => boolean
+  /**
+   * The open modal dialog, if any (default: `topModal`). Elements outside it
+   * are inert although they still pass `checkVisibility()` (ADR 0019), so
+   * they are left out. Given in tests: jsdom has no modal dialogs.
+   */
+  modal?: Element | null
 }
 
 /** At most this many candidates are scored (ADR 0014: "about 50 per root"). */
@@ -116,6 +129,28 @@ export function isRendered(element: Element): boolean {
   const box = element.getBoundingClientRect()
   return box.width > 0 && box.height > 0
 }
+
+/** The open modal `<dialog>` on top, if any; null where `:modal` is not supported. */
+export function topModal(document: Document): Element | null {
+  try {
+    const open = document.querySelectorAll('dialog:modal')
+    return open.item(open.length - 1)
+  } catch {
+    return null
+  }
+}
+
+/** Rendered and reachable: not hidden, and not shut out by an open modal dialog. */
+export function isUsable(
+  element: Element,
+  modal: Element | null,
+  rendered: (element: Element) => boolean = isRendered,
+): boolean {
+  return rendered(element) && (modal === null || modal.contains(element))
+}
+
+const behind = (element: Element, modal: Element | null) =>
+  modal !== null && !modal.contains(element)
 
 /** The page pattern a step is checked against: the step's own, else its target's. */
 export function stepPagePattern(
@@ -291,6 +326,11 @@ function signalsOf(
   }
   if (target.container) {
     const container = now.container
+    // A target picked inside a modal dialog is only ever that dialog's: a copy
+    // outside one (an inline panel, a page form) is another element.
+    if (target.container.modal === true && container?.modal !== true) {
+      return { signals, veto: 'modal' }
+    }
     signals.container =
       container?.kind !== target.container.kind
         ? 0
@@ -348,7 +388,13 @@ function score(
 /** Where an element is by meaning (a named region, an anchor), not by position. */
 const CONTEXT: readonly Signal[] = ['anchors', 'container']
 
-const empty = (): ResolutionDiagnostics => ({ strategies: {}, rendered: 0, vetoed: 0, top: [] })
+const empty = (): ResolutionDiagnostics => ({
+  strategies: {},
+  rendered: 0,
+  vetoed: 0,
+  blocked: 0,
+  top: [],
+})
 
 /**
  * Where a step's target is on this page now, or why it cannot be shown
@@ -373,6 +419,7 @@ export function resolveTarget(
   }
 
   const { document } = options
+  const modal = options.modal === undefined ? topModal(document) : options.modal
   const rendered = options.isRendered ?? isRendered
   const diagnostics = empty()
   const found = new Map<Element, TargetLocator['strategy'][]>()
@@ -382,7 +429,7 @@ export function resolveTarget(
     diagnostics.strategies[locator.strategy] =
       (diagnostics.strategies[locator.strategy] ?? 0) + elements.length
     if (locator.strategy === 'testId' && locator.matchCount === 1) {
-      const visible = elements.filter(rendered)
+      const visible = elements.filter((element) => isUsable(element, modal, rendered))
       if (visible.length === 1 && elements.length === 1) uniqueTestId ??= visible[0]
     }
     for (const element of elements) {
@@ -397,6 +444,8 @@ export function resolveTarget(
     identity: number | undefined
     signals: Partial<Record<Signal, number>>
     strategies: TargetLocator['strategy'][]
+    /** Shut out by an open modal dialog: never accepted, never a runner-up. */
+    blocked: boolean
   }[] = []
   for (const [element, strategies] of found) {
     if (!rendered(element)) continue
@@ -406,9 +455,12 @@ export function resolveTarget(
       diagnostics.vetoed += 1
       continue
     }
-    scored.push({ element, score: score(signals) ?? 0, identity, signals, strategies })
+    const blocked = behind(element, modal)
+    if (blocked) diagnostics.blocked += 1
+    scored.push({ element, score: score(signals) ?? 0, identity, signals, strategies, blocked })
   }
-  scored.sort((a, b) => b.score - a.score)
+  // On equal scores the reachable candidate comes first.
+  scored.sort((a, b) => b.score - a.score || Number(a.blocked) - Number(b.blocked))
   diagnostics.top = scored
     .slice(0, 3)
     .map(({ score: value, strategies }) => ({ score: Math.round(value * 1000) / 1000, strategies }))
@@ -418,7 +470,7 @@ export function resolveTarget(
   if (uniqueTestId && scored.some((candidate) => candidate.element === uniqueTestId)) {
     return { outcome: 'resolved', element: uniqueTestId, reason: 'test-id', diagnostics }
   }
-  const [best, runnerUp] = scored
+  const [best] = scored
   if (!best) {
     return {
       outcome: 'not-found',
@@ -426,6 +478,10 @@ export function resolveTarget(
       diagnostics,
     }
   }
+  // The element the step means is behind an open modal: wait, never take a
+  // copy inside the modal instead.
+  if (best.blocked) return { outcome: 'not-found', reason: 'behind-modal', diagnostics }
+  const runnerUp = scored.slice(1).find((candidate) => !candidate.blocked)
 
   if (best.identity !== undefined) {
     // Found only by where it sits, or under another name: not the element picked.

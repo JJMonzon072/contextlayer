@@ -1,12 +1,20 @@
+import { matchPage } from '../../lib/url-pattern'
 import type { PlayerStep } from '../../messaging/protocol'
 import { readStepAnswer } from '../messages'
 import type { Overlay } from '../overlay'
-import { isRendered, resolveTarget, stepPagePattern, type Resolution } from '../resolve/resolver'
+import {
+  isRendered,
+  isUsable,
+  resolveTarget,
+  stepPagePattern,
+  topModal,
+  type Resolution,
+} from '../resolve/resolver'
 import { inView, placeCard, type Box } from './position'
 
 /**
- * The Guide Player on the page (Phase 6a): one step of one run at a time, in
- * the isolated overlay (ADR 0013). The worker decides which step is shown;
+ * The Guide Player on the page (Phases 6a and 6b): one step of one run at a
+ * time, in the isolated overlay (ADR 0013). The worker decides which step is shown;
  * this module resolves its target (ADR 0014), highlights it and shows the
  * card, and sends Previous / Next / Finish / Close back as requests about the
  * run and generation it shows. It never clicks, types or acts on the page:
@@ -18,15 +26,53 @@ import { inView, placeCard, type Box } from './position'
  * the page has it (never from a field the user is typing in), never traps
  * it, and Escape closes the guide only when the focus is inside the card.
  * There is no animation, and scrolling is instant under reduced motion.
+ * The keyboard shortcut (`focus-guide`, Phase 6b) moves the focus to the card
+ * on purpose and remembers where it was; Close, Escape and Finish give it back
+ * to that element if it is still there, and only when the card took the focus.
+ *
+ * Dynamic pages (Phase 6b, ADR 0014): a target that is not there yet, or not
+ * yet the only match, is waited for. While a step is shown, one
+ * `MutationObserver` watches the document's light DOM; at most one attempt
+ * runs per `CHECK_INTERVAL_MS`, until the descriptor's `timeoutMs`, and every
+ * observer and timer of a step is released with its `AbortController` when
+ * the step changes or the guide ends, is hidden or stops.
+ *
+ * A target that leaves while anchored (removed, hidden, re-rendered by a
+ * framework, or shut out by a modal dialog) loses its highlight at once and
+ * is resolved again, from the descriptor, for `GRACE_MS` at most. A safe match
+ * that holds still is anchored again; otherwise the step stays on its own
+ * with a hint. Losing a target the user was shown never skips or ends the
+ * guide: the user may just have used it.
+ *
+ * Modal dialogs (ADR 0019): while one is open, the overlay lives inside it, so
+ * the card is on top and can take the focus; it moves back when the dialog
+ * closes. Targets behind the dialog are never accepted (ADR 0014).
+ *
+ * Navigation (ADR 0019): when the URL changes in this document (`urlChanged`),
+ * the current step is shown again for the new URL; a step whose page pattern
+ * does not match waits there for the user to navigate (`off-page`), never
+ * skipped or ended. The run, its step and its generation do not change.
  */
 
 export const HINTS = {
   'not-found': "This step's element isn't on the page right now.",
   ambiguous: 'More than one element matches this step, so none is highlighted.',
-  'wrong-page': 'This step is on another page of this site.',
+  'wrong-page': 'This step is on another page. Navigate there to continue.',
   unsupported: "ContextLayer can't point at this step's element on this page yet.",
+  waiting: "Looking for this step's element…",
   unreachable: "ContextLayer couldn't be reached. Try again.",
 } as const
+
+/** At most one resolution attempt per this many milliseconds while waiting (ADR 0014: ~150 ms). */
+export const CHECK_INTERVAL_MS = 150
+
+/**
+ * How long a target that left mid-step is looked for again (ADR 0014: 1 to 2
+ * seconds), at most the descriptor's `timeoutMs`: long enough for a
+ * framework to put an equivalent element back, short enough not to leave a
+ * step looking for something the user removed.
+ */
+export const GRACE_MS = 1_500
 
 export const ENDED_TEXT = 'This guide ended: a step could not be shown on this page.'
 export const STALE_TEXT = 'This guide is no longer playing.'
@@ -61,6 +107,8 @@ export interface PlayerDeps {
   isRendered?: (element: Element) => boolean
   /** Replaced in tests: jsdom only creates untrusted events. */
   isTrusted?: (event: Event) => boolean
+  /** The open modal dialog, if any (default `topModal`); given in tests (jsdom has none). */
+  modal?: (document: Document) => Element | null
 }
 
 export interface Player {
@@ -70,7 +118,42 @@ export interface Player {
   hide(runId: string): void
   /** Removes the UI without telling the worker (the script stops, Edit Mode starts). */
   stop(): void
+  /** The URL changed in this document: the current step is shown again for it. */
+  urlChanged(): void
+  /** The keyboard shortcut: moves the focus to the card; false when nothing is shown. */
+  focus(): boolean
+  /**
+   * The document goes into bfcache: the UI and every wait go, but the run is
+   * not marked as ended here, since the worker gives it back when the
+   * document returns (ADR 0019).
+   */
+  suspend(): void
   readonly runId: string | undefined
+}
+
+/**
+ * What the card is doing for the step shown, on `data-state`:
+ * - `resolving`: the first look at the page;
+ * - `waiting`: the target is not there yet, or not yet the only match;
+ * - `anchored`: next to its target;
+ * - `regaining`: its target left; looked for again for a short grace period;
+ * - `off-page`: the step is on another page; waiting for the user to go there;
+ * - `shown`: on its own, for good (no target, or after the wait).
+ */
+type Phase = 'resolving' | 'waiting' | 'anchored' | 'regaining' | 'off-page' | 'shown'
+
+/** One showing of one step: everything it started stops with its controller. */
+interface View {
+  token: number
+  controller: AbortController
+  observer?: MutationObserver
+  /** The next throttled attempt, if one is scheduled. */
+  pending?: number
+  /** The end of the wait. */
+  deadline?: number
+  /** The latest outcome while waiting, for the descriptor's policy at the deadline. */
+  outcome: Resolution['outcome']
+  settling: boolean
 }
 
 interface Parts {
@@ -103,6 +186,9 @@ export function createPlayer(deps: PlayerDeps): Player {
   const document = window.document
   const rendered = deps.isRendered ?? isRendered
   const trusted = deps.isTrusted ?? ((event: Event) => event.isTrusted)
+  const modalOf = deps.modal ?? topModal
+  /** Still there, visible and reachable (not shut out by an open modal dialog). */
+  const usable = (element: Element) => isUsable(element, modalOf(document), rendered)
 
   /** The step shown; replaced (a new object) on every step change. */
   let current: { step: PlayerStep } | undefined
@@ -114,6 +200,11 @@ export function createPlayer(deps: PlayerDeps): Player {
   let anchor: Element | undefined
   let frame: number | undefined
   let renderToken = 0
+  let phase: Phase = 'resolving'
+  let view: View | undefined
+  /** The card took the focus (at start, or by the shortcut), and from where. */
+  let tookFocus = false
+  let returnFocus: Element | undefined
   const ended = new Set<string>()
 
   const viewport = () => ({ width: window.innerWidth, height: window.innerHeight })
@@ -246,16 +337,15 @@ export function createPlayer(deps: PlayerDeps): Player {
   function draw() {
     frame = undefined
     if (!current) return
-    if (anchor && !anchor.isConnected) {
-      // Gone mid-step (re-resolving it is Phase 6b): shown on its own, with a hint.
-      anchor = undefined
-      overlay.highlight(null)
-      hint = HINTS['not-found']
-      if (parts) parts.card.dataset.outcome = 'not-found'
-      fill(ensureParts(), current.step)
+    syncHost()
+    if (anchor && !usable(anchor) && view) {
+      loseAnchor(view)
+      return
     }
     if (!anchor) {
-      place(null)
+      // While a lost target is looked for again, the card stays where it was.
+      if (phase === 'regaining') overlay.showPlayerCard()
+      else place(null)
       return
     }
     const box = boxOf(anchor)
@@ -273,24 +363,31 @@ export function createPlayer(deps: PlayerDeps): Player {
     window[method]('resize', schedule, { capture: true, passive: true })
   }
 
-  /** Removes everything this player drew; the worker is told by the caller, if at all. */
-  function teardown() {
+  /**
+   * Removes everything this player drew; the worker is told by the caller, if
+   * at all. The run is marked as ended on this page unless `remember` is false.
+   */
+  function teardown(remember = true) {
     const shown = current
     renderToken += 1
+    stopView()
     current = undefined
     anchor = undefined
     hint = undefined
     busy = false
+    tookFocus = false
+    returnFocus = undefined
     if (frame !== undefined) window.cancelAnimationFrame(frame)
     frame = undefined
     track(false)
     overlay.highlight(null)
     overlay.hidePlayerCard()
-    if (shown) remember(shown.step.runId)
+    overlay.setContainer(null)
+    if (shown && remember) markEnded(shown.step.runId)
   }
 
   /** Marks a run as ended for good on this page (bounded). */
-  function remember(runId: string) {
+  function markEnded(runId: string) {
     ended.delete(runId)
     ended.add(runId)
     for (const oldest of ended) {
@@ -302,7 +399,14 @@ export function createPlayer(deps: PlayerDeps): Player {
   function end(reason: 'finished' | 'closed') {
     const shown = current
     if (!shown) return
+    // Given back only if the card took the focus and still has it.
+    const active = document.activeElement
+    const restore = tookFocus && active !== null && overlay.isOwn(active) ? returnFocus : undefined
     teardown()
+    // Only an element that can take the focus, and only if it is still on the page.
+    if (restore?.isConnected && 'focus' in restore) {
+      ;(restore as HTMLElement).focus({ preventScroll: true })
+    }
     void deps.send({ type: 'player.end', runId: shown.step.runId, reason })
   }
 
@@ -343,19 +447,196 @@ export function createPlayer(deps: PlayerDeps): Player {
     if (answer.error !== 'BAD_REQUEST') setHint(HINTS.unreachable)
   }
 
+  /** Stops the step being shown: its observer, its timers and any attempt in flight. */
+  function stopView() {
+    view?.controller.abort()
+    view = undefined
+  }
+
+  function newView(): View {
+    stopView()
+    const controller = new AbortController()
+    const next: View = {
+      token: ++renderToken,
+      controller,
+      outcome: 'not-found',
+      settling: false,
+    }
+    controller.signal.addEventListener('abort', () => {
+      next.observer?.disconnect()
+      if (next.pending !== undefined) window.clearTimeout(next.pending)
+      if (next.deadline !== undefined) window.clearTimeout(next.deadline)
+    })
+    view = next
+    return next
+  }
+
+  const live = (shown: View) => shown === view && !shown.controller.signal.aborted
+
+  /**
+   * Watches the document's light DOM for this step: one observer, and at most
+   * one `tick` per `CHECK_INTERVAL_MS` however many mutations come in.
+   */
+  function observe(shown: View) {
+    if (shown.observer || !live(shown)) return
+    const { MutationObserver } = window as Window & typeof globalThis
+    const observer = new MutationObserver(() => {
+      if (shown.pending !== undefined) return
+      shown.pending = window.setTimeout(() => {
+        shown.pending = undefined
+        if (live(shown)) tick(shown)
+      }, CHECK_INTERVAL_MS)
+    })
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    })
+    shown.observer = observer
+  }
+
+  /** Puts the overlay inside the open modal dialog, or back; true when it moved. */
+  function syncHost(): boolean {
+    return overlay.setContainer(modalOf(document))
+  }
+
+  function tick(shown: View) {
+    // A modal dialog opened or closed: the card goes with it and is drawn again.
+    if (syncHost()) schedule()
+    if (phase === 'waiting' || phase === 'regaining') void attempt(shown)
+    else if (phase === 'anchored') {
+      // The target may have left, or moved: check it and draw again.
+      if (anchor && !usable(anchor)) loseAnchor(shown)
+      else schedule()
+    }
+  }
+
+  /**
+   * The anchored target left: no highlight on where it was, and a short
+   * search from the descriptor for the element that replaced it.
+   */
+  function loseAnchor(shown: View) {
+    if (!live(shown) || phase !== 'anchored') return
+    anchor = undefined
+    overlay.highlight(null)
+    phase = 'regaining'
+    hint = HINTS.waiting
+    shown.outcome = 'not-found'
+    const target = ensureParts()
+    target.card.dataset.state = phase
+    target.card.dataset.outcome = 'not-found'
+    if (current) fill(target, current.step)
+    const limit = current?.step.target?.resolution.timeoutMs ?? 0
+    shown.deadline = window.setTimeout(
+      () => {
+        giveUp(shown)
+      },
+      Math.min(GRACE_MS, limit),
+    )
+    void attempt(shown)
+  }
+
+  /** One more look for the target while waiting; anchors it once it is safely there. */
+  async function attempt(shown: View) {
+    const step = current?.step
+    if (!step || shown.settling) return
+    const resolution = resolve(step)
+    if (resolution.outcome !== 'resolved' || !resolution.element) {
+      if (resolution.outcome === 'not-found' || resolution.outcome === 'ambiguous') {
+        shown.outcome = resolution.outcome
+        if (parts) parts.card.dataset.outcome = resolution.outcome
+      }
+      return
+    }
+    shown.settling = true
+    const element = await settle(resolution.element, shown.token)
+    shown.settling = false
+    if (!live(shown) || !element) return
+    anchorTo(shown, element)
+  }
+
+  /** The target is there and held still: highlight it and place the card next to it. */
+  function anchorTo(shown: View, element: Element) {
+    if (shown.deadline !== undefined) window.clearTimeout(shown.deadline)
+    shown.deadline = undefined
+    phase = 'anchored'
+    hint = undefined
+    const target = ensureParts()
+    target.card.dataset.state = phase
+    target.card.dataset.outcome = 'resolved'
+    delete target.card.dataset.occluded
+    if (current) fill(target, current.step)
+    if (!inView(boxOf(element), viewport())) {
+      element.scrollIntoView({
+        block: 'center',
+        inline: 'nearest',
+        behavior: reducedMotion() ? 'instant' : 'smooth',
+      })
+    }
+    if (occluded(element)) target.card.dataset.occluded = 'true'
+    anchor = element
+    // Watched while anchored too: a target that leaves is looked for again.
+    observe(shown)
+    draw()
+  }
+
+  /**
+   * The wait is over without a safe target: the descriptor's policy for the
+   * last outcome (on its own with a hint, skip the way the user was going, or
+   * end the guide).
+   */
+  function giveUp(shown: View) {
+    shown.deadline = undefined
+    const step = current?.step
+    if (!step || !live(shown)) return
+    if (phase === 'regaining') {
+      showOnItsOwn(shown, 'not-found', HINTS['not-found'])
+      return
+    }
+    if (phase !== 'waiting') return
+    const outcome = shown.outcome === 'ambiguous' ? 'ambiguous' : 'not-found'
+    const policy =
+      outcome === 'ambiguous'
+        ? step.target?.resolution.onAmbiguous
+        : step.target?.resolution.onNotFound
+    if (policy === 'end') {
+      end('closed')
+      overlay.showToast(ENDED_TEXT)
+      return
+    }
+    showOnItsOwn(shown, outcome, HINTS[outcome])
+    if (policy === 'skip' && canGo(step, lastDirection)) void go(lastDirection)
+  }
+
+  /** The card on its own, for good, with a hint (or none for a step without a target). */
+  function showOnItsOwn(shown: View, outcome: Resolution['outcome'], text: string | undefined) {
+    if (!live(shown)) return
+    phase = 'shown'
+    hint = text
+    const target = ensureParts()
+    target.card.dataset.state = phase
+    target.card.dataset.outcome = outcome
+    if (current) fill(target, current.step)
+    // Still watched, though nothing is looked for: a modal dialog may open.
+    observe(shown)
+    draw()
+  }
+
   function resolve(step: PlayerStep): Resolution {
     try {
       return resolveTarget(step.target, stepPagePattern(step.urlPattern, step.target), {
         document,
         href: window.location.href,
         isRendered: rendered,
+        modal: modalOf(document),
       })
     } catch {
       // A malformed descriptor fails closed: never a guess.
       return {
         outcome: 'unsupported',
         reason: 'invalid-target',
-        diagnostics: { strategies: {}, rendered: 0, vetoed: 0, top: [] },
+        diagnostics: { strategies: {}, rendered: 0, vetoed: 0, blocked: 0, top: [] },
       }
     }
   }
@@ -384,72 +665,77 @@ export function createPlayer(deps: PlayerDeps): Player {
     return hit !== null && hit !== element && !element.contains(hit) && !overlay.isOwn(hit)
   }
 
-  /** Takes the focus for the card only when the page has none (never from a field). */
-  function focusIfIdle(target: Parts) {
-    const active = document.activeElement
-    if (active === null || active === document.body || active === document.documentElement) {
-      target.title.focus({ preventScroll: true })
-    }
+  /** The card's title takes the focus; `from` is where to give it back later. */
+  function takeFocus(target: Parts, from: Element | null) {
+    returnFocus = from ?? undefined
+    target.title.focus({ preventScroll: true })
+    tookFocus = true
   }
 
-  async function render(shown: { step: PlayerStep }, first: boolean) {
-    const token = ++renderToken
-    const { step } = shown
+  const idle = (active: Element | null) =>
+    active === null || active === document.body || active === document.documentElement
+
+  /** Takes the focus for the card only when the page has none (never from a field). */
+  function focusIfIdle(target: Parts) {
+    if (idle(document.activeElement)) takeFocus(target, null)
+  }
+
+  async function render(showing: { step: PlayerStep }, first: boolean) {
+    const shown = newView()
+    const { step } = showing
     anchor = undefined
     hint = undefined
+    phase = 'resolving'
     overlay.highlight(null)
-    fill(ensureParts(), step)
-
-    let resolution = resolve(step)
-    let element = resolution.outcome === 'resolved' ? resolution.element : undefined
-    if (element) {
-      element = await settle(element, token)
-      if (token !== renderToken) return
-      if (!element) resolution = { ...resolution, outcome: 'not-found', reason: 'unstable' }
-    }
     const target = ensureParts()
-    let skip = false
-    target.card.dataset.outcome = resolution.outcome
+    fill(target, step)
     target.card.dataset.step = String(step.index)
+    target.card.dataset.state = phase
     delete target.card.dataset.occluded
 
+    const resolution = resolve(step)
+    shown.outcome = resolution.outcome
+    target.card.dataset.outcome = resolution.outcome
+    let element = resolution.outcome === 'resolved' ? resolution.element : undefined
     if (element) {
-      if (!inView(boxOf(element), viewport())) {
-        element.scrollIntoView({
-          block: 'center',
-          inline: 'nearest',
-          behavior: reducedMotion() ? 'instant' : 'smooth',
-        })
-      }
-      if (occluded(element)) target.card.dataset.occluded = 'true'
-      anchor = element
-    } else if (resolution.outcome !== 'none' && resolution.outcome !== 'resolved') {
-      const policy =
-        resolution.outcome === 'ambiguous'
-          ? step.target?.resolution.onAmbiguous
-          : resolution.outcome === 'not-found'
-            ? step.target?.resolution.onNotFound
-            : 'show-unanchored'
-      if (policy === 'end') {
-        end('closed')
-        overlay.showToast(ENDED_TEXT)
-        return
-      }
-      hint = HINTS[resolution.outcome]
-      fill(target, step)
-      skip = policy === 'skip' && canGo(step, lastDirection)
+      element = await settle(element, shown.token)
+      if (!live(shown)) return
     }
     track(true)
-    draw()
+    if (element) {
+      anchorTo(shown, element)
+    } else if (resolution.outcome === 'none') {
+      showOnItsOwn(shown, 'none', undefined)
+    } else if (resolution.outcome === 'unsupported') {
+      showOnItsOwn(shown, 'unsupported', HINTS.unsupported)
+    } else if (resolution.outcome === 'wrong-page') {
+      // Waits for the user to navigate there (`urlChanged`); never skipped or ended.
+      showOnItsOwn(shown, 'wrong-page', HINTS['wrong-page'])
+      phase = 'off-page'
+      target.card.dataset.state = phase
+    } else {
+      // Not there yet, not yet the only match, or not holding still: wait,
+      // within the descriptor's limit, then apply its policy.
+      if (resolution.outcome === 'resolved') shown.outcome = 'not-found'
+      phase = 'waiting'
+      hint = HINTS.waiting
+      target.card.dataset.state = phase
+      target.card.dataset.outcome = shown.outcome
+      fill(target, step)
+      draw()
+      observe(shown)
+      shown.deadline = window.setTimeout(() => {
+        giveUp(shown)
+      }, step.target?.resolution.timeoutMs ?? 0)
+    }
+    if (!live(shown)) return
     if (first) focusIfIdle(target)
     // Announced a frame after the card is shown, so a newly shown region is heard.
     void nextFrame().then(() => {
-      if (token === renderToken) {
+      if (live(shown)) {
         target.live.textContent = `Step ${String(step.index + 1)} of ${String(step.count)}: ${step.title}`
       }
     })
-    // The descriptor asked to skip a step that cannot be shown, the way the user was going.
-    if (skip) void go(lastDirection)
   }
 
   return {
@@ -467,10 +753,39 @@ export function createPlayer(deps: PlayerDeps): Player {
     hide(runId) {
       // Fail closed: a hide that arrives before its show still ends the run here.
       if (current?.step.runId === runId) teardown()
-      else remember(runId)
+      else markEnded(runId)
     },
     stop() {
       teardown()
+    },
+    suspend() {
+      teardown(false)
+    },
+    focus() {
+      if (!current) return false
+      const active = document.activeElement
+      const target = ensureParts()
+      overlay.showPlayerCard()
+      // Already in the card: nothing to remember.
+      if (active !== null && overlay.isOwn(active)) target.title.focus({ preventScroll: true })
+      else takeFocus(target, idle(active) ? null : active)
+      return true
+    },
+    urlChanged() {
+      const showing = current
+      if (!showing) return
+      const { step } = showing
+      // Still anchored to a target that still belongs here: nothing to redo.
+      if (
+        phase === 'anchored' &&
+        anchor &&
+        usable(anchor) &&
+        matchPage(stepPagePattern(step.urlPattern, step.target), window.location.href) === 'match'
+      ) {
+        schedule()
+        return
+      }
+      void render(showing, false)
     },
     get runId() {
       return current?.step.runId

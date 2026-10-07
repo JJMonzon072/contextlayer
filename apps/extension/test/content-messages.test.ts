@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import { captureTarget } from '../src/content/capture/descriptor'
-import { readContentRequest, readHelloAnswer, readStepAnswer } from '../src/content/messages'
+import {
+  readContentRequest,
+  readHelloAnswer,
+  readResumeAnswer,
+  readStepAnswer,
+} from '../src/content/messages'
 import {
   contentRequestSchema,
   helloResultSchema,
+  playerResumeResultSchema,
   playerStepResultSchema,
 } from '../src/messaging/protocol'
 
@@ -123,6 +129,22 @@ describe('content-script message readers', () => {
     }
   })
 
+  it('read a resume answer like playerResumeResultSchema', () => {
+    const answers: unknown[] = [
+      ...playerSteps().map((data) => ({ ok: true, data })),
+      { ok: true, data: null },
+      { ok: true },
+      { ok: false, error: { code: 'STALE', message: 'The connection ended.' } },
+      { ok: 'true', data: null },
+      null,
+    ]
+    for (const value of answers) {
+      const parsed = playerResumeResultSchema.safeParse(value)
+      const expected = parsed.success && parsed.data.ok ? parsed.data.data : undefined
+      expect(readResumeAnswer(value), JSON.stringify(value)).toEqual(expected)
+    }
+  })
+
   it('check only the outline of a target, which the worker validated in full', () => {
     // The worker is the only sender of player.show and parses the snapshot
     // with the shared schema; below the outline the resolver fails closed.
@@ -218,5 +240,7 @@ function playerRequests(): unknown[] {
     { type: 'player.hide' },
     { type: 'player.hide', runId: RUN, step: 1 },
     { type: 'player.go', runId: RUN, generation: 1, direction: 'next' },
+    { type: 'player.focus' },
+    { type: 'player.focus', runId: RUN },
   ]
 }

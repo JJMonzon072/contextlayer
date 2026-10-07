@@ -45,11 +45,19 @@ async function freePort(): Promise<number> {
   return address.port
 }
 
-/** Starts Chromium on `profile`; call again with the same profile to "restart the browser". */
-export async function launchBrowser(profile: string): Promise<ExtensionBrowser> {
+/**
+ * Starts Chromium on `profile`; call again with the same profile to "restart
+ * the browser". `bfcache`: Playwright launches Chromium with
+ * `--disable-back-forward-cache`; the bfcache scenarios launch it without.
+ */
+export async function launchBrowser(
+  profile: string,
+  options: { bfcache?: boolean } = {},
+): Promise<ExtensionBrowser> {
   const port = await freePort()
   const context = await chromium.launchPersistentContext(profile, {
     channel: 'chromium',
+    ...(options.bfcache && { ignoreDefaultArgs: ['--disable-back-forward-cache'] }),
     args: [
       `--disable-extensions-except=${E2E_OUT_DIR}`,
       `--load-extension=${E2E_OUT_DIR}`,
@@ -126,6 +134,8 @@ export async function openPopupTab(context: BrowserContext, extensionId: string)
 }
 
 interface Fixtures {
+  /** Launch Chromium with the back/forward cache on (off by default under Playwright). */
+  bfcache: boolean
   profile: string
   extensionBrowser: ExtensionBrowser
   context: BrowserContext
@@ -134,14 +144,15 @@ interface Fixtures {
 }
 
 export const test = base.extend<Fixtures>({
+  bfcache: [false, { option: true }],
   // eslint-disable-next-line no-empty-pattern -- Playwright requires the destructuring pattern.
   profile: async ({}, use) => {
     const profile = await mkdtemp(join(tmpdir(), 'contextlayer-e2e-'))
     await use(profile)
     await rm(profile, { recursive: true, force: true })
   },
-  extensionBrowser: async ({ profile }, use) => {
-    const launched = await launchBrowser(profile)
+  extensionBrowser: async ({ profile, bfcache }, use) => {
+    const launched = await launchBrowser(profile, { bfcache })
     await use(launched)
     await launched.close()
   },
