@@ -41,6 +41,10 @@ import { inView, placeCard, type Box } from './position'
  * with a hint. Losing a target the user was shown never skips or ends the
  * guide: the user may just have used it.
  *
+ * Modal dialogs (ADR 0019): while one is open, the overlay lives inside it, so
+ * the card is on top and can take the focus; it moves back when the dialog
+ * closes. Targets behind the dialog are never accepted (ADR 0014).
+ *
  * Navigation (ADR 0019): when the URL changes in this document (`urlChanged`),
  * the current step is shown again for the new URL; a step whose page pattern
  * does not match waits there for the user to navigate (`off-page`), never
@@ -325,6 +329,7 @@ export function createPlayer(deps: PlayerDeps): Player {
   function draw() {
     frame = undefined
     if (!current) return
+    syncHost()
     if (anchor && !usable(anchor) && view) {
       loseAnchor(view)
       return
@@ -367,6 +372,7 @@ export function createPlayer(deps: PlayerDeps): Player {
     track(false)
     overlay.highlight(null)
     overlay.hidePlayerCard()
+    overlay.setContainer(null)
     if (shown && remember) markEnded(shown.step.runId)
   }
 
@@ -473,7 +479,14 @@ export function createPlayer(deps: PlayerDeps): Player {
     shown.observer = observer
   }
 
+  /** Puts the overlay inside the open modal dialog, or back; true when it moved. */
+  function syncHost(): boolean {
+    return overlay.setContainer(modalOf(document))
+  }
+
   function tick(shown: View) {
+    // A modal dialog opened or closed: the card goes with it and is drawn again.
+    if (syncHost()) schedule()
     if (phase === 'waiting' || phase === 'regaining') void attempt(shown)
     else if (phase === 'anchored') {
       // The target may have left, or moved: check it and draw again.
@@ -588,6 +601,8 @@ export function createPlayer(deps: PlayerDeps): Player {
     target.card.dataset.state = phase
     target.card.dataset.outcome = outcome
     if (current) fill(target, current.step)
+    // Still watched, though nothing is looked for: a modal dialog may open.
+    observe(shown)
     draw()
   }
 

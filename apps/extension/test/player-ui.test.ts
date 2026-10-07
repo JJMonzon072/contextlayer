@@ -117,7 +117,7 @@ function noWait(target: TargetDescriptor): TargetDescriptor {
 }
 
 /** An overlay that records what it draws, with the card in a closed shadow root like ours. */
-function setup(options: { trusted?: boolean } = {}) {
+function setup(options: { trusted?: boolean; modal?: () => Element | null } = {}) {
   const host = document.createElement('div')
   host.setAttribute('data-test-host', '')
   document.documentElement.append(host)
@@ -126,6 +126,9 @@ function setup(options: { trusted?: boolean } = {}) {
   card.setAttribute('role', 'dialog')
   root.append(card)
   let open = false
+  /** Where the overlay was asked to live (null: documentElement). */
+  let container: Element | null = null
+  let moves = 0
   const highlights: (HighlightRect | null)[] = []
   const toasts: string[] = []
   const overlay: Overlay = {
@@ -142,6 +145,14 @@ function setup(options: { trusted?: boolean } = {}) {
     hidePlayerCard: () => {
       open = false
     },
+    setContainer: (next) => {
+      if (next === container) return false
+      container = next
+      moves += 1
+      // Moving the host closes its popovers.
+      open = false
+      return true
+    },
   }
   const sent: Record<string, unknown>[] = []
   let reply: (message: Record<string, unknown>) => unknown = () => ({
@@ -157,6 +168,7 @@ function setup(options: { trusted?: boolean } = {}) {
     },
     isRendered,
     ...(options.trusted !== false && { isTrusted: () => true }),
+    ...(options.modal && { modal: options.modal }),
   })
   const part = (selector: string) => {
     const found = card.querySelector<HTMLElement>(selector)
@@ -171,6 +183,8 @@ function setup(options: { trusted?: boolean } = {}) {
     highlights,
     toasts,
     isOpen: () => open,
+    container: () => container,
+    moves: () => moves,
     part,
     text: (selector: string) => part(selector).textContent,
     button: (name: string) => {
@@ -534,6 +548,7 @@ describe('waiting for a target (Phase 6b)', () => {
         playerCard: () => card,
         showPlayerCard: vi.fn(),
         hidePlayerCard: vi.fn(),
+        setContainer: vi.fn(() => false),
       },
       send: () => Promise.resolve({ ok: true, data: { done: true } }),
       isRendered: (element) => {
@@ -572,7 +587,11 @@ describe('waiting for a target (Phase 6b)', () => {
     await run(0)
     expect(framed.card.dataset.state).toBe('shown')
     expect(framed.card.dataset.outcome).toBe('unsupported')
-    expect(observing).toBe(0)
+    // Watched only for modal dialogs: the page changing never makes it look again.
+    expect(observing).toBe(1)
+    document.querySelector('main')?.setAttribute('data-changed', 'yes')
+    await run(CHECK_INTERVAL_MS * 2)
+    expect(framed.card.dataset.state).toBe('shown')
   })
 
   /** Shows a step anchored to `#new` and returns it. */
@@ -687,7 +706,6 @@ describe('waiting for a target (Phase 6b)', () => {
     expect(ui.card.dataset.state).toBe('off-page')
     expect(ui.text('.hint')).toBe(HINTS['wrong-page'])
     expect(ui.text('.hint')).not.toContain('/customers')
-    expect(observing).toBe(0)
 
     // The application changes its route (pushState), the page reports it.
     history.pushState(null, '', '/customers/new')
@@ -733,7 +751,8 @@ describe('waiting for a target (Phase 6b)', () => {
     await run(target.resolution.timeoutMs)
 
     expect(ui.card.dataset.state).toBe('off-page')
-    expect(observing).toBe(0)
+    // The wait's observer was replaced, not added to.
+    expect(observing).toBe(1)
     // The old wait's deadline did not apply any policy.
     expect(ui.isOpen()).toBe(true)
   })
@@ -786,6 +805,67 @@ describe('waiting for a target (Phase 6b)', () => {
     expect(ui.isOpen()).toBe(false)
   })
 
+  /** The modal dialog jsdom cannot show: an open `<dialog>` stands for it. */
+  const openModal = () => document.querySelector('dialog[open]')
+
+  it('moves the card into a modal dialog that opens, and back when it closes', async () => {
+    const ui = setup({ modal: openModal })
+    ui.player.show(step(0))
+    await run(0)
+    expect(ui.container()).toBeNull()
+
+    const dialog = document.createElement('dialog')
+    dialog.setAttribute('open', '')
+    dialog.textContent = 'Confirm'
+    document.body.append(dialog)
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.container()).toBe(dialog)
+    // Moving closed the popover; it was shown again on top.
+    expect(ui.isOpen()).toBe(true)
+
+    dialog.removeAttribute('open')
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.container()).toBeNull()
+    expect(ui.isOpen()).toBe(true)
+  })
+
+  it('anchors the target inside an open modal dialog, never its copy behind it', async () => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `<div role="dialog" aria-label="Customer"><button type="button">Save</button></div>
+       <dialog open aria-label="Customer"><button type="button">Save</button></dialog>`,
+    )
+    const target = capture('dialog button')
+    const ui = setup({ modal: openModal })
+
+    ui.player.show(step(0, { target }))
+    await run(0)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.container()).toBe(document.querySelector('dialog'))
+  })
+
+  it('looks again for a target a modal dialog shuts out, and anchors it when it closes', async () => {
+    const ui = setup({ modal: openModal })
+    await anchoredOnNew(ui)
+
+    const dialog = document.createElement('dialog')
+    dialog.setAttribute('open', '')
+    dialog.textContent = 'Are you sure?'
+    document.body.append(dialog)
+    await run(CHECK_INTERVAL_MS + 50)
+    expect(ui.card.dataset.state).toBe('regaining')
+    expect(ui.highlights.at(-1)).toBeNull()
+
+    dialog.remove()
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.container()).toBeNull()
+  })
+
   it('stops observing when the step changes, the guide ends, is hidden or stops', async () => {
     const target = capture('#new')
     document.querySelector('#new')?.remove()
@@ -799,9 +879,6 @@ describe('waiting for a target (Phase 6b)', () => {
       (ui) => {
         ui.player.stop()
       },
-      (ui) => {
-        ui.player.show(step(0, { runId: OTHER_RUN }))
-      },
     ]
     for (const finish of cases) {
       const ui = setup()
@@ -813,6 +890,16 @@ describe('waiting for a target (Phase 6b)', () => {
       expect(observing).toBe(0)
       ui.player.stop()
     }
+
+    // Another run replaces this one: its observer is the only one left.
+    const replaced = setup()
+    replaced.player.show(step(0, { target }))
+    await run(0)
+    replaced.player.show(step(0, { runId: OTHER_RUN }))
+    await run(0)
+    expect(observing).toBe(1)
+    replaced.player.stop()
+    expect(observing).toBe(0)
 
     // Next: the next step's wait replaces this one.
     const ui = setup()
