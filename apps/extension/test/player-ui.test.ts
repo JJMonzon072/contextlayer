@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { captureTarget } from '../src/content/capture/descriptor'
 import type { HighlightRect, Overlay } from '../src/content/overlay'
-import { createPlayer, ENDED_TEXT, HINTS, STALE_TEXT } from '../src/content/player/player'
+import {
+  CHECK_INTERVAL_MS,
+  createPlayer,
+  ENDED_TEXT,
+  HINTS,
+  STALE_TEXT,
+} from '../src/content/player/player'
 import type { PlayerStep } from '../src/messaging/protocol'
 
 /**
@@ -102,6 +108,11 @@ function step(index: number, overrides: Partial<PlayerStep> = {}): PlayerStep {
     placement: 'auto',
     ...overrides,
   }
+}
+
+/** The same target, with a descriptor that does not wait (`timeoutMs: 0`). */
+function noWait(target: TargetDescriptor): TargetDescriptor {
+  return { ...target, resolution: { ...target.resolution, timeoutMs: 0 } }
 }
 
 /** An overlay that records what it draws, with the card in a closed shadow root like ours. */
@@ -214,7 +225,7 @@ describe('showing a step', () => {
 
   it('never anchors an ambiguous target, and says why', async () => {
     const ui = setup()
-    const target = capture('#rows li:nth-of-type(2) button')
+    const target = noWait(capture('#rows li:nth-of-type(2) button'))
 
     ui.player.show(step(0, { target }))
     await settle()
@@ -227,7 +238,7 @@ describe('showing a step', () => {
 
   it('shows a target that is not on the page on its own, with a hint', async () => {
     const ui = setup()
-    const target = capture('#new')
+    const target = noWait(capture('#new'))
     document.querySelector('#new')?.remove()
 
     ui.player.show(step(0, { target }))
@@ -263,7 +274,7 @@ describe('showing a step', () => {
 
   it('does not anchor a target that disappears before it holds still', async () => {
     const ui = setup()
-    const target = capture('#new')
+    const target = noWait(capture('#new'))
 
     ui.player.show(step(0, { target }))
     document.querySelector('#new')?.remove()
@@ -275,7 +286,7 @@ describe('showing a step', () => {
 
   it('never anchors a target that keeps moving, and shows the step on its own', async () => {
     const ui = setup()
-    const target = capture('#new')
+    const target = noWait(capture('#new'))
     const moving = document.querySelector('#new')
     if (!moving) throw new Error('no button')
     let x = 0
@@ -353,6 +364,254 @@ describe('showing a step', () => {
 
     expect(ui.card.dataset.occluded).toBe('true')
     expect(ui.anchored()).toBe(true)
+  })
+})
+
+describe('waiting for a target (Phase 6b)', () => {
+  /** Observers the player started and has not disconnected. */
+  let observing = 0
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    observing = 0
+    // The originals, called with the observer as `this` below.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { observe, disconnect } = MutationObserver.prototype
+    vi.spyOn(MutationObserver.prototype, 'observe').mockImplementation(function (
+      this: MutationObserver,
+      ...args: Parameters<MutationObserver['observe']>
+    ) {
+      observing += 1
+      observe.apply(this, args)
+    })
+    vi.spyOn(MutationObserver.prototype, 'disconnect').mockImplementation(function (
+      this: MutationObserver,
+    ) {
+      observing -= 1
+      disconnect.apply(this)
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Lets `ms` of (fake) time pass, with frames, mutation callbacks and answers. */
+  async function run(ms: number) {
+    for (let elapsed = 0; elapsed < ms; elapsed += 25) {
+      runFrames()
+      await vi.advanceTimersByTimeAsync(Math.min(25, ms - elapsed))
+    }
+    for (let round = 0; round < 6; round += 1) {
+      runFrames()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+  }
+
+  const newCustomer = () => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.id = 'new'
+    button.dataset.testid = 'new-customer'
+    button.textContent = 'New customer'
+    return button
+  }
+
+  it('waits for a target that appears late, then anchors it', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    document.querySelector('#new')?.remove()
+
+    ui.player.show(step(0, { target }))
+    await run(0)
+    expect(ui.card.dataset.state).toBe('waiting')
+    expect(ui.text('.hint')).toBe(HINTS.waiting)
+    expect(ui.anchored()).toBe(false)
+
+    await run(500)
+    document.querySelector('main')?.append(newCustomer())
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.card.dataset.outcome).toBe('resolved')
+    expect(ui.part('.hint').hidden).toBe(true)
+    expect(ui.anchored()).toBe(true)
+  })
+
+  it('still anchors a target that appears just before the limit', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    document.querySelector('#new')?.remove()
+
+    ui.player.show(step(0, { target }))
+    await run(target.resolution.timeoutMs - 400)
+    document.querySelector('main')?.append(newCustomer())
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+  })
+
+  it('gives up at the limit, applies the policy and stops observing', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    document.querySelector('#new')?.remove()
+
+    ui.player.show(step(0, { target }))
+    await run(target.resolution.timeoutMs - 50)
+    expect(ui.card.dataset.state).toBe('waiting')
+    await run(100)
+
+    expect(ui.card.dataset.state).toBe('shown')
+    expect(ui.card.dataset.outcome).toBe('not-found')
+    expect(ui.text('.hint')).toBe(HINTS['not-found'])
+    // A target arriving after the limit is not looked for any more.
+    document.querySelector('main')?.append(newCustomer())
+    await run(CHECK_INTERVAL_MS * 2)
+    expect(ui.anchored()).toBe(false)
+  })
+
+  it('uses the limit the descriptor stores', async () => {
+    const ui = setup()
+    const captured = capture('#new')
+    const target = { ...captured, resolution: { ...captured.resolution, timeoutMs: 1_000 } }
+    document.querySelector('#new')?.remove()
+
+    ui.player.show(step(0, { target }))
+    await run(950)
+    expect(ui.card.dataset.state).toBe('waiting')
+    await run(100)
+
+    expect(ui.card.dataset.state).toBe('shown')
+  })
+
+  it('anchors an ambiguous target once the page leaves a single match', async () => {
+    const ui = setup()
+    const target = capture('#rows li:nth-of-type(2) button')
+
+    ui.player.show(step(0, { target }))
+    await run(0)
+    expect(ui.card.dataset.state).toBe('waiting')
+    expect(ui.card.dataset.outcome).toBe('ambiguous')
+
+    document.querySelector('#rows li:nth-of-type(1)')?.remove()
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.anchored()).toBe(true)
+  })
+
+  it('applies the ambiguity policy when the page stays ambiguous', async () => {
+    const ui = setup()
+    const target = capture('#rows li:nth-of-type(2) button')
+
+    ui.player.show(step(0, { target }))
+    await run(target.resolution.timeoutMs + 100)
+
+    expect(ui.card.dataset.state).toBe('shown')
+    expect(ui.card.dataset.outcome).toBe('ambiguous')
+    expect(ui.text('.hint')).toBe(HINTS.ambiguous)
+    expect(ui.highlights.every((rect) => rect === null)).toBe(true)
+  })
+
+  it('looks again at most once per interval, however many mutations come in', async () => {
+    let looks = 0
+    const host = document.createElement('div')
+    host.setAttribute('data-test-host', '')
+    document.documentElement.append(host)
+    const card = document.createElement('div')
+    host.attachShadow({ mode: 'closed' }).append(card)
+    const player = createPlayer({
+      window,
+      overlay: {
+        showToast: vi.fn(),
+        highlight: vi.fn(),
+        banner: vi.fn(),
+        callout: vi.fn(),
+        isOwn: () => false,
+        destroy: vi.fn(),
+        playerCard: () => card,
+        showPlayerCard: vi.fn(),
+        hidePlayerCard: vi.fn(),
+      },
+      send: () => Promise.resolve({ ok: true, data: { done: true } }),
+      isRendered: (element) => {
+        looks += 1
+        return isRendered(element)
+      },
+      isTrusted: () => true,
+    })
+    const target = capture('#new')
+    document.querySelector('#new')?.setAttribute('hidden', '')
+    player.show(step(0, { target }))
+    await run(0)
+    const before = looks
+
+    // Forty mutations within one interval.
+    for (let index = 0; index < 40; index += 1) {
+      document.querySelector('main')?.setAttribute('data-tick', String(index))
+      await vi.advanceTimersByTimeAsync(2)
+    }
+    await run(CHECK_INTERVAL_MS)
+
+    // The first showing made one attempt (`before` checks); forty mutations make one more.
+    expect(looks - before).toBe(before)
+    player.stop()
+  })
+
+  it('never waits for a step without a target, nor for one it cannot reach', async () => {
+    const none = setup()
+    none.player.show(step(0))
+    await run(0)
+    expect(none.card.dataset.state).toBe('shown')
+    none.player.stop()
+
+    const framed = setup()
+    framed.player.show(step(0, { target: { ...capture('#new'), framePath: [{ index: 0 }] } }))
+    await run(0)
+    expect(framed.card.dataset.state).toBe('shown')
+    expect(framed.card.dataset.outcome).toBe('unsupported')
+    expect(observing).toBe(0)
+  })
+
+  it('stops observing when the step changes, the guide ends, is hidden or stops', async () => {
+    const target = capture('#new')
+    document.querySelector('#new')?.remove()
+    const cases: ((ui: ReturnType<typeof setup>) => void)[] = [
+      (ui) => {
+        ui.button('Close guide').click()
+      },
+      (ui) => {
+        ui.player.hide(RUN)
+      },
+      (ui) => {
+        ui.player.stop()
+      },
+      (ui) => {
+        ui.player.show(step(0, { runId: OTHER_RUN }))
+      },
+    ]
+    for (const finish of cases) {
+      const ui = setup()
+      ui.player.show(step(0, { target }))
+      await run(0)
+      expect(observing).toBe(1)
+      finish(ui)
+      await run(0)
+      expect(observing).toBe(0)
+      ui.player.stop()
+    }
+
+    // Next: the next step's wait replaces this one.
+    const ui = setup()
+    ui.replyWith(() => ({ ok: true, data: step(1, { target }) }))
+    ui.player.show(step(0, { target }))
+    await run(0)
+    ui.button('Next').click()
+    await run(0)
+    expect(observing).toBe(1)
+    expect(ui.text('.progress')).toBe('Step 2 of 3')
+    ui.player.stop()
+    expect(observing).toBe(0)
   })
 })
 
@@ -491,7 +750,7 @@ describe('moving through the guide', () => {
 
   it('skips a step whose target cannot be shown when the descriptor says so', async () => {
     const ui = setup()
-    const target = capture('#new')
+    const target = noWait(capture('#new'))
     document.querySelector('#new')?.remove()
     const skipping = {
       ...target,
@@ -506,7 +765,7 @@ describe('moving through the guide', () => {
 
   it('ends the guide when the descriptor says so', async () => {
     const ui = setup()
-    const target = capture('#new')
+    const target = noWait(capture('#new'))
     document.querySelector('#new')?.remove()
     const ending = { ...target, resolution: { ...target.resolution, onNotFound: 'end' as const } }
 

@@ -5,8 +5,8 @@ import { isRendered, resolveTarget, stepPagePattern, type Resolution } from '../
 import { inView, placeCard, type Box } from './position'
 
 /**
- * The Guide Player on the page (Phase 6a): one step of one run at a time, in
- * the isolated overlay (ADR 0013). The worker decides which step is shown;
+ * The Guide Player on the page (Phases 6a and 6b): one step of one run at a
+ * time, in the isolated overlay (ADR 0013). The worker decides which step is shown;
  * this module resolves its target (ADR 0014), highlights it and shows the
  * card, and sends Previous / Next / Finish / Close back as requests about the
  * run and generation it shows. It never clicks, types or acts on the page:
@@ -18,6 +18,13 @@ import { inView, placeCard, type Box } from './position'
  * the page has it (never from a field the user is typing in), never traps
  * it, and Escape closes the guide only when the focus is inside the card.
  * There is no animation, and scrolling is instant under reduced motion.
+ *
+ * Dynamic pages (Phase 6b, ADR 0014): a target that is not there yet, or not
+ * yet the only match, is waited for. While a step is shown, one
+ * `MutationObserver` watches the document's light DOM; at most one attempt
+ * runs per `CHECK_INTERVAL_MS`, until the descriptor's `timeoutMs`, and every
+ * observer and timer of a step is released with its `AbortController` when
+ * the step changes or the guide ends, is hidden or stops.
  */
 
 export const HINTS = {
@@ -25,8 +32,12 @@ export const HINTS = {
   ambiguous: 'More than one element matches this step, so none is highlighted.',
   'wrong-page': 'This step is on another page of this site.',
   unsupported: "ContextLayer can't point at this step's element on this page yet.",
+  waiting: "Looking for this step's element…",
   unreachable: "ContextLayer couldn't be reached. Try again.",
 } as const
+
+/** At most one resolution attempt per this many milliseconds while waiting (ADR 0014: ~150 ms). */
+export const CHECK_INTERVAL_MS = 150
 
 export const ENDED_TEXT = 'This guide ended: a step could not be shown on this page.'
 export const STALE_TEXT = 'This guide is no longer playing.'
@@ -73,6 +84,29 @@ export interface Player {
   readonly runId: string | undefined
 }
 
+/**
+ * What the card is doing for the step shown, on `data-state`:
+ * - `resolving`: the first look at the page;
+ * - `waiting`: the target is not there yet, or not yet the only match;
+ * - `anchored`: next to its target;
+ * - `shown`: on its own, for good (no target, or after the wait).
+ */
+type Phase = 'resolving' | 'waiting' | 'anchored' | 'shown'
+
+/** One showing of one step: everything it started stops with its controller. */
+interface View {
+  token: number
+  controller: AbortController
+  observer?: MutationObserver
+  /** The next throttled attempt, if one is scheduled. */
+  pending?: number
+  /** The end of the wait. */
+  deadline?: number
+  /** The latest outcome while waiting, for the descriptor's policy at the deadline. */
+  outcome: Resolution['outcome']
+  settling: boolean
+}
+
 interface Parts {
   card: HTMLElement
   context: HTMLElement
@@ -114,6 +148,8 @@ export function createPlayer(deps: PlayerDeps): Player {
   let anchor: Element | undefined
   let frame: number | undefined
   let renderToken = 0
+  let phase: Phase = 'resolving'
+  let view: View | undefined
   const ended = new Set<string>()
 
   const viewport = () => ({ width: window.innerWidth, height: window.innerHeight })
@@ -277,6 +313,7 @@ export function createPlayer(deps: PlayerDeps): Player {
   function teardown() {
     const shown = current
     renderToken += 1
+    stopView()
     current = undefined
     anchor = undefined
     hint = undefined
@@ -343,6 +380,136 @@ export function createPlayer(deps: PlayerDeps): Player {
     if (answer.error !== 'BAD_REQUEST') setHint(HINTS.unreachable)
   }
 
+  /** Stops the step being shown: its observer, its timers and any attempt in flight. */
+  function stopView() {
+    view?.controller.abort()
+    view = undefined
+  }
+
+  function newView(): View {
+    stopView()
+    const controller = new AbortController()
+    const next: View = {
+      token: ++renderToken,
+      controller,
+      outcome: 'not-found',
+      settling: false,
+    }
+    controller.signal.addEventListener('abort', () => {
+      next.observer?.disconnect()
+      if (next.pending !== undefined) window.clearTimeout(next.pending)
+      if (next.deadline !== undefined) window.clearTimeout(next.deadline)
+    })
+    view = next
+    return next
+  }
+
+  const live = (shown: View) => shown === view && !shown.controller.signal.aborted
+
+  /**
+   * Watches the document's light DOM for this step: one observer, and at most
+   * one `tick` per `CHECK_INTERVAL_MS` however many mutations come in.
+   */
+  function observe(shown: View) {
+    if (shown.observer || !live(shown)) return
+    const { MutationObserver } = window as Window & typeof globalThis
+    const observer = new MutationObserver(() => {
+      if (shown.pending !== undefined) return
+      shown.pending = window.setTimeout(() => {
+        shown.pending = undefined
+        if (live(shown)) tick(shown)
+      }, CHECK_INTERVAL_MS)
+    })
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    })
+    shown.observer = observer
+  }
+
+  function tick(shown: View) {
+    if (phase === 'waiting') void attempt(shown)
+  }
+
+  /** One more look for the target while waiting; anchors it once it is safely there. */
+  async function attempt(shown: View) {
+    const step = current?.step
+    if (!step || shown.settling) return
+    const resolution = resolve(step)
+    if (resolution.outcome !== 'resolved' || !resolution.element) {
+      if (resolution.outcome === 'not-found' || resolution.outcome === 'ambiguous') {
+        shown.outcome = resolution.outcome
+        if (parts) parts.card.dataset.outcome = resolution.outcome
+      }
+      return
+    }
+    shown.settling = true
+    const element = await settle(resolution.element, shown.token)
+    shown.settling = false
+    if (!live(shown) || !element) return
+    anchorTo(shown, element)
+  }
+
+  /** The target is there and held still: highlight it and place the card next to it. */
+  function anchorTo(shown: View, element: Element) {
+    if (shown.deadline !== undefined) window.clearTimeout(shown.deadline)
+    shown.deadline = undefined
+    phase = 'anchored'
+    hint = undefined
+    const target = ensureParts()
+    target.card.dataset.state = phase
+    target.card.dataset.outcome = 'resolved'
+    delete target.card.dataset.occluded
+    if (current) fill(target, current.step)
+    if (!inView(boxOf(element), viewport())) {
+      element.scrollIntoView({
+        block: 'center',
+        inline: 'nearest',
+        behavior: reducedMotion() ? 'instant' : 'smooth',
+      })
+    }
+    if (occluded(element)) target.card.dataset.occluded = 'true'
+    anchor = element
+    draw()
+  }
+
+  /**
+   * The wait is over without a safe target: the descriptor's policy for the
+   * last outcome (on its own with a hint, skip the way the user was going, or
+   * end the guide).
+   */
+  function giveUp(shown: View) {
+    shown.deadline = undefined
+    const step = current?.step
+    if (!step || !live(shown) || phase !== 'waiting') return
+    const outcome = shown.outcome === 'ambiguous' ? 'ambiguous' : 'not-found'
+    const policy =
+      outcome === 'ambiguous'
+        ? step.target?.resolution.onAmbiguous
+        : step.target?.resolution.onNotFound
+    if (policy === 'end') {
+      end('closed')
+      overlay.showToast(ENDED_TEXT)
+      return
+    }
+    showOnItsOwn(shown, outcome, HINTS[outcome])
+    if (policy === 'skip' && canGo(step, lastDirection)) void go(lastDirection)
+  }
+
+  /** The card on its own, for good, with a hint (or none for a step without a target). */
+  function showOnItsOwn(shown: View, outcome: Resolution['outcome'], text: string | undefined) {
+    if (!live(shown)) return
+    phase = 'shown'
+    hint = text
+    const target = ensureParts()
+    target.card.dataset.state = phase
+    target.card.dataset.outcome = outcome
+    if (current) fill(target, current.step)
+    draw()
+  }
+
   function resolve(step: PlayerStep): Resolution {
     try {
       return resolveTarget(step.target, stepPagePattern(step.urlPattern, step.target), {
@@ -392,64 +559,57 @@ export function createPlayer(deps: PlayerDeps): Player {
     }
   }
 
-  async function render(shown: { step: PlayerStep }, first: boolean) {
-    const token = ++renderToken
-    const { step } = shown
+  async function render(showing: { step: PlayerStep }, first: boolean) {
+    const shown = newView()
+    const { step } = showing
     anchor = undefined
     hint = undefined
+    phase = 'resolving'
     overlay.highlight(null)
-    fill(ensureParts(), step)
-
-    let resolution = resolve(step)
-    let element = resolution.outcome === 'resolved' ? resolution.element : undefined
-    if (element) {
-      element = await settle(element, token)
-      if (token !== renderToken) return
-      if (!element) resolution = { ...resolution, outcome: 'not-found', reason: 'unstable' }
-    }
     const target = ensureParts()
-    let skip = false
-    target.card.dataset.outcome = resolution.outcome
+    fill(target, step)
     target.card.dataset.step = String(step.index)
+    target.card.dataset.state = phase
     delete target.card.dataset.occluded
 
+    const resolution = resolve(step)
+    shown.outcome = resolution.outcome
+    target.card.dataset.outcome = resolution.outcome
+    let element = resolution.outcome === 'resolved' ? resolution.element : undefined
     if (element) {
-      if (!inView(boxOf(element), viewport())) {
-        element.scrollIntoView({
-          block: 'center',
-          inline: 'nearest',
-          behavior: reducedMotion() ? 'instant' : 'smooth',
-        })
-      }
-      if (occluded(element)) target.card.dataset.occluded = 'true'
-      anchor = element
-    } else if (resolution.outcome !== 'none' && resolution.outcome !== 'resolved') {
-      const policy =
-        resolution.outcome === 'ambiguous'
-          ? step.target?.resolution.onAmbiguous
-          : resolution.outcome === 'not-found'
-            ? step.target?.resolution.onNotFound
-            : 'show-unanchored'
-      if (policy === 'end') {
-        end('closed')
-        overlay.showToast(ENDED_TEXT)
-        return
-      }
-      hint = HINTS[resolution.outcome]
-      fill(target, step)
-      skip = policy === 'skip' && canGo(step, lastDirection)
+      element = await settle(element, shown.token)
+      if (!live(shown)) return
     }
     track(true)
-    draw()
+    if (element) {
+      anchorTo(shown, element)
+    } else if (resolution.outcome === 'none') {
+      showOnItsOwn(shown, 'none', undefined)
+    } else if (resolution.outcome === 'unsupported' || resolution.outcome === 'wrong-page') {
+      showOnItsOwn(shown, resolution.outcome, HINTS[resolution.outcome])
+    } else {
+      // Not there yet, not yet the only match, or not holding still: wait,
+      // within the descriptor's limit, then apply its policy.
+      if (resolution.outcome === 'resolved') shown.outcome = 'not-found'
+      phase = 'waiting'
+      hint = HINTS.waiting
+      target.card.dataset.state = phase
+      target.card.dataset.outcome = shown.outcome
+      fill(target, step)
+      draw()
+      observe(shown)
+      shown.deadline = window.setTimeout(() => {
+        giveUp(shown)
+      }, step.target?.resolution.timeoutMs ?? 0)
+    }
+    if (!live(shown)) return
     if (first) focusIfIdle(target)
     // Announced a frame after the card is shown, so a newly shown region is heard.
     void nextFrame().then(() => {
-      if (token === renderToken) {
+      if (live(shown)) {
         target.live.textContent = `Step ${String(step.index + 1)} of ${String(step.count)}: ${step.title}`
       }
     })
-    // The descriptor asked to skip a step that cannot be shown, the way the user was going.
-    if (skip) void go(lastDirection)
   }
 
   return {
