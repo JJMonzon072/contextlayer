@@ -125,6 +125,7 @@ test('follows the application’s routes: pushState, back, forward and the hash'
       hint: 'This step is on another page. Navigate there to continue.',
       highlight: undefined,
     })
+  await expectAccessibleCard(context, page)
   const before = await storedRun(context, page)
 
   await page.evaluate('flowDemo.toForm()')

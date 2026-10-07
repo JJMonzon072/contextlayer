@@ -36,4 +36,31 @@ describe('matchPage', () => {
     expect(matchPage(pattern, 'http://x.test/help/q+a')).toBe('match')
     expect(matchPage(pattern, 'http://x.test/help/qqa')).toBe('no-match')
   })
+
+  it('matches named parameters, the search and the hash where a pattern has them', () => {
+    expect(matchPage({ pathname: '/customers/:id' }, 'http://x.test/customers/7')).toBe('match')
+    expect(matchPage({ pathname: '/customers/:id' }, 'http://x.test/customers/7/edit')).toBe(
+      'no-match',
+    )
+    expect(
+      matchPage({ pathname: '/reports', search: 'tab=*' }, 'http://x.test/reports?tab=2'),
+    ).toBe('match')
+    expect(matchPage({ pathname: '/reports', search: 'tab=*' }, 'http://x.test/reports')).toBe(
+      'no-match',
+    )
+    expect(matchPage({ hash: 'details' }, 'http://x.test/any#details')).toBe('match')
+    expect(matchPage({ hash: 'details' }, 'http://x.test/any#other')).toBe('no-match')
+  })
+
+  it('follows a URL as the application changes it (Phase 6b): push, replace, back, hash, hard', () => {
+    const form = { pathname: '/demo/flow/customers/new' }
+    const list = 'http://localhost:4179/demo/flow/'
+    const formUrl = 'http://localhost:4179/demo/flow/customers/new'
+    // pushState or a link to the form, replaceState back to the list, the hash on the form.
+    expect(
+      [list, formUrl, list, `${formUrl}#details`, `${formUrl}?from=link`].map((url) =>
+        matchPage(form, url),
+      ),
+    ).toEqual(['no-match', 'match', 'no-match', 'match', 'match'])
+  })
 })
