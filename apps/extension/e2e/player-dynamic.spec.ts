@@ -240,6 +240,7 @@ test.describe('with the back/forward cache on', () => {
     await page.evaluate('flowDemo.toForm()')
     await expect.poll(async () => (await playerView(page)).state).toBe('anchored')
     expect((await playerView(page)).cards).toBe(1)
+    await expectNoTargetClicked(page)
   })
 })
 
