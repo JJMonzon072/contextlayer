@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-06: **Phases 1–5 and milestone 6a are done; 6b, 6c and Phases 7–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-07: **Phases 1–5 and milestones 6a and 6b are done; 6c and Phases 7–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -9,16 +9,16 @@ Status on 2026-10-06: **Phases 1–5 and milestone 6a are done; 6b, 6c and Phase
 - The extension is connected (4) before Edit Mode (5) because authoring needs an authenticated save path and granted site access.
 - The player (6) follows the builder so it is tested against descriptors captured from real pages; analytics (7) follows the player because events come from runs.
 
-| Phase | Name                      | Status  | Milestones                                      |
-| ----- | ------------------------- | ------- | ----------------------------------------------- |
-| 1     | Foundation                | Done    | none                                            |
-| 2     | Identity and workspaces   | Done    | 2a API + CI, 2b dashboard                       |
-| 3     | Guides API and management | Done    | 3a API, 3b dashboard                            |
-| 4     | Extension connection      | Done    | 4a spike, 4b API, 4c connection, 4d site access |
-| 5     | Edit Mode (guide builder) | Done    | none                                            |
-| 6     | Guide player              | 6a Done | 6a playback, 6b dynamic pages, 6c shadow/frames |
-| 7     | Analytics                 | Planned | none                                            |
-| 8     | Hardening and delivery    | Planned | 8a packaging, 8b security/ops, 8c distribution  |
+| Phase | Name                      | Status                  | Milestones                                      |
+| ----- | ------------------------- | ----------------------- | ----------------------------------------------- |
+| 1     | Foundation                | Done                    | none                                            |
+| 2     | Identity and workspaces   | Done                    | 2a API + CI, 2b dashboard                       |
+| 3     | Guides API and management | Done                    | 3a API, 3b dashboard                            |
+| 4     | Extension connection      | Done                    | 4a spike, 4b API, 4c connection, 4d site access |
+| 5     | Edit Mode (guide builder) | Done                    | none                                            |
+| 6     | Guide player              | 6a, 6b Done; 6c Planned | 6a playback, 6b dynamic pages, 6c shadow/frames |
+| 7     | Analytics                 | Planned                 | none                                            |
+| 8     | Hardening and delivery    | Planned                 | 8a packaging, 8b security/ops, 8c distribution  |
 
 ```mermaid
 flowchart LR
@@ -268,12 +268,12 @@ Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (
 
 ## Phase 6 — Guide player
 
-**6a Done (Implemented, Phase 6a); 6b and 6c Planned.** Depends on Phases 4 and 5. Goal: an end user is walked through a published guide, or sees an explicit reason why a step cannot be shown.
+**6a and 6b Done (Implemented, Phases 6a–6b); 6c Planned.** Depends on Phases 4 and 5. Goal: an end user is walked through a published guide, or sees an explicit reason why a step cannot be shown.
 
 - [x] 6a: playback of published guides with static resolution in the page's light DOM.
   - **Discovery:** the popup lists the published guides for the tab's origin (API) whose start page matches the tab's URL (URLPattern, in the worker; no start page means any page of the origin), each with **Play**.
   - **Start:** the worker fetches the version the popup listed, checks the site, the guide's application and the start page again, and sends the first step to the page; the popup closes.
-  - **Run state:** at most one run per tab, in `chrome.storage.session` by tab id (run id, tab, origin, document, guide and version with its snapshot, step index, generation), never in PostgreSQL; two tabs play two guides independently. A run survives the worker stopping. A tab's run ends on Finish, Close, a new document in that tab, that tab closing, Edit Mode on that tab or a new Play on that tab; the runs of a site end when it is turned off or its access is withdrawn; every run ends on Disconnect and on a revocation.
+  - **Run state:** at most one run per tab, in `chrome.storage.session` by tab id (run id, tab, origin, document, guide and version with its snapshot, step index, generation), never in PostgreSQL; two tabs play two guides independently. A run survives the worker stopping. A tab's run ends on Finish, Close, a new document in that tab (6b resumes it there instead), that tab closing, Edit Mode on that tab or a new Play on that tab; the runs of a site end when it is turned off or its access is withdrawn; every run ends on Disconnect and on a revocation.
   - **Messages:** the page asks for Previous / Next / Finish / Close with the run id and generation it shows; anything from another tab, frame, document or origin, or about an ended run, changes nothing, and a late answer never brings a guide back: a run's hide reaches its page after its show, the page refuses a show for a run it was told to hide, and an older or ended start never reports success or replaces a newer run.
   - **Revocation:** Previous and Next first check the connection with the existing bearer request (`GET /v1/extension/session`, as the popup's status does); a connection the server refuses ends every run it had and removes each guide from its page. An unreachable API is not taken for a revocation.
   - **Resolution** ([ADR 0014](adr/0014-element-targeting-strategy.md)): outcomes `resolved`, `ambiguous`, `not-found`, `wrong-page`, plus `unsupported` for frame and shadow paths; candidates by capture's own definitions, at most 50; visibility filter; ADR weights; vetoes; an identity rule; identical candidates never told apart by position; two-frame stability (a target that never holds still is not anchored); occlusion as a warning.
@@ -281,17 +281,25 @@ Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (
   - **Accessibility:** a labelled non-modal dialog, a polite live region, native buttons, no focus trap, focus taken only when the page has none, Escape only from inside the card, no animation, instant scrolling under reduced motion.
   - **Never acts:** the player does not click, type or submit; clicks and keys in the card stay in it and forged events are ignored.
   - **Edit Mode:** Edit Mode opening on a tab ends its guide; a guide does not start while Edit Mode is open on the tab, and the page refuses to show one over a selection or preview.
-- [ ] 6b: MutationObserver waits (per root, throttled, ~10 s timeout); re-resolution when a target disconnects; SPA navigation via the Navigation API; multi-page guides (today a new document ends the run); bfcache; targets inside host modals; threshold calibration on real applications.
+- [x] 6b: pages that change ([ADR 0019](adr/0019-spa-navigation-and-player-resume.md), [ADR 0014](adr/0014-element-targeting-strategy.md), [ADR 0013](adr/0013-shadow-dom-ui-isolation.md)).
+  - **Waiting:** a step whose target is not there yet (not found, ambiguous, not holding still) waits up to the descriptor's `timeoutMs` (10 s by default) with one `MutationObserver` on the light DOM, at most one resolution per 150 ms, an `AbortController` per showing and cleanup on every exit; then the descriptor's policy applies. A step without a target is shown at once; an unsupported one never waits.
+  - **Re-resolution:** an anchored target that leaves, is replaced by a re-render, is hidden or is shut out by a modal loses its highlight at once and is resolved again for 1.5 s (capped by `timeoutMs`); otherwise the step is shown on its own. No other element is ever taken without resolution accepting it.
+  - **Same-document navigation:** the content script follows the Navigation API's `currententrychange` (fallback `popstate` and `hashchange`), cancels the waits and shows the current step again on the new URL; run, step and generation do not change. No `webNavigation`, no patching, no polling.
+  - **Multi-page guides:** a step whose page does not match says "This step is on another page. Navigate there to continue." and waits; it is never skipped or replaced.
+  - **New documents:** a link, a form or a reload no longer ends the run: the new document asks for it with `player.resume` after `page.hello`; the worker checks the connection with the API, the workspace, the document, Edit Mode and the application's origins, binds the run to the new `documentId` with the next generation and returns the current step. The old document is stale at once. Another origin continues only if it is one of the same application, turned on and granted.
+  - **bfcache:** `pagehide` (persisted) removes the UI and stops the waits without ending the run; `pageshow` (persisted) says hello again and resumes. The worker never awaits a page's answer for more than 5 s.
+  - **Host modals:** candidates behind an open modal `<dialog>` are never accepted; a target captured inside a modal never resolves outside one; the host moves into the open dialog and back.
+  - **Keyboard:** `chrome.commands` `focus-guide` (Alt+Shift+G, Control+Shift+G on macOS) moves the focus to the card; Close, Escape and Finish give it back when ContextLayer took it.
 - [ ] 6c: open and closed shadow roots (`chrome.dom.openOrClosedShadowRoot`) and iframes; cross-origin frames need their own host permission.
 
 Out of scope: auto-healing (stored descriptors are never rewritten), branching guides, sending events (Phase 7).
 
 Exit criteria:
 
-- Playwright fixture corpus (generated ids, late rendering, `pushState`, bfcache, `showModal`, shadow roots, iframes): every step ends in its expected outcome; ambiguous fixtures are never auto-selected. 6a: met for the static light-DOM cases; the rest belongs to 6b and 6c.
-- Service worker stopped mid-guide → the run resumes at the same step. 6a: met.
-- 0 axe violations on the player; a keyboard-only run completes. 6a: met.
-- Demo: author, publish, play on the fixture app. 6a: met (e2e, and manual steps below).
+- Playwright fixture corpus (generated ids, late rendering, `pushState`, bfcache, `showModal`, shadow roots, iframes): every step ends in its expected outcome; ambiguous fixtures are never auto-selected. 6a: met for the static light-DOM cases. 6b: met for late rendering, re-renders, `pushState`, `replaceState`, back, forward, the hash, links, reloads, bfcache and `showModal`. Shadow roots and iframes belong to 6c.
+- Service worker stopped mid-guide → the run resumes at the same step. 6a: met. 6b: met while a step waits for its target, while it waits on another page and after an in-app navigation.
+- 0 axe violations on the player; a keyboard-only run completes. 6a: met. 6b: met in the waiting, on-another-page, inside-a-modal and resumed states.
+- Demo: author, publish, play on the fixture app. 6a: met (e2e, and manual steps below). 6b: met on the demo's `flow/` page (e2e; manual steps for JJ in the pull request).
 
 Changed from the plan (6a):
 
@@ -333,7 +341,36 @@ Review fixes (PR #5 review, after `153ab9d`):
 
 Not covered by automation (manual checks for JJ): playing "Crear un cliente" in Google Chrome with the regular build on `pnpm demo:site`, opening the popup with the toolbar icon, in two tabs at once, and revoking the connection from Connected browsers mid-guide; a screen reader (VoiceOver) reading the card; Chrome 120; a real customer application.
 
-Risks: R-01, R-04–R-11, R-15, R-16. ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) resolution Accepted for static light-DOM resolution (6a), thresholds still starting values to calibrate in 6b; [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the player (host modals still 6b); new ADR in 6b: SPA navigation detection (Navigation API vs `webNavigation` and its "Read your browsing history" warning).
+Changed from the plan (6b):
+
+- **A reload resumes the guide.** Phase 6a ended the run on any new document; a reload is now a new document like a link, and the run continues at its step.
+- **No polling fallback.** The plan named polling `location.href` where the Navigation API is missing; `popstate` and `hashchange` are the fallback instead (the extension requires Chrome 120, and the API shipped in 102).
+- **One observer on `documentElement`.** The light DOM has one root; observing the narrowest container stays Proposed, and an observer per shadow root comes with 6c. Mutations only schedule a look, at most one per 150 ms.
+- **Grace period 1.5 s**, inside the planned 1–2 s, never longer than the descriptor's `timeoutMs`.
+- **A modal rule for capture's container.** Designing the modal scenario showed that an inline copy of a dialog's button resolved while the dialog was closed; a target captured inside a modal now vetoes candidates outside any modal (`e4748b2`).
+- **The worker bounds its wait for a page's answer (5 s).** The spike found that a message to a document in bfcache is never answered nor rejected.
+- **A `commands` manifest key** for the shortcut. It is not a permission and adds no install warning; permissions are unchanged.
+- **No calibration on real applications.** The thresholds are unchanged (score 0.65, gap 0.15, identity 0.7); there was no real application to measure, so calibration stays Planned as a manual check.
+- **Each new document of a guide costs one bearer request** (the resume check), so a revoked connection never follows the user to the next page.
+
+Verification (6b, branch `JJ`):
+
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint` and `pnpm build` pass; `content.js` is 49 949 bytes minified (17 502 gzip) of the unchanged 65 536-byte budget (15 587 bytes left), up from 45 304.
+- `pnpm test`: 904 tests in 71 files: 73 shared, 3 ui, 55 API unit, 191 API integration, 108 dashboard, 474 extension (2 `todo` placeholders for 6c). The extension's new tests cover:
+  - waits with fake timers: a target 500 ms late, one just before the limit, one that never comes, ambiguous then unique, the descriptor's limit, the 150 ms throttle under a burst of mutations, no wait for a step without a target or an unsupported one, observer cleanup on every exit;
+  - re-resolution: a re-rendered node, a target back within the grace period, one that does not come back, a hidden one, the `timeoutMs` cap, never another element;
+  - navigation: the listener (Navigation API and fallback), another page then the right one, `replaceState` and back, a wait stopped by a URL change, an anchored step kept on a hash change, URL patterns (exact, wildcard, `:id`, search and hash, no match, invalid, push, replace, back, hash, hard navigation);
+  - the worker: resuming in a new document (old document stale, reload, a document `page.hello` did not authorize, another origin of the same application, another application, an unknown application list, Edit Mode, a revocation and an unreachable API, bfcache, two tabs, a restarted worker, a page that never answers);
+  - bfcache suspend and a run hidden while cached; modal dialogs in the resolver and the card; the shortcut and focus restore; message readers and routing for `player.resume` and `player.focus`; the manifest's `commands` and the absence of `webNavigation`.
+- `pnpm test:e2e`: dashboard 12/12 and extension 57/57 in Playwright's Chromium 153, with 10 new scenarios on the demo's `flow/` page (`apps/extension/e2e/player-dynamic.spec.ts`): a late target and a re-render; `pushState`, back, forward and the hash; a link and a reload resuming at the same step; bfcache A → B → back with Chromium's back/forward cache on; a target inside a modal dialog with an identical copy outside; the worker stopped while a step waits; two tabs; Disconnect and a revocation while a step waits; the shortcut's path and focus restore. Repeated:
+  - the 10 new scenarios `--repeat-each=3`: 30/30, and twice more with the player spec (108/108);
+  - the most sensitive ones (late target, routes, link and reload, bfcache, revocation while waiting) `--repeat-each=5`: 25/25;
+  - the 6a player spec `--repeat-each=2`: 15/16. The failure was not in the player. In a repetition of "plays two guides in two tabs", the test's setup did not find the real toolbar popup within 5 s. That setup is the harness helper that opens the popup with `chrome.action.openPopup` to turn the site on, and the guide had not been played yet. The helper is unchanged since 6a. The failure did not come back in 20 runs of that scenario alone, nor in the 108 runs above, which were made with temporary diagnostics (CDP targets and window state on failure; not committed). It is classified as the harness (Playwright/CDP opening the popup), not the product, and the helper was left as it is; the output is kept in the pull request.
+- `drizzle-kit check` is clean; 6b adds no migration and no permission.
+
+Not covered by automation (manual checks for JJ): the shortcut key itself (CDP input cannot press a browser shortcut); playing on the demo's `flow/` page in Google Chrome with the regular build (late button, in-app routes, the link, a reload, back after the link, the dialog); VoiceOver; Chrome 120; a real customer application, and calibration on one.
+
+Risks: R-01, R-04–R-11, R-15, R-16. ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) resolution Accepted for the light DOM, static (6a) and with waits and re-resolution (6b), thresholds still uncalibrated starting values; [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the player (6a), host modals, the shortcut and focus restore (6b); new [ADR 0019](adr/0019-spa-navigation-and-player-resume.md): following navigation with the Navigation API instead of `webNavigation`, resuming in new documents and bfcache.
 
 ## Phase 7 — Analytics
 
