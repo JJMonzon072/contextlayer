@@ -173,6 +173,7 @@ test('continues in the new document a link or a reload loads, at the same step',
       state: 'anchored',
     })
   await expectHighlighted(page, page.locator('#name'))
+  await expectAccessibleCard(context, page)
   const onForm = await storedRun(context, page)
   expect(onForm.run).toMatchObject({ step: 1, generation: Number(onList.run?.generation) + 1 })
   expect(onForm.run?.documentId).not.toBe(onList.run?.documentId)
@@ -282,6 +283,7 @@ test('anchors a target inside a host modal dialog, never its copy outside', asyn
     page,
     page.locator('#confirm').getByRole('button', { name: 'Confirm import' }),
   )
+  await expectAccessibleCard(context, page)
   // The card is on top of the dialog and usable: Finish works from it.
   await clickInPlayer(page, 'Finish')
   await expect.poll(async () => (await storedRun(context, page)).tabs).toEqual([])
