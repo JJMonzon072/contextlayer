@@ -446,10 +446,8 @@ describe('modal dialogs (Phase 6b)', () => {
   })
 })
 
-describe.skip('Phase 6b and 6c (planned, not supported in 6a)', () => {
-  it.todo('waits for a late-rendered target (MutationObserver, ~10 s)')
-  it.todo('follows a pushState navigation (Navigation API)')
-  it.todo('resumes from bfcache')
+// Waiting, navigation and bfcache (Phase 6b) are the player's: test/player-ui.test.ts.
+describe.skip('Phase 6c (planned)', () => {
   it.todo('resolves inside an open or closed shadow root')
   it.todo('resolves inside a same-origin iframe')
 })
