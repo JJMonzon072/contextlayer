@@ -26,6 +26,9 @@ import { inView, placeCard, type Box } from './position'
  * the page has it (never from a field the user is typing in), never traps
  * it, and Escape closes the guide only when the focus is inside the card.
  * There is no animation, and scrolling is instant under reduced motion.
+ * The keyboard shortcut (`focus-guide`, Phase 6b) moves the focus to the card
+ * on purpose and remembers where it was; Close, Escape and Finish give it back
+ * to that element if it is still there, and only when the card took the focus.
  *
  * Dynamic pages (Phase 6b, ADR 0014): a target that is not there yet, or not
  * yet the only match, is waited for. While a step is shown, one
@@ -117,6 +120,8 @@ export interface Player {
   stop(): void
   /** The URL changed in this document: the current step is shown again for it. */
   urlChanged(): void
+  /** The keyboard shortcut: moves the focus to the card; false when nothing is shown. */
+  focus(): boolean
   /**
    * The document goes into bfcache: the UI and every wait go, but the run is
    * not marked as ended here, since the worker gives it back when the
@@ -197,6 +202,9 @@ export function createPlayer(deps: PlayerDeps): Player {
   let renderToken = 0
   let phase: Phase = 'resolving'
   let view: View | undefined
+  /** The card took the focus (at start, or by the shortcut), and from where. */
+  let tookFocus = false
+  let returnFocus: Element | undefined
   const ended = new Set<string>()
 
   const viewport = () => ({ width: window.innerWidth, height: window.innerHeight })
@@ -367,6 +375,8 @@ export function createPlayer(deps: PlayerDeps): Player {
     anchor = undefined
     hint = undefined
     busy = false
+    tookFocus = false
+    returnFocus = undefined
     if (frame !== undefined) window.cancelAnimationFrame(frame)
     frame = undefined
     track(false)
@@ -389,7 +399,14 @@ export function createPlayer(deps: PlayerDeps): Player {
   function end(reason: 'finished' | 'closed') {
     const shown = current
     if (!shown) return
+    // Given back only if the card took the focus and still has it.
+    const active = document.activeElement
+    const restore = tookFocus && active !== null && overlay.isOwn(active) ? returnFocus : undefined
     teardown()
+    // Only an element that can take the focus, and only if it is still on the page.
+    if (restore?.isConnected && 'focus' in restore) {
+      ;(restore as HTMLElement).focus({ preventScroll: true })
+    }
     void deps.send({ type: 'player.end', runId: shown.step.runId, reason })
   }
 
@@ -648,12 +665,19 @@ export function createPlayer(deps: PlayerDeps): Player {
     return hit !== null && hit !== element && !element.contains(hit) && !overlay.isOwn(hit)
   }
 
+  /** The card's title takes the focus; `from` is where to give it back later. */
+  function takeFocus(target: Parts, from: Element | null) {
+    returnFocus = from ?? undefined
+    target.title.focus({ preventScroll: true })
+    tookFocus = true
+  }
+
+  const idle = (active: Element | null) =>
+    active === null || active === document.body || active === document.documentElement
+
   /** Takes the focus for the card only when the page has none (never from a field). */
   function focusIfIdle(target: Parts) {
-    const active = document.activeElement
-    if (active === null || active === document.body || active === document.documentElement) {
-      target.title.focus({ preventScroll: true })
-    }
+    if (idle(document.activeElement)) takeFocus(target, null)
   }
 
   async function render(showing: { step: PlayerStep }, first: boolean) {
@@ -736,6 +760,16 @@ export function createPlayer(deps: PlayerDeps): Player {
     },
     suspend() {
       teardown(false)
+    },
+    focus() {
+      if (!current) return false
+      const active = document.activeElement
+      const target = ensureParts()
+      overlay.showPlayerCard()
+      // Already in the card: nothing to remember.
+      if (active !== null && overlay.isOwn(active)) target.title.focus({ preventScroll: true })
+      else takeFocus(target, idle(active) ? null : active)
+      return true
     },
     urlChanged() {
       const showing = current

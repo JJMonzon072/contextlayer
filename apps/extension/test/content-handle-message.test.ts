@@ -15,6 +15,7 @@ function deps(overrides: Partial<ContentDeps> = {}): ContentDeps {
     hidePreview: vi.fn(),
     showPlayer: vi.fn(() => true),
     hidePlayer: vi.fn(),
+    focusPlayer: vi.fn(() => true),
     ...overrides,
   }
 }
@@ -160,5 +161,26 @@ describe('handleContentMessage', () => {
       data: null,
     })
     expect(hidePlayer).toHaveBeenCalledWith(step.runId)
+  })
+
+  it('moves the focus to the guide for the worker only, on a page it authorized', () => {
+    const focusPlayer = vi.fn(() => true)
+    const request = { type: 'player.focus' }
+
+    expect(handleContentMessage(request, POPUP, deps({ focusPlayer }))).toMatchObject({
+      ok: false,
+      error: { code: 'FORBIDDEN' },
+    })
+    expect(
+      handleContentMessage(request, WORKER, deps({ isActive: () => false, focusPlayer })),
+    ).toMatchObject({ ok: false, error: { code: 'NOT_AVAILABLE' } })
+    expect(focusPlayer).not.toHaveBeenCalled()
+    expect(handleContentMessage(request, WORKER, deps({ focusPlayer }))).toEqual({
+      ok: true,
+      data: { focused: true },
+    })
+    expect(
+      handleContentMessage({ type: 'player.focus', runId: 'x' }, WORKER, deps()),
+    ).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
   })
 })

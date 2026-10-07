@@ -245,6 +245,7 @@ function start(instance: ContentInstance): void {
           hidePlayer: (runId) => {
             player.hide(runId)
           },
+          focusPlayer: () => player.focus(),
         },
       )
     } catch {

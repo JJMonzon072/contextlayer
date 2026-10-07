@@ -71,6 +71,7 @@ function fakePlayer() {
     go: vi.fn(answer),
     end: vi.fn(answer),
     resume: vi.fn(answer),
+    command: vi.fn(() => Promise.resolve(true)),
     tabClosed: vi.fn(() => Promise.resolve()),
     endOnTab: vi.fn(() => Promise.resolve()),
     verify: vi.fn(() => Promise.resolve()),

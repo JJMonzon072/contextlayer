@@ -878,6 +878,29 @@ describe('new documents (Phase 6b)', () => {
   })
 })
 
+describe('the keyboard shortcut into the guide (Phase 6b)', () => {
+  it('asks the page showing the tab’s guide to move the focus to its card', async () => {
+    const w = await world()
+    await started(w, TAB)
+    await started(w, OTHER_TAB)
+
+    expect(await w.player.command('focus-guide', TAB)).toBe(true)
+
+    expect(w.sent.filter((entry) => entry.message.type === 'player.focus')).toEqual([
+      { tabId: TAB, doc: DOC, message: { type: 'player.focus' } },
+    ])
+  })
+
+  it('does nothing on a tab without a guide, or for another command', async () => {
+    const w = await world()
+    await started(w, OTHER_TAB)
+
+    expect(await w.player.command('focus-guide', TAB)).toBe(false)
+    expect(await w.player.command('something-else', OTHER_TAB)).toBe(false)
+    expect(w.sent.filter((entry) => entry.message.type === 'player.focus')).toEqual([])
+  })
+})
+
 describe('late messages never bring a run back', () => {
   it('a run ended while its page was answering is hidden after its show, never stored again', async () => {
     const w = await world()

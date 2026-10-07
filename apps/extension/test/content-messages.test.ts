@@ -240,5 +240,7 @@ function playerRequests(): unknown[] {
     { type: 'player.hide' },
     { type: 'player.hide', runId: RUN, step: 1 },
     { type: 'player.go', runId: RUN, generation: 1, direction: 'next' },
+    { type: 'player.focus' },
+    { type: 'player.focus', runId: RUN },
   ]
 }

@@ -217,6 +217,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void player.tabClosed(tabId)
 })
 
+// The shortcut into the guide's card (Phase 6b): only a tab playing a guide reacts.
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (tab?.id !== undefined) void player.command(command, tab.id)
+})
+
 // Chrome 142+: the author closed the panel. Earlier versions rely on the
 // panel's own pagehide message and on the capture time limit.
 sidePanel?.onClosed?.addListener(({ tabId }) => {

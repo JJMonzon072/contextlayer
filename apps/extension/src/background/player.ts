@@ -5,6 +5,7 @@ import {
   publishedGuideSchema,
 } from '@contextlayer/shared'
 
+import { FOCUS_GUIDE_COMMAND } from '../commands'
 import { richTextLines } from '../lib/rich-text-lines'
 import { matchPage } from '../lib/url-pattern'
 import { failure, success, type MessageResult, type PlayerStep } from '../messaging/protocol'
@@ -463,6 +464,19 @@ export function createPlayer(deps: PlayerDeps) {
         await vault.writePlayers({ ...runs, [String(tabId)]: next })
         return success(stepOf(next))
       })
+    },
+
+    /**
+     * A keyboard command (`chrome.commands`) on a tab: `focus-guide` asks the
+     * page that shows the tab's guide to move the focus to its card. Nothing
+     * happens on a tab without a guide. Returns whether a page was asked.
+     */
+    async command(name: string, tabId: number): Promise<boolean> {
+      if (name !== FOCUS_GUIDE_COMMAND) return false
+      const run = (await vault.readPlayers())[String(tabId)]
+      if (!run) return false
+      chrome.sendToTab(tabId, { type: 'player.focus' }, run.documentId).catch(() => undefined)
+      return true
     },
 
     /** The tab closed: its run ends, and a start still on its way for it does not land. */

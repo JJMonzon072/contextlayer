@@ -183,6 +183,7 @@ function setup(options: { trusted?: boolean; modal?: () => Element | null } = {}
     highlights,
     toasts,
     isOpen: () => open,
+    host,
     container: () => container,
     moves: () => moves,
     part,
@@ -1221,6 +1222,98 @@ describe('late messages never bring a guide back', () => {
     // The oldest of 21 is forgotten (20 are kept); the newest is still refused.
     expect(ui.player.show(step(0, { runId: runs.at(-1) ?? '' }))).toBe(false)
     expect(ui.player.show(step(0, { runId: runs[0] ?? '' }))).toBe(true)
+  })
+})
+
+describe('the keyboard shortcut and focus restore (Phase 6b)', () => {
+  const nameField = () => {
+    const field = document.querySelector<HTMLInputElement>('#name')
+    if (!field) throw new Error('no field')
+    return field
+  }
+
+  it('moves the focus from a field to the card, and Escape gives it back', async () => {
+    const ui = setup()
+    nameField().focus()
+    ui.player.show(step(0))
+    await settle()
+    // Showing the step left the field focused.
+    expect(document.activeElement).toBe(nameField())
+
+    expect(ui.player.focus()).toBe(true)
+    expect(ui.root.activeElement).toBe(ui.part('.title'))
+
+    ui.part('.title').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }),
+    )
+
+    expect(ui.isOpen()).toBe(false)
+    expect(document.activeElement).toBe(nameField())
+  })
+
+  it('gives the focus back on Close and on Finish too', async () => {
+    for (const [index, button] of [
+      [0, 'Close guide'],
+      [2, 'Finish'],
+    ] as const) {
+      const ui = setup()
+      nameField().focus()
+      ui.player.show(step(index))
+      await settle()
+      ui.player.focus()
+
+      ui.button(button).focus()
+      ui.button(button).click()
+
+      expect(document.activeElement).toBe(nameField())
+      ui.player.stop()
+    }
+  })
+
+  it('never takes the focus back to an element that left the page', async () => {
+    const ui = setup()
+    nameField().focus()
+    ui.player.show(step(0))
+    await settle()
+    ui.player.focus()
+
+    nameField().remove()
+    ui.button('Close guide').click()
+
+    // No other page element was given the focus instead.
+    expect([document.body, ui.host]).toContain(document.activeElement)
+  })
+
+  it('takes nothing on close when the card took the focus from nowhere', async () => {
+    const ui = setup()
+    ui.player.show(step(0))
+    await settle()
+    expect(ui.root.activeElement).toBe(ui.part('.title'))
+
+    ui.button('Close guide').click()
+
+    // No page element was given the focus.
+    expect([document.body, ui.host]).toContain(document.activeElement)
+  })
+
+  it('moves nothing when the guide ends on its own (not by the user)', async () => {
+    const ui = setup()
+    nameField().focus()
+    ui.player.show(step(0))
+    await settle()
+    ui.player.focus()
+    nameField().blur()
+
+    ui.player.hide(RUN)
+
+    expect(document.activeElement).not.toBe(nameField())
+  })
+
+  it('does nothing without a guide on the page', () => {
+    const ui = setup()
+
+    expect(ui.player.focus()).toBe(false)
+    expect(ui.root.activeElement).toBeNull()
   })
 })
 

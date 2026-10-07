@@ -28,6 +28,8 @@ export interface ContentDeps {
   showPlayer: (step: PlayerStep) => boolean
   /** Removes the guide's UI if that run is the one shown. */
   hidePlayer: (runId: string) => void
+  /** Moves the focus to the guide's card; false when no guide is shown. */
+  focusPlayer: () => boolean
 }
 
 export interface ContentSender {
@@ -45,7 +47,7 @@ export function handleContentMessage(
   message: unknown,
   sender: ContentSender,
   deps: ContentDeps,
-): MessageResult<PageInfo | { shown: boolean } | null> {
+): MessageResult<PageInfo | { shown: boolean } | { focused: boolean } | null> {
   const request = readContentRequest(message)
   if (!request) {
     return failure('BAD_REQUEST', 'Unsupported message.')
@@ -81,5 +83,9 @@ export function handleContentMessage(
       if (!sender.fromWorker) return failure('FORBIDDEN', 'Only the extension may end a guide.')
       deps.hidePlayer(request.runId)
       return success(null)
+    case 'player.focus':
+      if (!sender.fromWorker) return failure('FORBIDDEN', 'Only the extension may move the focus.')
+      if (!deps.isActive()) return failure('NOT_AVAILABLE', 'ContextLayer is not active here.')
+      return success({ focused: deps.focusPlayer() })
   }
 }

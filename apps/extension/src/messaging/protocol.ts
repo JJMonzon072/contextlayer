@@ -480,6 +480,8 @@ export const contentRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('player.show'), step: playerStepSchema }),
   // Removes the run's UI, if that run is the one shown.
   z.strictObject({ type: z.literal('player.hide'), runId: runIdSchema }),
+  // Worker only: the keyboard shortcut moves the focus to the guide's card (Phase 6b).
+  z.strictObject({ type: z.literal('player.focus') }),
 ])
 
 export type ContentRequest = z.infer<typeof contentRequestSchema>

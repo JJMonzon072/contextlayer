@@ -8,5 +8,5 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "types": ["node", "chrome"]
   },
-  "include": ["*.config.ts", "scripts", "test/build", "e2e", "src/content-files.ts"]
+  "include": ["*.config.ts", "scripts", "test/build", "e2e", "src/content-files.ts", "src/commands.ts"]
 }
