@@ -1,28 +1,12 @@
 import AxeBuilder from '@axe-core/playwright'
-import { guidesPath, type Guide, type GuideList } from '@contextlayer/shared'
-import type { BrowserContext, Locator, Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
-import { GRANTED_SITE, UNGRANTED_SITE } from './environment'
-import {
-  expect,
-  extensionWorker,
-  openPopupTab,
-  stopServiceWorker,
-  test,
-  type ExtensionBrowser,
-} from './fixtures'
-import {
-  createAccount,
-  createApplication,
-  createWorkspace,
-  publishDraft,
-  publishGuide,
-  type Account,
-} from './support/api'
+import { GRANTED_SITE } from './environment'
+import { expect, extensionWorker, openPopupTab, stopServiceWorker, test } from './fixtures'
+import { publishGuide } from './support/api'
 import {
   clickInPlayer,
   connectedBrowsers,
-  connectExtension,
   contentScriptState,
   focusedInPlayer,
   openActionPopup,
@@ -31,8 +15,16 @@ import {
   overlayStyles,
   playerCardMarkup,
   playerView,
-  sidePanels,
 } from './support/flows'
+import {
+  acme,
+  authorAndPublish,
+  DEMO,
+  demoPage,
+  expectHighlighted,
+  play,
+  storedRun,
+} from './support/player'
 
 /**
  * The Guide Player in real Chromium (Phase 6a): a guide authored with the
@@ -42,133 +34,12 @@ import {
  * cannot use), with the real mouse and keyboard.
  */
 
-const DEMO = `${GRANTED_SITE}/demo/`
-
-interface Workspace {
-  account: Account
-  workspaceId: string
-  applicationId: string
-}
-
-async function acme(context: BrowserContext): Promise<Workspace> {
-  const account = await createAccount()
-  const workspaceId = await createWorkspace(account, 'Acme')
-  const applicationId = await createApplication(account, workspaceId, 'Acme CRM', [GRANTED_SITE])
-  await createApplication(account, workspaceId, 'Acme Wiki', [UNGRANTED_SITE])
-  await connectExtension(context, account, 'Acme')
-  return { account, workspaceId, applicationId }
-}
-
-async function demoPage(context: BrowserContext, extensionBrowser: ExtensionBrowser, path = '') {
-  const page = await context.newPage()
-  await page.goto(`${DEMO}${path}`)
-  const popup = await openActionPopup(extensionBrowser, page)
-  await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'available')
-  await popup.getByRole('button', { name: 'Turn on for this site' }).click()
-  await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'active')
-  await popup.close()
-  return page
-}
-
-async function addStep(panel: Page, title: string, instructions: string): Promise<Locator> {
-  await panel.getByRole('button', { name: 'Add step' }).click()
-  const step = panel.getByTestId('step').last()
-  await step.getByLabel('Title').fill(title)
-  await step.getByLabel('Instructions').fill(instructions)
-  return step
-}
-
-/** Selects the step's element with a real click, then accepts it. */
-async function capture(step: Locator, click: () => Promise<void>) {
-  await step.getByRole('button', { name: /^(Select|Reselect) element for step/ }).click()
-  await expect(step.getByTestId('target-capturing')).toBeVisible()
-  await click()
-  await step.getByRole('button', { name: 'Use this element' }).click()
-}
-
-/**
- * Authors a guide in the real Edit Mode, one captured element per step,
- * saves it, leaves Edit Mode and publishes it.
- */
-async function authorAndPublish(
-  workspace: Workspace,
-  extensionBrowser: ExtensionBrowser,
-  page: Page,
-  title: string,
-  steps: { title: string; instructions: string; click: () => Promise<void> }[],
-): Promise<Guide> {
-  const panel = await openEditMode(extensionBrowser, page)
-  await panel.getByLabel('New guide').fill(title)
-  await panel.getByRole('button', { name: 'Create' }).click()
-  await expect(panel.getByRole('heading', { name: title })).toBeVisible()
-  for (const step of steps) {
-    await capture(await addStep(panel, step.title, step.instructions), step.click)
-  }
-  await panel.getByTestId('save').click()
-  await expect(panel.getByTestId('save-state')).toContainText('Saved to ContextLayer at')
-  await panel.getByTestId('exit').click()
-  await expect.poll(async () => (await sidePanels(extensionBrowser)).length).toBe(0)
-
-  const base = `/api${guidesPath(workspace.workspaceId)}`
-  const list = (await (
-    await workspace.account.api.get(`${base}?applicationId=${workspace.applicationId}`)
-  ).json()) as GuideList
-  const summary = list.items.find((item) => item.title === title)
-  if (!summary) throw new Error(`no guide ${title}`)
-  await publishDraft(workspace.account, workspace.workspaceId, summary.id)
-  return (await (await workspace.account.api.get(`${base}/${summary.id}`)).json()) as Guide
-}
-
-/** Play from the real toolbar popup; the popup closes once the guide is on the page. */
-async function play(extensionBrowser: ExtensionBrowser, page: Page, title: string) {
-  const popup = await openActionPopup(extensionBrowser, page)
-  await expect(popup.getByTestId('site')).toHaveAttribute('data-state', 'active')
-  const closed = popup.waitForEvent('close')
-  await popup.getByRole('button', { name: `Play ${title}` }).click()
-  await closed
-}
-
-/** The runs stored by the worker: the run of `page`'s tab, and which tabs have one. */
-async function storedRun(context: BrowserContext, page: Page) {
-  const worker = await extensionWorker(context)
-  return worker.evaluate(async (url) => {
-    const runs = ((await chrome.storage.session.get('cl.players'))['cl.players'] ?? {}) as Record<
-      string,
-      Record<string, unknown>
-    >
-    const [tab] = await chrome.tabs.query({ url })
-    const local = await chrome.storage.local.get(['cl.players', 'cl.player'])
-    return {
-      run: tab?.id === undefined ? null : (runs[String(tab.id)] ?? null),
-      tabId: tab?.id ?? null,
-      tabs: Object.keys(runs).map(Number),
-      local: Object.keys(local),
-    }
-  }, page.url())
-}
-
 /** The page's own state: the player never clicks, types or submits for the user. */
 async function expectPageUntouched(page: Page) {
   await expect(page).toHaveURL(DEMO)
   await expect(page.getByTestId('page-clicks')).toHaveText('0')
   await expect(page.getByTestId('page-clicks')).not.toHaveAttribute('data-submitted', 'true')
   await expect(page.locator('#customer-name')).toHaveValue('Ana Ejemplo')
-}
-
-/** The highlight is drawn around `element` (within a few pixels of its border box). */
-async function expectHighlighted(page: Page, element: Locator) {
-  await expect
-    .poll(async () => {
-      const [view, box] = await Promise.all([playerView(page), element.boundingBox()])
-      if (!view.highlight || !box) return false
-      return (
-        Math.abs(view.highlight.x - box.x) <= 4 &&
-        Math.abs(view.highlight.y - box.y) <= 4 &&
-        Math.abs(view.highlight.width - box.width) <= 6 &&
-        Math.abs(view.highlight.height - box.height) <= 6
-      )
-    })
-    .toBe(true)
 }
 
 test('authors a guide, publishes it and plays it step by step from the popup', async ({
@@ -282,15 +153,25 @@ test('never anchors an ambiguous target and shows a missing one on its own', asy
 
   await play(extensionBrowser, page, 'Recent customers')
 
+  // Phase 6b: the page may still settle it, so the step waits first, never anchored.
   await expect
     .poll(() => playerView(page))
     .toMatchObject({
       open: true,
       step: '0',
+      state: 'waiting',
+      outcome: 'ambiguous',
+      highlight: undefined,
+      side: 'none',
+    })
+  // At the descriptor's limit (10 s) the ambiguity policy applies: on its own, with the reason.
+  await expect
+    .poll(() => playerView(page), { timeout: 15_000 })
+    .toMatchObject({
+      state: 'shown',
       outcome: 'ambiguous',
       highlight: undefined,
       hint: 'More than one element matches this step, so none is highlighted.',
-      side: 'none',
     })
   await clickInPlayer(page, 'Next')
   await expect
@@ -298,9 +179,10 @@ test('never anchors an ambiguous target and shows a missing one on its own', asy
     .toMatchObject({
       open: true,
       step: '1',
+      state: 'waiting',
       outcome: 'not-found',
       highlight: undefined,
-      hint: "This step's element isn't on the page right now.",
+      hint: "Looking for this step's element…",
     })
   await clickInPlayer(page, 'Close guide')
   await expect.poll(async () => (await playerView(page)).hosts).toBe(0)
@@ -418,7 +300,7 @@ test('lists only guides for this page, and never overlaps Edit Mode', async ({
   expect((await playerView(page)).cards).toBe(0)
 })
 
-test('a reload or Disconnect ends the guide and leaves nothing on the page', async ({
+test('a reload resumes the guide at its step; Disconnect ends it and leaves nothing', async ({
   context,
   extensionBrowser,
   extensionId,
@@ -432,17 +314,26 @@ test('a reload or Disconnect ends the guide and leaves nothing on the page', asy
 
   await play(extensionBrowser, page, 'Tour')
   await expect.poll(async () => (await playerView(page)).open).toBe(true)
-  const { tabId } = await storedRun(context, page)
-  expect(tabId).not.toBeNull()
-  await page.reload()
-  // The new document's script said hello: the tab is known and has no run.
-  await expect.poll(async () => (await contentScriptState(page))?.state).toBe('active')
-  await expect.poll(async () => (await storedRun(context, page)).tabs).toEqual([])
-  expect((await storedRun(context, page)).tabId).toBe(tabId)
-  expect((await playerView(page)).hosts).toBe(0)
+  await clickInPlayer(page, 'Next')
+  await expect.poll(async () => (await playerView(page)).step).toBe('1')
+  const before = await storedRun(context, page)
+  expect(before.run).toMatchObject({ step: 1, generation: 1 })
 
-  await play(extensionBrowser, page, 'Tour')
-  await expect.poll(async () => (await playerView(page)).open).toBe(true)
+  // Phase 6b: a reload is a new document of the same guide; it resumes the step.
+  await page.reload()
+  await expect.poll(async () => (await contentScriptState(page))?.state).toBe('active')
+  await expect
+    .poll(() => playerView(page))
+    .toMatchObject({
+      hosts: 1,
+      cards: 1,
+      open: true,
+      step: '1',
+    })
+  const after = await storedRun(context, page)
+  expect(after.run).toMatchObject({ step: 1, generation: 2 })
+  expect(after.run?.documentId).not.toBe(before.run?.documentId)
+
   const popup = await openPopupTab(context, extensionId)
   await popup.getByRole('button', { name: 'Disconnect' }).click()
   await expect(popup.getByTestId('connection')).toHaveAttribute('data-state', 'disconnected')
