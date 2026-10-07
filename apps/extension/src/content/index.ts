@@ -19,7 +19,8 @@
  *    memory, for the step preview, and is never sent anywhere.
  * 5. When a guide plays, the worker sends `player.show` with one step; the
  *    target is resolved and shown here (`player/`, `resolve/`), and the card's
- *    buttons ask the worker for the next step. Edit Mode and the player never
+ *    buttons ask the worker for the next step. Same-document navigation shows
+ *    the step again for the new URL (`navigation.ts`, ADR 0019). Edit Mode and the player never
  *    overlap: selecting or previewing removes the guide, and a guide is not
  *    shown while selecting or previewing.
  */
@@ -28,6 +29,7 @@ import { failure } from '../messaging/result'
 import { captureTarget, type CaptureContext } from './capture/descriptor'
 import { handleContentMessage } from './handle-message'
 import { askWorker, readHelloAnswer } from './messages'
+import { followNavigation } from './navigation'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
 import { startPicker, type Picker } from './picker'
 import { createPlayer } from './player/player'
@@ -92,6 +94,10 @@ function start(instance: ContentInstance): void {
   let preview: Preview | undefined
   const remembered = new Map<string, WeakRef<Element>>()
   const player = createPlayer({ window, overlay, send: askWorker })
+  // Same-document navigation: the step shown follows the URL (ADR 0019).
+  const stopFollowing = followNavigation(window, () => {
+    player.urlChanged()
+  })
 
   function hidePreview() {
     preview?.stop()
@@ -170,6 +176,7 @@ function start(instance: ContentInstance): void {
     stopCapture()
     hidePreview()
     player.stop()
+    stopFollowing()
     remembered.clear()
     overlay.destroy()
     document.removeEventListener('visibilitychange', checkContext)

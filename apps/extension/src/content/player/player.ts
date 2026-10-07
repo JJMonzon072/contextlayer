@@ -1,3 +1,4 @@
+import { matchPage } from '../../lib/url-pattern'
 import type { PlayerStep } from '../../messaging/protocol'
 import { readStepAnswer } from '../messages'
 import type { Overlay } from '../overlay'
@@ -39,12 +40,17 @@ import { inView, placeCard, type Box } from './position'
  * that holds still is anchored again; otherwise the step stays on its own
  * with a hint. Losing a target the user was shown never skips or ends the
  * guide: the user may just have used it.
+ *
+ * Navigation (ADR 0019): when the URL changes in this document (`urlChanged`),
+ * the current step is shown again for the new URL; a step whose page pattern
+ * does not match waits there for the user to navigate (`off-page`), never
+ * skipped or ended. The run, its step and its generation do not change.
  */
 
 export const HINTS = {
   'not-found': "This step's element isn't on the page right now.",
   ambiguous: 'More than one element matches this step, so none is highlighted.',
-  'wrong-page': 'This step is on another page of this site.',
+  'wrong-page': 'This step is on another page. Navigate there to continue.',
   unsupported: "ContextLayer can't point at this step's element on this page yet.",
   waiting: "Looking for this step's element…",
   unreachable: "ContextLayer couldn't be reached. Try again.",
@@ -105,6 +111,8 @@ export interface Player {
   hide(runId: string): void
   /** Removes the UI without telling the worker (the script stops, Edit Mode starts). */
   stop(): void
+  /** The URL changed in this document: the current step is shown again for it. */
+  urlChanged(): void
   readonly runId: string | undefined
 }
 
@@ -114,9 +122,10 @@ export interface Player {
  * - `waiting`: the target is not there yet, or not yet the only match;
  * - `anchored`: next to its target;
  * - `regaining`: its target left; looked for again for a short grace period;
+ * - `off-page`: the step is on another page; waiting for the user to go there;
  * - `shown`: on its own, for good (no target, or after the wait).
  */
-type Phase = 'resolving' | 'waiting' | 'anchored' | 'regaining' | 'shown'
+type Phase = 'resolving' | 'waiting' | 'anchored' | 'regaining' | 'off-page' | 'shown'
 
 /** One showing of one step: everything it started stops with its controller. */
 interface View {
@@ -649,8 +658,13 @@ export function createPlayer(deps: PlayerDeps): Player {
       anchorTo(shown, element)
     } else if (resolution.outcome === 'none') {
       showOnItsOwn(shown, 'none', undefined)
-    } else if (resolution.outcome === 'unsupported' || resolution.outcome === 'wrong-page') {
-      showOnItsOwn(shown, resolution.outcome, HINTS[resolution.outcome])
+    } else if (resolution.outcome === 'unsupported') {
+      showOnItsOwn(shown, 'unsupported', HINTS.unsupported)
+    } else if (resolution.outcome === 'wrong-page') {
+      // Waits for the user to navigate there (`urlChanged`); never skipped or ended.
+      showOnItsOwn(shown, 'wrong-page', HINTS['wrong-page'])
+      phase = 'off-page'
+      target.card.dataset.state = phase
     } else {
       // Not there yet, not yet the only match, or not holding still: wait,
       // within the descriptor's limit, then apply its policy.
@@ -695,6 +709,22 @@ export function createPlayer(deps: PlayerDeps): Player {
     },
     stop() {
       teardown()
+    },
+    urlChanged() {
+      const showing = current
+      if (!showing) return
+      const { step } = showing
+      // Still anchored to a target that still belongs here: nothing to redo.
+      if (
+        phase === 'anchored' &&
+        anchor &&
+        usable(anchor) &&
+        matchPage(stepPagePattern(step.urlPattern, step.target), window.location.href) === 'match'
+      ) {
+        schedule()
+        return
+      }
+      void render(showing, false)
     },
     get runId() {
       return current?.step.runId

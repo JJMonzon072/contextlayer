@@ -395,6 +395,7 @@ describe('waiting for a target (Phase 6b)', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    history.replaceState(null, '', '/')
   })
 
   /** Lets `ms` of (fake) time pass, with frames, mutation callbacks and answers. */
@@ -675,6 +676,79 @@ describe('waiting for a target (Phase 6b)', () => {
 
     expect(ui.card.dataset.state).toBe('shown')
     expect(ui.anchored()).toBe(false)
+  })
+
+  it('waits on another page for the user to navigate, then shows the step there', async () => {
+    const ui = setup()
+    const target = capture('#new')
+
+    ui.player.show(step(1, { target, urlPattern: { pathname: '/customers/new' } }))
+    await run(0)
+    expect(ui.card.dataset.state).toBe('off-page')
+    expect(ui.text('.hint')).toBe(HINTS['wrong-page'])
+    expect(ui.text('.hint')).not.toContain('/customers')
+    expect(observing).toBe(0)
+
+    // The application changes its route (pushState), the page reports it.
+    history.pushState(null, '', '/customers/new')
+    ui.player.urlChanged()
+    await run(0)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.text('.progress')).toBe('Step 2 of 3')
+    expect(ui.sent).toEqual([])
+  })
+
+  it('follows replaceState and going back, keeping the same step', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    ui.player.show(step(1, { target, urlPattern: { pathname: '/customers' } }))
+    await run(0)
+    expect(ui.card.dataset.state).toBe('off-page')
+
+    history.replaceState(null, '', '/customers')
+    ui.player.urlChanged()
+    await run(0)
+    expect(ui.card.dataset.state).toBe('anchored')
+
+    history.replaceState(null, '', '/reports')
+    ui.player.urlChanged()
+    await run(0)
+    expect(ui.card.dataset.state).toBe('off-page')
+    expect(ui.highlights.at(-1)).toBeNull()
+    expect(ui.text('.progress')).toBe('Step 2 of 3')
+  })
+
+  it('stops a wait in progress when the URL changes', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    document.querySelector('#new')?.remove()
+    ui.player.show(step(0, { target, urlPattern: { pathname: '/' } }))
+    await run(0)
+    expect(ui.card.dataset.state).toBe('waiting')
+    expect(observing).toBe(1)
+
+    history.pushState(null, '', '/elsewhere')
+    ui.player.urlChanged()
+    await run(target.resolution.timeoutMs)
+
+    expect(ui.card.dataset.state).toBe('off-page')
+    expect(observing).toBe(0)
+    // The old wait's deadline did not apply any policy.
+    expect(ui.isOpen()).toBe(true)
+  })
+
+  it('keeps an anchored step as it is when the URL changes within its page', async () => {
+    const ui = setup()
+    await anchoredOnNew(ui)
+    const drawn = ui.highlights.length
+
+    history.pushState(null, '', '/#details')
+    ui.player.urlChanged()
+    await run(0)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.highlights.slice(drawn)).not.toContain(null)
   })
 
   it('stops observing when the step changes, the guide ends, is hidden or stops', async () => {
