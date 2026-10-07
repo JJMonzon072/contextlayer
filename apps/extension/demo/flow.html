@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Demo CRM · Flow</title>
+    <link rel="stylesheet" href="demo.css" />
+    <script src="flow.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <strong class="brand">Demo CRM</strong>
+      <nav aria-label="Main">
+        <a id="nav-list" href="./">Customers</a>
+        <a id="link-new" href="./customers/new">New customer page</a>
+      </nav>
+    </header>
+
+    <main>
+      <p class="notice">
+        A fictitious single-page application for trying how a guide follows a page that changes
+        (Phase 6b). Nothing here is saved or sent anywhere.
+      </p>
+      <p>
+        Clicks the targets received:
+        <output id="target-clicks" data-testid="target-clicks">0</output>
+        <span class="hint">(ContextLayer guides; it must never click for you)</span>
+      </p>
+      <div class="actions" aria-label="Demo controls">
+        <button type="button" id="show-later" class="secondary">Show New customer in 2 s</button>
+        <button type="button" id="rerender" class="secondary">Re-render New customer</button>
+        <button type="button" id="remove" class="secondary">Remove New customer</button>
+        <button type="button" id="go-new" class="secondary">New customer (in app)</button>
+        <button type="button" id="go-list" class="secondary">Customers (in app)</button>
+        <button type="button" id="open-confirm" class="secondary">Open the import dialog</button>
+      </div>
+
+      <section id="view" aria-live="polite"></section>
+
+      <section role="dialog" aria-label="Import" class="card">
+        <h2>Last import</h2>
+        <button type="button">Confirm import</button>
+      </section>
+
+      <dialog id="confirm" aria-label="Import">
+        <p>Import 3 fictitious customers?</p>
+        <button type="button">Confirm import</button>
+        <button type="button" id="close-confirm">Cancel</button>
+      </dialog>
+    </main>
+  </body>
+</html>
