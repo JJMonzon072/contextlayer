@@ -6,6 +6,7 @@ import type { HighlightRect, Overlay } from '../src/content/overlay'
 import {
   CHECK_INTERVAL_MS,
   createPlayer,
+  GRACE_MS,
   ENDED_TEXT,
   HINTS,
   STALE_TEXT,
@@ -571,6 +572,109 @@ describe('waiting for a target (Phase 6b)', () => {
     expect(framed.card.dataset.state).toBe('shown')
     expect(framed.card.dataset.outcome).toBe('unsupported')
     expect(observing).toBe(0)
+  })
+
+  /** Shows a step anchored to `#new` and returns it. */
+  async function anchoredOnNew(ui: ReturnType<typeof setup>, target = capture('#new')) {
+    ui.player.show(step(0, { target }))
+    await run(0)
+    expect(ui.card.dataset.state).toBe('anchored')
+    return target
+  }
+
+  it('anchors the element a framework puts in place of the target', async () => {
+    const ui = setup()
+    await anchoredOnNew(ui)
+    const old = document.querySelector('#new')
+    const drawnBefore = ui.highlights.length
+
+    // A re-render: the same button, a new node.
+    const replacement = newCustomer()
+    old?.replaceWith(replacement)
+    await run(CHECK_INTERVAL_MS + 50)
+
+    // The old highlight went first, then the new node was anchored.
+    expect(ui.highlights.slice(drawnBefore)).toContain(null)
+    expect(ui.card.dataset.state).toBe('anchored')
+    expect(ui.anchored()).toBe(true)
+    expect(old?.isConnected).toBe(false)
+  })
+
+  it('anchors the target again when it comes back within the grace period', async () => {
+    const ui = setup()
+    await anchoredOnNew(ui)
+    const button = document.querySelector('#new')
+    const parent = button?.parentElement
+
+    button?.remove()
+    await run(CHECK_INTERVAL_MS + 50)
+    expect(ui.card.dataset.state).toBe('regaining')
+    expect(ui.highlights.at(-1)).toBeNull()
+    expect(ui.text('.hint')).toBe(HINTS.waiting)
+
+    if (button) parent?.append(button)
+    await run(GRACE_MS / 2)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+  })
+
+  it('shows the step on its own when the target does not come back, never skipping or ending', async () => {
+    const ui = setup()
+    const captured = capture('#new')
+    const strict = {
+      ...captured,
+      resolution: { ...captured.resolution, onNotFound: 'end' as const },
+    }
+    await anchoredOnNew(ui, strict)
+
+    document.querySelector('#new')?.remove()
+    await run(GRACE_MS + CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('shown')
+    expect(ui.card.dataset.outcome).toBe('not-found')
+    expect(ui.text('.hint')).toBe(HINTS['not-found'])
+    expect(ui.highlights.at(-1)).toBeNull()
+    expect(ui.isOpen()).toBe(true)
+    expect(ui.sent).toEqual([])
+  })
+
+  it('looks again for a target that is hidden, and anchors it when shown', async () => {
+    const ui = setup()
+    await anchoredOnNew(ui)
+
+    document.querySelector('#new')?.setAttribute('hidden', '')
+    await run(CHECK_INTERVAL_MS + 50)
+    expect(ui.card.dataset.state).toBe('regaining')
+    document.querySelector('#new')?.removeAttribute('hidden')
+    await run(CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('anchored')
+  })
+
+  it('never looks again for longer than the descriptor allows', async () => {
+    const ui = setup()
+    const captured = capture('#new')
+    const quick = { ...captured, resolution: { ...captured.resolution, timeoutMs: 400 } }
+    await anchoredOnNew(ui, quick)
+
+    document.querySelector('#new')?.remove()
+    await run(CHECK_INTERVAL_MS + 450)
+
+    expect(ui.card.dataset.state).toBe('shown')
+  })
+
+  it('never takes another element for the target that left', async () => {
+    const ui = setup()
+    await anchoredOnNew(ui)
+    const other = document.createElement('button')
+    other.type = 'button'
+    other.textContent = 'New supplier'
+
+    document.querySelector('#new')?.replaceWith(other)
+    await run(GRACE_MS + CHECK_INTERVAL_MS * 2)
+
+    expect(ui.card.dataset.state).toBe('shown')
+    expect(ui.anchored()).toBe(false)
   })
 
   it('stops observing when the step changes, the guide ends, is hidden or stops', async () => {

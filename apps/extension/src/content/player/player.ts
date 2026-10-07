@@ -1,7 +1,14 @@
 import type { PlayerStep } from '../../messaging/protocol'
 import { readStepAnswer } from '../messages'
 import type { Overlay } from '../overlay'
-import { isRendered, resolveTarget, stepPagePattern, type Resolution } from '../resolve/resolver'
+import {
+  isRendered,
+  isUsable,
+  resolveTarget,
+  stepPagePattern,
+  topModal,
+  type Resolution,
+} from '../resolve/resolver'
 import { inView, placeCard, type Box } from './position'
 
 /**
@@ -25,6 +32,13 @@ import { inView, placeCard, type Box } from './position'
  * runs per `CHECK_INTERVAL_MS`, until the descriptor's `timeoutMs`, and every
  * observer and timer of a step is released with its `AbortController` when
  * the step changes or the guide ends, is hidden or stops.
+ *
+ * A target that leaves while anchored (removed, hidden, re-rendered by a
+ * framework, or shut out by a modal dialog) loses its highlight at once and
+ * is resolved again, from the descriptor, for `GRACE_MS` at most. A safe match
+ * that holds still is anchored again; otherwise the step stays on its own
+ * with a hint. Losing a target the user was shown never skips or ends the
+ * guide: the user may just have used it.
  */
 
 export const HINTS = {
@@ -38,6 +52,14 @@ export const HINTS = {
 
 /** At most one resolution attempt per this many milliseconds while waiting (ADR 0014: ~150 ms). */
 export const CHECK_INTERVAL_MS = 150
+
+/**
+ * How long a target that left mid-step is looked for again (ADR 0014: 1 to 2
+ * seconds), at most the descriptor's `timeoutMs`: long enough for a
+ * framework to put an equivalent element back, short enough not to leave a
+ * step looking for something the user removed.
+ */
+export const GRACE_MS = 1_500
 
 export const ENDED_TEXT = 'This guide ended: a step could not be shown on this page.'
 export const STALE_TEXT = 'This guide is no longer playing.'
@@ -72,6 +94,8 @@ export interface PlayerDeps {
   isRendered?: (element: Element) => boolean
   /** Replaced in tests: jsdom only creates untrusted events. */
   isTrusted?: (event: Event) => boolean
+  /** The open modal dialog, if any (default `topModal`); given in tests (jsdom has none). */
+  modal?: (document: Document) => Element | null
 }
 
 export interface Player {
@@ -89,9 +113,10 @@ export interface Player {
  * - `resolving`: the first look at the page;
  * - `waiting`: the target is not there yet, or not yet the only match;
  * - `anchored`: next to its target;
+ * - `regaining`: its target left; looked for again for a short grace period;
  * - `shown`: on its own, for good (no target, or after the wait).
  */
-type Phase = 'resolving' | 'waiting' | 'anchored' | 'shown'
+type Phase = 'resolving' | 'waiting' | 'anchored' | 'regaining' | 'shown'
 
 /** One showing of one step: everything it started stops with its controller. */
 interface View {
@@ -137,6 +162,9 @@ export function createPlayer(deps: PlayerDeps): Player {
   const document = window.document
   const rendered = deps.isRendered ?? isRendered
   const trusted = deps.isTrusted ?? ((event: Event) => event.isTrusted)
+  const modalOf = deps.modal ?? topModal
+  /** Still there, visible and reachable (not shut out by an open modal dialog). */
+  const usable = (element: Element) => isUsable(element, modalOf(document), rendered)
 
   /** The step shown; replaced (a new object) on every step change. */
   let current: { step: PlayerStep } | undefined
@@ -282,16 +310,14 @@ export function createPlayer(deps: PlayerDeps): Player {
   function draw() {
     frame = undefined
     if (!current) return
-    if (anchor && !anchor.isConnected) {
-      // Gone mid-step (re-resolving it is Phase 6b): shown on its own, with a hint.
-      anchor = undefined
-      overlay.highlight(null)
-      hint = HINTS['not-found']
-      if (parts) parts.card.dataset.outcome = 'not-found'
-      fill(ensureParts(), current.step)
+    if (anchor && !usable(anchor) && view) {
+      loseAnchor(view)
+      return
     }
     if (!anchor) {
-      place(null)
+      // While a lost target is looked for again, the card stays where it was.
+      if (phase === 'regaining') overlay.showPlayerCard()
+      else place(null)
       return
     }
     const box = boxOf(anchor)
@@ -430,7 +456,37 @@ export function createPlayer(deps: PlayerDeps): Player {
   }
 
   function tick(shown: View) {
-    if (phase === 'waiting') void attempt(shown)
+    if (phase === 'waiting' || phase === 'regaining') void attempt(shown)
+    else if (phase === 'anchored') {
+      // The target may have left, or moved: check it and draw again.
+      if (anchor && !usable(anchor)) loseAnchor(shown)
+      else schedule()
+    }
+  }
+
+  /**
+   * The anchored target left: no highlight on where it was, and a short
+   * search from the descriptor for the element that replaced it.
+   */
+  function loseAnchor(shown: View) {
+    if (!live(shown) || phase !== 'anchored') return
+    anchor = undefined
+    overlay.highlight(null)
+    phase = 'regaining'
+    hint = HINTS.waiting
+    shown.outcome = 'not-found'
+    const target = ensureParts()
+    target.card.dataset.state = phase
+    target.card.dataset.outcome = 'not-found'
+    if (current) fill(target, current.step)
+    const limit = current?.step.target?.resolution.timeoutMs ?? 0
+    shown.deadline = window.setTimeout(
+      () => {
+        giveUp(shown)
+      },
+      Math.min(GRACE_MS, limit),
+    )
+    void attempt(shown)
   }
 
   /** One more look for the target while waiting; anchors it once it is safely there. */
@@ -472,6 +528,8 @@ export function createPlayer(deps: PlayerDeps): Player {
     }
     if (occluded(element)) target.card.dataset.occluded = 'true'
     anchor = element
+    // Watched while anchored too: a target that leaves is looked for again.
+    observe(shown)
     draw()
   }
 
@@ -483,7 +541,12 @@ export function createPlayer(deps: PlayerDeps): Player {
   function giveUp(shown: View) {
     shown.deadline = undefined
     const step = current?.step
-    if (!step || !live(shown) || phase !== 'waiting') return
+    if (!step || !live(shown)) return
+    if (phase === 'regaining') {
+      showOnItsOwn(shown, 'not-found', HINTS['not-found'])
+      return
+    }
+    if (phase !== 'waiting') return
     const outcome = shown.outcome === 'ambiguous' ? 'ambiguous' : 'not-found'
     const policy =
       outcome === 'ambiguous'
@@ -516,6 +579,7 @@ export function createPlayer(deps: PlayerDeps): Player {
         document,
         href: window.location.href,
         isRendered: rendered,
+        modal: modalOf(document),
       })
     } catch {
       // A malformed descriptor fails closed: never a guess.
