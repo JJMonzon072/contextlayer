@@ -2,7 +2,7 @@ import type { TargetDescriptor } from '@contextlayer/shared'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { captureTarget } from '../src/content/capture/descriptor'
-import { resolveTarget, stepPagePattern, WEIGHTS } from '../src/content/resolve/resolver'
+import { resolveTarget, stepPagePattern, topModal, WEIGHTS } from '../src/content/resolve/resolver'
 
 /**
  * The Phase 6a fixture corpus: each case captures a descriptor from a page
@@ -363,6 +363,63 @@ describe('scoring, vetoes and thresholds', () => {
       xpath: 0.2,
       position: 0.1,
     })
+  })
+})
+
+describe('modal dialogs (Phase 6b)', () => {
+  const withModal = (target: TargetDescriptor, modal: Element) =>
+    resolveTarget(target, stepPagePattern(null, target), {
+      document,
+      href: PAGE,
+      isRendered,
+      modal,
+    })
+
+  it('takes the copy inside an open modal dialog over an identical one it makes inert', () => {
+    page(`
+      <div role="dialog" aria-label="Customer"><button type="submit">Save</button></div>
+      <dialog open aria-label="Customer"><button type="submit">Save</button></dialog>
+    `)
+    const inside = element('dialog button')
+    const target = capture('dialog button')
+
+    // Without knowing about the modal, nothing tells the two apart.
+    expect(resolve(target)).toMatchObject({ outcome: 'ambiguous', reason: 'identical-candidates' })
+    const result = withModal(target, element('dialog'))
+
+    expect(result).toMatchObject({ outcome: 'resolved' })
+    expect(result.element).toBe(inside)
+    expect(result.diagnostics.blocked).toBe(1)
+  })
+
+  it('waits for a target behind an open modal instead of taking a copy inside it', () => {
+    page(`
+      <form aria-label="Customer"><button type="submit">Save</button></form>
+      <dialog open aria-label="Confirm"><button type="submit">Save</button></dialog>
+    `)
+    const target = capture('form button')
+
+    expect(resolve(target).element).toBe(element('form button'))
+    expect(withModal(target, element('dialog'))).toMatchObject({
+      outcome: 'not-found',
+      reason: 'behind-modal',
+    })
+  })
+
+  it('never resolves a unique test id behind an open modal', () => {
+    page(
+      `<button type="button" data-testid="archive">Archive</button><dialog open><p>Busy</p></dialog>`,
+    )
+    const target = capture('button')
+
+    expect(withModal(target, element('dialog'))).toMatchObject({
+      outcome: 'not-found',
+      reason: 'behind-modal',
+    })
+  })
+
+  it('treats a page without modal support as having no modal', () => {
+    expect(topModal(document)).toBeNull()
   })
 })
 

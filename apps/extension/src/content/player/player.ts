@@ -355,7 +355,7 @@ export function createPlayer(deps: PlayerDeps): Player {
       return {
         outcome: 'unsupported',
         reason: 'invalid-target',
-        diagnostics: { strategies: {}, rendered: 0, vetoed: 0, top: [] },
+        diagnostics: { strategies: {}, rendered: 0, vetoed: 0, blocked: 0, top: [] },
       }
     }
   }
