@@ -43,6 +43,7 @@ const guide: PublishedGuideSummary = {
   description: '',
   stepCount: 2,
   publishedAt: '2026-10-05T12:00:00.000Z',
+  startUrlPattern: null,
 }
 
 /** Chrome as site access sees it: grants, tabs, registrations, injections, messages. */
@@ -247,6 +248,31 @@ describe('enabling a site', () => {
     expect(calls.map((call) => call.path)).toContain(
       `${EXTENSION_PATHS.guides}?origin=${encodeURIComponent(CRM)}`,
     )
+  })
+
+  it('lists only the guides that start on the page shown, or on any page', async () => {
+    const onCustomers = {
+      ...guide,
+      title: 'On customers',
+      startUrlPattern: { pathname: '/customers' },
+    }
+    const onDeals = { ...guide, title: 'On deals', startUrlPattern: { pathname: '/deals' } }
+    const broken = { ...guide, title: 'Broken', startUrlPattern: { pathname: '/(unclosed' } }
+    const { turnOn, granted, site } = await setup({
+      api: (call) =>
+        call.path.startsWith(`${EXTENSION_PATHS.guides}?`)
+          ? json(200, { items: [guide, onCustomers, onDeals, broken], nextCursor: null })
+          : undefined,
+    })
+    granted.add(CRM_PATTERN)
+    await turnOn(CRM_TAB)
+
+    const titles = async (tabId: number) => {
+      const status = await site.status(tabId)
+      return status.state === 'active' ? status.guides?.map((item) => item.title) : undefined
+    }
+    expect(await titles(CRM_TAB)).toEqual(['Create a customer', 'On customers'])
+    expect(await titles(CRM_TAB_2)).toEqual(['Create a customer', 'On deals'])
   })
 
   it('refuses an origin that is not a registered application', async () => {

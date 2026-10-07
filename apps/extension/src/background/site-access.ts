@@ -7,6 +7,7 @@ import {
   type PublishedGuideSummary,
 } from '@contextlayer/shared'
 
+import { matchPage } from '../lib/url-pattern'
 import type { ApplicationListData, SiteStatusData } from '../messaging/protocol'
 import { ApiUnreachableError } from './api-client'
 import { ConnectionEndedError, NotConnectedError, type Auth } from './auth'
@@ -242,8 +243,9 @@ export function createSiteAccess(deps: {
   }
 
   async function status(tabId: number): Promise<SiteStatus> {
-    const origin = await originOfTab(tabId)
-    if (origin === undefined) return { state: 'unsupported' }
+    const url = await chrome.tabUrl(tabId)
+    const origin = siteOrigin(url)
+    if (url === undefined || origin === undefined) return { state: 'unsupported' }
     const connection = await vault.readConnection()
     if (!connection) return { state: 'disconnected', origin }
     if (!(await chrome.hasHostAccess(apiPattern))) return { state: 'api-withheld', origin }
@@ -287,7 +289,11 @@ export function createSiteAccess(deps: {
         `${EXTENSION_PATHS.guides}?${new URLSearchParams({ origin }).toString()}`,
         publishedGuideListSchema,
       )
-      guides = page?.items ?? []
+      // The API narrows by origin; the start page is matched here, where
+      // URLPattern exists. No start page: any page of the origin.
+      guides = (page?.items ?? []).filter(
+        (guide) => matchPage(guide.startUrlPattern, url) === 'match',
+      )
       moreGuides = (page?.nextCursor ?? null) !== null
     } catch (error) {
       if (!(error instanceof ApiUnreachableError)) throw error

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { EXTENSION_ID_PATTERN } from './extension-identity.js'
 import { pageQuerySchema, pageSchema } from './pagination.js'
 import { guideSnapshotSchema, guideTitleSchema } from './guides.js'
+import { urlPatternSchema } from './url-pattern.js'
 
 /**
  * Extension connection (ADR 0015): the dashboard issues a one-time code bound to
@@ -215,6 +216,11 @@ export const publishedGuideSummarySchema = z.object({
   description: z.string(),
   stepCount: z.number().int().min(0),
   publishedAt: z.iso.datetime(),
+  /**
+   * The published version's start page, matched by the extension against the
+   * current page (the API only narrows by origin); `null`: any page of the origin.
+   */
+  startUrlPattern: urlPatternSchema.nullable(),
 })
 
 export const publishedGuideListSchema = pageSchema(publishedGuideSummarySchema)

@@ -9,6 +9,7 @@ import {
   roleOf,
 } from './accessible'
 import { isGeneratedId, isRecordId, isStableClass, isStableTestId } from './identity'
+import { findByLabel, findByRoleName, findByText } from './locate'
 import { pagePattern } from './page'
 import {
   attributeSelector,
@@ -54,8 +55,6 @@ const INTERACTIVE =
   'button, a[href], summary, select, textarea, input:not([type="hidden"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="treeitem"]'
 /** How far up promotion looks; it never reaches `body`. */
 const MAX_PROMOTION_DEPTH = 6
-/** Above this many candidates a count is not attempted, so the locator is left out. */
-const MAX_CANDIDATES = 5_000
 const MAX_HEADINGS = 500
 /** Attributes that describe an element without carrying user input. */
 const DESCRIBING_ATTRIBUTES = ['type', 'name', 'title', 'placeholder', 'alt', 'aria-label']
@@ -136,53 +135,19 @@ export function unsupportedReason(
   return undefined
 }
 
-/** The selector that finds every element `roleOf` can give `role`. */
-const ROLE_CANDIDATES: Record<string, string> = {
-  button: 'button, input, [role]',
-  link: 'a[href], area[href], [role]',
-  heading: 'h1, h2, h3, h4, h5, h6, [role]',
-  textbox: 'input, textarea, [role]',
-  searchbox: 'input, [role]',
-  spinbutton: 'input, [role]',
-  slider: 'input, [role]',
-  checkbox: 'input, [role]',
-  radio: 'input, [role]',
-  combobox: 'select, input, [role]',
-  listbox: 'select, [role]',
-  img: 'img, [role]',
-  presentation: 'img, [role]',
-  option: 'option, [role]',
-}
-const OTHER_ROLE_CANDIDATES =
-  '[role], section, form, nav, main, aside, dialog, ul, ol, li, table, button, textarea'
-
-function candidates(document: Document, selector: string): Element[] | undefined {
-  const list = document.querySelectorAll(selector)
-  return list.length > MAX_CANDIDATES ? undefined : [...list]
-}
-
 /** Elements with this role and exactly this accessible name. */
 export function countRoleName(document: Document, role: string, name: string): number | undefined {
-  return candidates(document, ROLE_CANDIDATES[role] ?? OTHER_ROLE_CANDIDATES)?.filter(
-    (element) => roleOf(element) === role && accessibleName(element) === name,
-  ).length
+  return findByRoleName(document, role, name)?.length
 }
 
 /** Form controls whose labels read exactly `text`. */
 export function countLabel(document: Document, text: string): number | undefined {
-  return candidates(document, 'input, select, textarea')?.filter(
-    (element) => labelText(element) === text,
-  ).length
+  return findByLabel(document, text)?.length
 }
 
 /** The deepest elements whose visible content is exactly `text`. */
 export function countText(document: Document, text: string): number | undefined {
-  return candidates(document, 'body *')?.filter(
-    (element) =>
-      !isUserContent(element) &&
-      contentText(element) === text &&
-      ![...element.children].some((child) => contentText(child) === text),
-  ).length
+  return findByText(document, text)?.length
 }
 
 function testIdsOf(element: Element): { attr: (typeof TEST_ATTRIBUTES)[number]; value: string }[] {
@@ -396,6 +361,27 @@ function elementOf(element: Element, role: string | undefined): TargetDescriptor
   }
 }
 
+/** The role capture stores: a valid ARIA role name, or none. */
+function storedRole(element: Element): string | undefined {
+  const role = roleOf(element)
+  return role !== undefined && ROLE.test(role) ? role : undefined
+}
+
+/**
+ * The element, container and anchors capture would store for `element`, by
+ * the same functions and privacy rules: the player compares candidates with a
+ * stored descriptor on exactly these terms.
+ */
+export function describeElement(
+  element: Element,
+): Pick<TargetDescriptor, 'element' | 'container' | 'anchors'> {
+  return {
+    element: elementOf(element, storedRole(element)),
+    container: containerOf(element),
+    anchors: anchorsOf(element),
+  }
+}
+
 /**
  * Describes the element under the user's click. `ok: false` with a reason
  * the side panel can show when the element is out of Phase 5's scope or
@@ -412,8 +398,7 @@ export function captureTarget(
   if (!TAG.test(picked.localName))
     return { ok: false, reason: 'This kind of element is not supported.' }
 
-  const rawRole = roleOf(element)
-  const role = rawRole !== undefined && ROLE.test(rawRole) ? rawRole : undefined
+  const role = storedRole(element)
   const locators = locatorsOf(element, role)
   if (locators.length === 0) {
     return { ok: false, reason: 'This element cannot be identified. Pick another one.' }

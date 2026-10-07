@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { readContentRequest, readHelloAnswer } from '../src/content/messages'
-import { contentRequestSchema, helloResultSchema } from '../src/messaging/protocol'
+import { captureTarget } from '../src/content/capture/descriptor'
+import { readContentRequest, readHelloAnswer, readStepAnswer } from '../src/content/messages'
+import {
+  contentRequestSchema,
+  helloResultSchema,
+  playerStepResultSchema,
+} from '../src/messaging/protocol'
 
 /**
  * The content script reads messages without zod (content-script budget). These
@@ -85,4 +90,133 @@ describe('content-script message readers', () => {
       expect(readHelloAnswer(value), JSON.stringify(value)).toBe(expected)
     }
   })
+
+  it('accept and refuse the same player messages as contentRequestSchema', () => {
+    for (const value of playerRequests()) {
+      const parsed = contentRequestSchema.safeParse(value)
+      expect(readContentRequest(value), JSON.stringify(value)).toEqual(
+        parsed.success ? parsed.data : undefined,
+      )
+    }
+  })
+
+  it('read a step answer like playerStepResultSchema', () => {
+    const answers: unknown[] = [
+      ...playerSteps().map((data) => ({ ok: true, data })),
+      { ok: false, error: { code: 'STALE', message: 'No longer playing.' } },
+      { ok: false, error: { code: 'BAD_REQUEST', message: 'No step there.' } },
+      { ok: false, error: { code: 'NOPE', message: 'x' } },
+      { ok: false, error: { code: 'STALE' } },
+      { ok: false },
+      { ok: true },
+      null,
+      'STALE',
+    ]
+    for (const value of answers) {
+      const parsed = playerStepResultSchema.safeParse(value)
+      const expected = !parsed.success
+        ? { error: 'INTERNAL_ERROR' }
+        : parsed.data.ok
+          ? { step: parsed.data.data }
+          : { error: parsed.data.error.code }
+      expect(readStepAnswer(value), JSON.stringify(value)).toEqual(expected)
+    }
+  })
+
+  it('check only the outline of a target, which the worker validated in full', () => {
+    // The worker is the only sender of player.show and parses the snapshot
+    // with the shared schema; below the outline the resolver fails closed.
+    const [valid] = playerSteps()
+    const target = { ...captured(), locators: [{ strategy: 'nope' }] }
+    const message = { type: 'player.show', step: { ...(valid as object), target } }
+
+    expect(contentRequestSchema.safeParse(message).success).toBe(false)
+    expect(readContentRequest(message)).toBeDefined()
+  })
 })
+
+const RUN = 'Rn1_run-id-0123456789abcdef'
+
+function captured() {
+  document.body.innerHTML = '<button type="button" data-testid="new-customer">New customer</button>'
+  const button = document.querySelector('button')
+  if (!button) throw new Error('no button')
+  const outcome = captureTarget(button, {
+    extensionVersion: '0.1.0',
+    capturedAt: new Date('2026-10-06T10:00:00Z'),
+    href: 'http://127.0.0.1:4400/customers',
+  })
+  if (!outcome.ok) throw new Error(outcome.reason)
+  return outcome.descriptor
+}
+
+/** Steps around every rule of playerStepSchema, valid and not. */
+function playerSteps(): unknown[] {
+  const step = {
+    runId: RUN,
+    generation: 2,
+    guideTitle: 'Create a customer',
+    index: 1,
+    count: 3,
+    title: 'Type the name',
+    lines: ['Type the customer name.'],
+    target: null,
+    urlPattern: null,
+    placement: 'auto',
+  }
+  const target = captured()
+  return [
+    step,
+    { ...step, target },
+    { ...step, urlPattern: { pathname: '/customers/:id' } },
+    { ...step, urlPattern: { pathname: '/customers', hash: 'x' } },
+    { ...step, generation: 0, index: 0, count: 1 },
+    { ...step, count: 50, index: 49 },
+    { ...step, runId: 'short' },
+    { ...step, runId: `${RUN}!` },
+    { ...step, generation: -1 },
+    { ...step, generation: 1.5 },
+    { ...step, index: 3 },
+    { ...step, index: -1 },
+    { ...step, count: 0, index: 0 },
+    { ...step, count: 51 },
+    { ...step, title: '' },
+    { ...step, title: 'x'.repeat(121) },
+    { ...step, guideTitle: 'x'.repeat(121) },
+    { ...step, lines: Array(41).fill('a') },
+    { ...step, lines: ['x'.repeat(2_001)] },
+    { ...step, lines: [1] },
+    { ...step, placement: 'center' },
+    { ...step, urlPattern: {} },
+    { ...step, urlPattern: { pathname: '' } },
+    { ...step, urlPattern: { pathname: '/a b' } },
+    { ...step, urlPattern: { pathname: '/a\u0007' } },
+    { ...step, urlPattern: { pathname: 'x'.repeat(257) } },
+    { ...step, urlPattern: { pathname: '/x', query: 'y' } },
+    { ...step, urlPattern: { pathname: 7 } },
+    { ...step, target: 'button' },
+    { ...step, target: { ...target, version: 2 } },
+    { ...step, target: { ...target, locators: [] } },
+    { ...step, target: { ...target, page: { urlPattern: {} } } },
+    { ...step, target: { ...target, resolution: { ...target.resolution, minScore: 2 } } },
+    { ...step, target: { ...target, resolution: { ...target.resolution, onNotFound: 'retry' } } },
+    { ...step, html: '<b>x</b>' },
+    Object.fromEntries(Object.entries(step).filter(([key]) => key !== 'target')),
+    Object.fromEntries(Object.entries(step).filter(([key]) => key !== 'urlPattern')),
+    null,
+    [],
+  ]
+}
+
+function playerRequests(): unknown[] {
+  return [
+    ...playerSteps().map((step) => ({ type: 'player.show', step })),
+    { type: 'player.show' },
+    { type: 'player.show', step: playerSteps()[0], runId: RUN },
+    { type: 'player.hide', runId: RUN },
+    { type: 'player.hide', runId: 'short' },
+    { type: 'player.hide' },
+    { type: 'player.hide', runId: RUN, step: 1 },
+    { type: 'player.go', runId: RUN, generation: 1, direction: 'next' },
+  ]
+}

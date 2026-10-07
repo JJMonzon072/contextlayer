@@ -17,6 +17,11 @@
  *    the selected element is described here (`capture/`) and sent back to the
  *    worker for that request only. The element itself stays in this script's
  *    memory, for the step preview, and is never sent anywhere.
+ * 5. When a guide plays, the worker sends `player.show` with one step; the
+ *    target is resolved and shown here (`player/`, `resolve/`), and the card's
+ *    buttons ask the worker for the next step. Edit Mode and the player never
+ *    overlap: selecting or previewing removes the guide, and a guide is not
+ *    shown while selecting or previewing.
  */
 import { EXTENSION_VERSION } from '../config'
 import { failure } from '../messaging/result'
@@ -25,6 +30,7 @@ import { handleContentMessage } from './handle-message'
 import { askWorker, readHelloAnswer } from './messages'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
 import { startPicker, type Picker } from './picker'
+import { createPlayer } from './player/player'
 import { showPreview, type Preview } from './preview'
 
 type ContentState = 'starting' | 'active' | 'inactive' | 'stopped'
@@ -85,6 +91,7 @@ function start(instance: ContentInstance): void {
   let picker: { captureId: string; instance: Picker } | undefined
   let preview: Preview | undefined
   const remembered = new Map<string, WeakRef<Element>>()
+  const player = createPlayer({ window, overlay, send: askWorker })
 
   function hidePreview() {
     preview?.stop()
@@ -95,6 +102,7 @@ function start(instance: ContentInstance): void {
   function previewStep(captureId: string, title: string, lines: string[]): boolean {
     hidePreview()
     stopCapture()
+    player.stop()
     const element = remembered.get(captureId)?.deref()
     if (!element) return false
     preview = showPreview({
@@ -112,6 +120,7 @@ function start(instance: ContentInstance): void {
 
   function startCapture(captureId: string, ttlMs: number) {
     hidePreview()
+    player.stop()
     picker?.instance.stop()
     const instance = startPicker({
       window,
@@ -160,6 +169,7 @@ function start(instance: ContentInstance): void {
     instance.state = state
     stopCapture()
     hidePreview()
+    player.stop()
     remembered.clear()
     overlay.destroy()
     document.removeEventListener('visibilitychange', checkContext)
@@ -199,6 +209,11 @@ function start(instance: ContentInstance): void {
           stopPicker: stopCapture,
           showPreview: previewStep,
           hidePreview,
+          // Never over Edit Mode's selection or preview.
+          showPlayer: (step) => picker === undefined && preview === undefined && player.show(step),
+          hidePlayer: (runId) => {
+            player.hide(runId)
+          },
         },
       )
     } catch {

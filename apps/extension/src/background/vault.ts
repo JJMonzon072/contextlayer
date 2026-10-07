@@ -1,4 +1,8 @@
-import { extensionApplicationSchema, targetDescriptorSchema } from '@contextlayer/shared'
+import {
+  extensionApplicationSchema,
+  guideSnapshotSchema,
+  targetDescriptorSchema,
+} from '@contextlayer/shared'
 import { z } from 'zod'
 
 import { AUTHORING_END_REASONS, CAPTURE_STATES, localDraftSchema } from '../messaging/protocol'
@@ -22,6 +26,7 @@ const KEYS = {
   authoring: 'cl.authoring',
   authoringEnded: 'cl.authoringEnded',
   authoringDraft: 'cl.authoringDraft',
+  players: 'cl.players',
 } as const
 
 export const attemptSchema = z.object({
@@ -133,6 +138,31 @@ const storedDraftSchema = localDraftSchema.extend({
   version: z.number().int().nonnegative(),
 })
 
+/**
+ * A guide being played (Phase 6a): bound to the connection, one tab, its
+ * origin and document, and one published version, whose snapshot is kept so
+ * a newer publication never changes a run. In `storage.session` only (never
+ * in the API's database), so the current step survives the worker stopping
+ * between events.
+ */
+export const playerRunSchema = z.object({
+  id: z.string(),
+  grantId: z.string(),
+  workspaceId: z.string(),
+  tabId: z.number().int(),
+  origin: z.string(),
+  documentId: z.string(),
+  guideId: z.string(),
+  applicationId: z.string(),
+  version: z.number().int().min(1),
+  snapshot: guideSnapshotSchema,
+  /** Index of the step shown, in step order. */
+  step: z.number().int().nonnegative(),
+  /** Increases with every step change; the page echoes it back. */
+  generation: z.number().int().nonnegative(),
+  startedAt: z.number(),
+})
+
 /** Why the last connection ended without the user disconnecting. */
 const endedSchema = z.object({ reason: z.enum(['ended']), at: z.number() })
 
@@ -146,6 +176,24 @@ export type SiteIntent = z.infer<typeof siteIntentSchema>
 export type AuthoringSession = z.infer<typeof authoringSessionSchema>
 export type AuthoringEnded = z.infer<typeof authoringEndedSchema>
 export type StoredDraft = z.infer<typeof storedDraftSchema>
+export type PlayerRun = z.infer<typeof playerRunSchema>
+/** The runs being played, at most one per tab, keyed by the tab id as a string. */
+export type PlayerRuns = Record<string, PlayerRun>
+
+/**
+ * Reads the stored runs one by one: a malformed run, or one filed under
+ * another tab's key, is dropped on its own without touching the other tabs'.
+ */
+function playerRunsOf(value: unknown): PlayerRuns {
+  const record = z.record(z.string(), z.unknown()).safeParse(value)
+  if (!record.success) return {}
+  const runs: PlayerRuns = {}
+  for (const [key, entry] of Object.entries(record.data)) {
+    const run = playerRunSchema.safeParse(entry)
+    if (run.success && String(run.data.tabId) === key) runs[key] = run.data
+  }
+  return runs
+}
 
 async function read<T>(
   area: StorageArea,
@@ -218,6 +266,14 @@ export function createVault(storage: ExtensionStorage) {
     writeDraft: (draft: StoredDraft) => storage.session.set({ [KEYS.authoringDraft]: draft }),
     clearDraft: () => storage.session.remove(KEYS.authoringDraft),
 
+    /** The Guide Player's runs by tab (Phase 6a): each tab's run is independent. */
+    readPlayers: async (): Promise<PlayerRuns> =>
+      playerRunsOf((await storage.session.get(KEYS.players))[KEYS.players]),
+    writePlayers: (runs: PlayerRuns) =>
+      Object.keys(runs).length === 0
+        ? storage.session.remove(KEYS.players)
+        : storage.session.set({ [KEYS.players]: runs }),
+
     /** Stores a full credential set; the refresh token only in the protected area. */
     async saveConnection(values: {
       access: AccessRecord
@@ -243,6 +299,8 @@ export function createVault(storage: ExtensionStorage) {
         // Edit Mode belongs to the connection: no session or unsaved copy outlives it.
         KEYS.authoring,
         KEYS.authoringDraft,
+        // So do the guides being played, in every tab.
+        KEYS.players,
       ])
       if (ended) await storage.session.set({ [KEYS.ended]: { reason: 'ended', at } })
       else await storage.session.remove(KEYS.ended)

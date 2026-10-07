@@ -8,11 +8,12 @@
  * 105 472 bytes, about 86 % of it zod and 10 % shared schemas pulled in by the
  * message protocol; after replacing them with hand-written readers it held
  * only ContextLayer's own code (3 086 bytes). With the Phase 5 capture, picker
- * and preview it is 26 267 bytes (10 098 gzip). The limit leaves room for the
- * Phase 6 player (resolution and popover, likely of the same order as capture)
- * while staying well under the 100 KiB target, and it is far below what zod
- * alone would take, so reintroducing a schema library in the content script
- * fails the build.
+ * and preview it is 26 267 bytes (10 098 gzip). The Phase 6a resolver and
+ * player brought it to 45 277 bytes (16 078 gzip); the player positions its
+ * card with its own small module instead of a positioning library. The limit
+ * stays well under the 100 KiB target, and it is far below what zod alone
+ * would take, so reintroducing a schema library in the content script fails
+ * the build.
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'

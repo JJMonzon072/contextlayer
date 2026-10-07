@@ -1,6 +1,6 @@
 # Roadmap
 
-Status on 2026-10-05: **Phases 1–5 are done; Phases 6–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
+Status on 2026-10-06: **Phases 1–5 and milestone 6a are done; 6b, 6c and Phases 7–8 are Planned.** A phase closes when its exit criteria pass, its demo works and the verification is recorded in this roadmap and in the commit messages. Details: [product](product.md), [architecture](architecture.md), [technical risks](technical-risks.md), [data model](data-model.md), [API](api.md) and the [ADR index](adr/README.md).
 
 ## Why this order
 
@@ -16,7 +16,7 @@ Status on 2026-10-05: **Phases 1–5 are done; Phases 6–8 are Planned.** A pha
 | 3     | Guides API and management | Done    | 3a API, 3b dashboard                            |
 | 4     | Extension connection      | Done    | 4a spike, 4b API, 4c connection, 4d site access |
 | 5     | Edit Mode (guide builder) | Done    | none                                            |
-| 6     | Guide player              | Planned | 6a playback, 6b dynamic pages, 6c shadow/frames |
+| 6     | Guide player              | 6a Done | 6a playback, 6b dynamic pages, 6c shadow/frames |
 | 7     | Analytics                 | Planned | none                                            |
 | 8     | Hardening and delivery    | Planned | 8a packaging, 8b security/ops, 8c distribution  |
 
@@ -268,22 +268,72 @@ Risks addressed: R-04 (capture), R-07 (refusal instead of wrong targets), R-10 (
 
 ## Phase 6 — Guide player
 
-**Planned (Phase 6).** Depends on Phases 4 and 5. Goal: an end user is walked through a published guide, or sees an explicit reason why a step cannot be shown.
+**6a Done (Implemented, Phase 6a); 6b and 6c Planned.** Depends on Phases 4 and 5. Goal: an end user is walked through a published guide, or sees an explicit reason why a step cannot be shown.
 
-- [ ] 6a: discovery for the current URL; resolution (candidates → weighted score → veto → minimum score and margin → visibility) with outcomes `resolved | ambiguous | not-found | wrong-page`, never guessing; highlight + popover (Floating UI) with Previous/Next/Finish; run state in `chrome.storage.session` keyed by tab id + run id; accessibility baseline (`role="dialog"`, `aria-live`, keyboard, reduced motion).
-- [ ] 6b: MutationObserver waits (per root, throttled, ~10 s timeout); SPA navigation via the Navigation API; multi-page guides; bfcache; targets inside host modals.
+- [x] 6a: playback of published guides with static resolution in the page's light DOM.
+  - **Discovery:** the popup lists the published guides for the tab's origin (API) whose start page matches the tab's URL (URLPattern, in the worker; no start page means any page of the origin), each with **Play**.
+  - **Start:** the worker fetches the version the popup listed, checks the site, the guide's application and the start page again, and sends the first step to the page; the popup closes.
+  - **Run state:** at most one run per tab, in `chrome.storage.session` by tab id (run id, tab, origin, document, guide and version with its snapshot, step index, generation), never in PostgreSQL; two tabs play two guides independently. A run survives the worker stopping. A tab's run ends on Finish, Close, a new document in that tab, that tab closing, Edit Mode on that tab or a new Play on that tab; the runs of a site end when it is turned off or its access is withdrawn; every run ends on Disconnect and on a revocation.
+  - **Messages:** the page asks for Previous / Next / Finish / Close with the run id and generation it shows; anything from another tab, frame, document or origin, or about an ended run, changes nothing, and a late answer never brings a guide back: a run's hide reaches its page after its show, the page refuses a show for a run it was told to hide, and an older or ended start never reports success or replaces a newer run.
+  - **Revocation:** Previous and Next first check the connection with the existing bearer request (`GET /v1/extension/session`, as the popup's status does); a connection the server refuses ends every run it had and removes each guide from its page. An unreachable API is not taken for a revocation.
+  - **Resolution** ([ADR 0014](adr/0014-element-targeting-strategy.md)): outcomes `resolved`, `ambiguous`, `not-found`, `wrong-page`, plus `unsupported` for frame and shadow paths; candidates by capture's own definitions, at most 50; visibility filter; ADR weights; vetoes; an identity rule; identical candidates never told apart by position; two-frame stability (a target that never holds still is not anchored); occlusion as a warning.
+  - **Player UI** ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)): highlight and a card with the guide, progress, title, instructions, Previous, Next or Finish and Close. Unanchored steps follow the descriptor's `onAmbiguous` / `onNotFound` (unanchored with a hint, skip or end). Scrolling only when the target is out of view.
+  - **Accessibility:** a labelled non-modal dialog, a polite live region, native buttons, no focus trap, focus taken only when the page has none, Escape only from inside the card, no animation, instant scrolling under reduced motion.
+  - **Never acts:** the player does not click, type or submit; clicks and keys in the card stay in it and forged events are ignored.
+  - **Edit Mode:** Edit Mode opening on a tab ends its guide; a guide does not start while Edit Mode is open on the tab, and the page refuses to show one over a selection or preview.
+- [ ] 6b: MutationObserver waits (per root, throttled, ~10 s timeout); re-resolution when a target disconnects; SPA navigation via the Navigation API; multi-page guides (today a new document ends the run); bfcache; targets inside host modals; threshold calibration on real applications.
 - [ ] 6c: open and closed shadow roots (`chrome.dom.openOrClosedShadowRoot`) and iframes; cross-origin frames need their own host permission.
 
 Out of scope: auto-healing (stored descriptors are never rewritten), branching guides, sending events (Phase 7).
 
 Exit criteria:
 
-- Playwright fixture corpus (generated ids, late rendering, `pushState`, bfcache, `showModal`, shadow roots, iframes): every step ends in its expected outcome; ambiguous fixtures are never auto-selected.
-- Service worker stopped mid-guide → the run resumes at the same step.
-- 0 axe violations on the player; a keyboard-only run completes.
-- Demo: author, publish, play on the fixture app.
+- Playwright fixture corpus (generated ids, late rendering, `pushState`, bfcache, `showModal`, shadow roots, iframes): every step ends in its expected outcome; ambiguous fixtures are never auto-selected. 6a: met for the static light-DOM cases; the rest belongs to 6b and 6c.
+- Service worker stopped mid-guide → the run resumes at the same step. 6a: met.
+- 0 axe violations on the player; a keyboard-only run completes. 6a: met.
+- Demo: author, publish, play on the fixture app. 6a: met (e2e, and manual steps below).
 
-Risks: R-01, R-04–R-11, R-15, R-16. ADRs: calibrate 0014's thresholds; revisit 0013 (host modals, top layer); new ADR: SPA navigation detection (Navigation API vs `webNavigation` and its "Read your browsing history" warning).
+Changed from the plan (6a):
+
+- **No Floating UI.** The card needs two behaviours, flip and shift inside the viewport, written as a small pure module (`src/content/player/position.ts`) with its own tests, instead of a dependency in every page ([ADR 0013](adr/0013-shadow-dom-ui-isolation.md)).
+- **The start page is matched in the extension.** The published guide list carries the published version's `startUrlPattern` ([API 3.4](api.md#34-phase-4-extension-connection-and-published-guides)); the API still filters by exact origin only.
+- **Revocation found at the next step.** A loaded guide needs no API call to move, so the worker asks the API whether the connection stands on Previous and Next (no polling, no push channel, no new permission).
+- **An identity rule in resolution.** A best score above `minScore` is not enough: the candidate must match by what says which element it is, and candidates that match equally are never separated by their position ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- **No `webNavigation` or other new permission**, and no migration.
+
+Verification (6a, branch `JJ`):
+
+- `pnpm format:check`, `pnpm typecheck`, `pnpm lint` and `pnpm build` pass; `content.js` is 45 277 bytes minified (16 078 gzip) of the 65 536-byte budget, up from 26 805 at the end of Phase 5.
+- `pnpm test`: 826 tests in 70 files: 73 shared, 3 ui, 55 API unit, 191 API integration (the start page of the published version in guide summaries), 108 dashboard, 396 extension. The extension's new tests cover:
+  - the resolver on a corpus of 16 cases (test id, stable and generated ids, role and name, label, text, positional-only, hidden and inert copies, not found, two equal candidates, wrong page, no target, below the viewport, removed, moved) plus scoring, vetoes, thresholds, the identity rule, the 50-candidate cap and diagnostics without page text;
+  - URL patterns, placement, the worker's run (start checks, generations, stale requests, races with Disconnect, reload and Edit Mode, a restarted worker), the router, message readers against the zod schemas, the card (outcomes, policies, keyboard, focus, forged events, nothing reaching the page) and the popup's Play.
+- `pnpm test:e2e`: dashboard 12/12 and extension 45/45 in Playwright's Chromium 153. The 6 player scenarios also passed `--repeat-each=2` (12/12), the first five `--repeat-each=3` (15/15):
+  - a guide authored in the real Edit Mode, published through the API and played from the real popup: each step highlights its element, Next and Previous, the worker stopped mid-guide, Finish leaves nothing, the page receives no click and no input;
+  - an ambiguous target never highlighted and a removed one shown on its own;
+  - keyboard only, the card as a named dialog in the accessibility tree, axe with 0 violations on the card's markup and styles;
+  - only guides for the page are listed; Edit Mode and the player never overlap;
+  - a reload or Disconnect ends the guide and leaves nothing on the page;
+  - the demo page under a strict CSP with Trusted Types: highlight and card styled, 0 violations, with an inline-style control.
+- `drizzle-kit check` is clean; 6a adds no migration and no manifest permission.
+
+Review fixes (PR #5 review, after `153ab9d`):
+
+- `a793a37` **One run per tab.** The first version kept a single run for the whole browser (a Play in tab B replaced tab A's guide). Runs are now stored by tab (`cl.players`, each entry validated on its own) and every action affects only its own tab; a site turned off ends the runs on that origin; Disconnect ends them all. The worker sends a run's show from inside the transition that stores it and every hide from inside the transition that ends or replaces it; a start whose run was ended or replaced while its page answered reports STALE, and an older start that loads slowly never replaces a newer one.
+- `97d1770` **Revocation during playback.** Previous and Next check the connection with `GET /v1/extension/session` through the auth module (single refresh, strict rotation); a refused connection ends every run it had and tells each page; an unreachable or failing API is not a revocation.
+- `f5bc2a6` **Hide before show.** The page ignored a hide for a run it was not showing yet, so a show arriving after it could draw an ended guide; a hide now marks the run as ended on the page (bounded to the 20 most recent), and a later show for it draws nothing.
+- `e7bb393` **Unstable targets.** A target whose box never held still across two frames within the bounded checks was anchored anyway; it is now `not-found` with reason `unstable` under the descriptor's policy ([ADR 0014](adr/0014-element-targeting-strategy.md)).
+- `050f193` e2e: two guides in two tabs; a revocation from Connected browsers ends the guide at the next step (with every other extension page closed, so only the player's check can find it; the scenario fails with that check removed).
+- The new unit tests were checked by removing each fix in turn: the matching tests failed (per-tab storage: 7; superseded start: 1; check after the page's answer: 3; revocation check: 2; unreachable taken for a revocation: 1; page tombstone: 3; anchoring an unstable target: 1).
+- Verification (final review-fix code):
+  - `pnpm test`: 848 tests in 70 files (extension 418);
+  - `pnpm test:e2e`: dashboard 12/12 and extension 47/47; the 8 player scenarios `--repeat-each=3` 24/24. During the first such repetition the reload scenario failed once and its output was not kept; it was not reproduced in about 110 later runs, and the scenario now waits for the new document's script and a known tab before checking that the run is gone;
+  - CI found a race in an e2e helper, not in the player. CI run 37528170031 on `5045ca0` passed only after a retry, and run 37529804635 on `9e12bf8` failed all three attempts. In the main player scenario, `expect.poll` over the helper that reads the card threw "Could not compute box model": the helper saw the highlight drawn, then measured it after the player had hidden it for the next step (as it does while a new target settles). `poll` does not retry an exception. The Previous / Next session check made that window more frequent on CI. `9e12bf8` first misread the error as coming from the click helper; that helper now also waits for a button's box. The reading helper first took a highlight it could no longer measure as not drawn (`7e7dc29`). A local run then hit the same race in another form: the host was removed while the helper read it after a revocation ("Could not find node with given id"). So the helper now reads the whole view again, from a fresh snapshot, when a node changed between two CDP calls (at most five times);
+  - `content.js` is 45 304 bytes minified (16 093 gzip) of the unchanged 65 536-byte budget;
+  - `drizzle-kit check` is clean; no migration and no new permission.
+
+Not covered by automation (manual checks for JJ): playing "Crear un cliente" in Google Chrome with the regular build on `pnpm demo:site`, opening the popup with the toolbar icon, in two tabs at once, and revoking the connection from Connected browsers mid-guide; a screen reader (VoiceOver) reading the card; Chrome 120; a real customer application.
+
+Risks: R-01, R-04–R-11, R-15, R-16. ADRs: [ADR 0014](adr/0014-element-targeting-strategy.md) resolution Accepted for static light-DOM resolution (6a), thresholds still starting values to calibrate in 6b; [ADR 0013](adr/0013-shadow-dom-ui-isolation.md) updated with the player (host modals still 6b); new ADR in 6b: SPA navigation detection (Navigation API vs `webNavigation` and its "Read your browsing history" warning).
 
 ## Phase 7 — Analytics
 

@@ -1,6 +1,6 @@
 # ADR 0014: Multi-signal target descriptors for element targeting
 
-- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3) and for capture (implemented in Phase 5); Proposed for resolution (Phase 6)
+- Status: Accepted for the stored shape (TargetDescriptor v1, Phase 3), for capture (implemented in Phase 5) and for static resolution in the light DOM (implemented in Phase 6a); Proposed for waiting, navigation, shadow roots and frames (6b, 6c). The thresholds are starting values, not calibrated.
 - Date: 2026-10-04
 - Deciders: JJ
 
@@ -127,7 +127,7 @@ Code: `apps/extension/src/content/capture/` (descriptor) and `src/content/picker
 
 Work is bounded: hover does one hit test and one promotion per frame; the full descriptor is built only for the selected element; counts stop above 5 000 candidates; a descriptor over 16 384 characters drops its anchors, then refuses. The whole content script stays under its build-enforced budget (`apps/extension/scripts/budget.ts`).
 
-### Resolution (Planned, Phase 6)
+### Resolution (Accepted for the light DOM, Implemented in Phase 6a; steps 2 and 9 Planned)
 
 1. If `page.urlPattern` does not match `location.href`, the outcome is `wrong-page`.
 2. Resolve the roots: frame, then shadow hosts (`shadowRoot` or `chrome.dom.openOrClosedShadowRoot`), then the container.
@@ -148,6 +148,27 @@ Work is bounded: hover does one hit test and one promotion per frame; the full d
 
 The thresholds are starting values, to be calibrated against a fixture corpus in Phase 6.
 
+**As implemented in Phase 6a** (`apps/extension/src/content/resolve/resolver.ts`, static resolution of the top document's light DOM, called when a step is shown):
+
+1. **Page.** The step's `urlPattern`, else the target's `page.urlPattern`, is matched with `URLPattern`; no match is `wrong-page`, an invalid pattern `unsupported`. No target is `none`: the step is shown unanchored on purpose.
+2. **Roots.** A descriptor with a `framePath` or a `shadowPath` is `unsupported`, never guessed (6c).
+3. **Candidates** come from the stored locators, strongest first, through the same definitions capture used to count them (`capture/locate.ts`: test id, id, role and name, label, placeholder, alt, title, text promoted like the pick, CSS, CSS path, XPath); at most 50 are scored, and the counts per strategy are kept for diagnostics.
+4. **Visibility.** Disconnected, inert, `checkVisibility({ checkOpacity, checkVisibilityCSS })`-hidden and empty-box candidates are dropped; a candidate outside the viewport stays (it is scrolled to).
+5. **Score.** Each candidate is described with capture's own functions and scored `Σ wᵢ·simᵢ / Σ wᵢ` over the signals the descriptor has, with the starting weights above. Text and names compare as captured (normalized, redacted, capped), with token overlap (Dice) for close variants.
+6. **Veto.** Another value for a stored test attribute, or another role, removes the candidate.
+7. **Accept**, in this order:
+   - a test id that matched exactly one element at capture and matches exactly one rendered, unvetoed element now resolves directly;
+   - otherwise the best candidate must match by **identity**: the weighted similarity of what says which element it is (test attribute, stable id, accessible name, label, text, `name` / `title` / `placeholder` / `alt` / `aria-label`; role and position aside) must reach `MIN_IDENTITY` 0.7, else `not-found` ("Delete invoice" for a stored "Approve invoice" scores 0.5; "Save the customer" for "Save customer" 0.8). A descriptor with no identifying signal (positional only) resolves only while its CSS path and position still match exactly;
+   - its score must reach the stored `minScore` (0.65), else `not-found`;
+   - a runner-up that matches by identity at least as well is `ambiguous` unless their context (anchors, named container) tells them apart: a CSS path or a position never breaks such a tie (two "Edit" buttons in a list stay ambiguous at any margin);
+   - otherwise the lead over the runner-up must reach the stored `minMargin` (0.15), else `ambiguous`.
+8. **Stability** (in the player): the box must hold still across two animation frames before the highlight and the card are anchored to it. The checks are bounded (five pairs of frames); a target that is still moving after them, or that disappears meanwhile, is `not-found` with reason `unstable` and follows the descriptor's `onNotFound`; no other element is ever taken instead. Occlusion, found with `elementFromPoint` at the box's centre, is only a warning (recorded on the card for tests; events are Phase 7).
+9. **No waiting** in 6a: no `MutationObserver`, no navigation listener; this step stays Planned for 6b.
+
+Diagnostics carry counts per strategy, the number of rendered and vetoed candidates and the top three rounded scores with their strategies, never page text. The player follows the descriptor's `onAmbiguous` / `onNotFound`: unanchored with a short hint, skip in the direction the user was going, or end with a notice; `wrong-page` and `unsupported` are shown unanchored with a hint.
+
+Why Accepted for this part: the algorithm is implemented as decided, with the two additions above (identity, no structural tie-break) that the fixture corpus showed were needed. Without them, a candidate found only by its CSS path and position cleared `minScore` under another name, and of two identical "Edit" buttons the one at the captured position won by its structure alone. It is covered by a 16-case corpus captured with the real capture code (generated ids, renamed controls, hidden and inert copies, duplicates, a moved positional target, removed elements, wrong page, no target) and by Playwright on the demo application. The thresholds stay starting values: they were checked against that corpus, not calibrated on real applications.
+
 ## Alternatives considered
 
 | Option                                                  | Why not                                                                                                                   |
@@ -162,13 +183,13 @@ The thresholds are starting values, to be calibrated against a fixture corpus in
 
 - **Positive:** survives the loss of individual signals, and failures are explainable through scores and per-strategy counts. The version field allows schema evolution.
 - **Negative:** a few KB of JSON per step; complex capture; accessible-name computation and scoring add content-script weight ([R-15](../technical-risks.md)) and CPU on large DOMs (bounded by the candidate cap); captured text may contain personal data; thresholds need tuning.
-- **Follow-ups:** storage shape accepted and implemented in Phase 3. Its limits, in `packages/shared/src/target-descriptor.ts`:
+- **Follow-ups:** resolution in the light DOM accepted and implemented in Phase 6a; waiting, navigation and calibration on real applications are 6b, shadow roots and frames 6c. Storage shape accepted and implemented in Phase 3. Its limits, in `packages/shared/src/target-descriptor.ts`:
   - captured strings ≤ 80 characters, selectors ≤ 512;
   - 1–12 locators of 11 known strategies;
   - ≤ 6 anchors, ≤ 5 frame and ≤ 5 shadow hops, ≤ 12 attributes;
   - strict objects everywhere.
 
-  A step's `target` is null until captured, which also allows unanchored steps. Capture is implemented (Phase 5) and covered by unit tests and a demo page; resolution (Phase 6, [roadmap](../roadmap.md)) is still to be validated with a fixture corpus (generated ids, CSS-in-JS, shadow roots, iframes, virtualized lists, modals), which will also tell whether the capture heuristics above need a v2.
+  A step's `target` is null until captured, which also allows unanchored steps. Capture is implemented (Phase 5) and covered by unit tests and a demo page; static resolution (Phase 6a, [roadmap](../roadmap.md)) passes a light-DOM fixture corpus; the remaining fixtures (late rendering, CSS-in-JS on real apps, shadow roots, iframes, virtualized lists, modals) come with 6b and 6c, and will also tell whether the capture heuristics above need a v2.
 
 ## References
 

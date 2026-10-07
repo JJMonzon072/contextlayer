@@ -8,6 +8,7 @@ import type {
   LocalDraft,
   MessageError,
 } from '../messaging/protocol'
+import { richTextLines } from '../lib/rich-text-lines'
 import type { AuthoringClient } from './client'
 import {
   assignSavedIds,
@@ -15,7 +16,6 @@ import {
   fromLocal,
   move,
   newStep,
-  richTextLines,
   sameSteps,
   stepProblems,
   toDraft,
