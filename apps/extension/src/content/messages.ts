@@ -159,6 +159,17 @@ export function readStepAnswer(value: unknown): { step: PlayerStep } | { error: 
   return { error: 'INTERNAL_ERROR' }
 }
 
+/**
+ * The worker's answer to `player.resume` (mirrors `playerResumeResultSchema`):
+ * the step to show, `null` for nothing to resume, `undefined` for a failure
+ * or anything malformed.
+ */
+export function readResumeAnswer(value: unknown): PlayerStep | null | undefined {
+  if (!isRecord(value) || value.ok !== true) return undefined
+  if (value.data === null) return null
+  return readPlayerStep(value.data)
+}
+
 /** A request from the extension to this content script, or undefined. */
 export function readContentRequest(value: unknown): ContentRequest | undefined {
   if (!isRecord(value)) return undefined

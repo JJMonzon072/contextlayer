@@ -142,6 +142,7 @@ const player = createPlayer({
     (await site.applications()).applications?.filter((app) =>
       app.origins.some((entry) => entry.origin === origin && entry.on),
     ),
+  applicationsOn: (origin) => site.applicationIdsFor(origin),
 })
 
 // Restrict chrome.storage.local before anything can write a credential to it.

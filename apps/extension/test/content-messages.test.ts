@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import { captureTarget } from '../src/content/capture/descriptor'
-import { readContentRequest, readHelloAnswer, readStepAnswer } from '../src/content/messages'
+import {
+  readContentRequest,
+  readHelloAnswer,
+  readResumeAnswer,
+  readStepAnswer,
+} from '../src/content/messages'
 import {
   contentRequestSchema,
   helloResultSchema,
+  playerResumeResultSchema,
   playerStepResultSchema,
 } from '../src/messaging/protocol'
 
@@ -120,6 +126,22 @@ describe('content-script message readers', () => {
           ? { step: parsed.data.data }
           : { error: parsed.data.error.code }
       expect(readStepAnswer(value), JSON.stringify(value)).toEqual(expected)
+    }
+  })
+
+  it('read a resume answer like playerResumeResultSchema', () => {
+    const answers: unknown[] = [
+      ...playerSteps().map((data) => ({ ok: true, data })),
+      { ok: true, data: null },
+      { ok: true },
+      { ok: false, error: { code: 'STALE', message: 'The connection ended.' } },
+      { ok: 'true', data: null },
+      null,
+    ]
+    for (const value of answers) {
+      const parsed = playerResumeResultSchema.safeParse(value)
+      const expected = parsed.success && parsed.data.ok ? parsed.data.data : undefined
+      expect(readResumeAnswer(value), JSON.stringify(value)).toEqual(expected)
     }
   })
 

@@ -28,7 +28,7 @@ import { EXTENSION_VERSION } from '../config'
 import { failure } from '../messaging/result'
 import { captureTarget, type CaptureContext } from './capture/descriptor'
 import { handleContentMessage } from './handle-message'
-import { askWorker, readHelloAnswer } from './messages'
+import { askWorker, readHelloAnswer, readResumeAnswer } from './messages'
 import { followNavigation } from './navigation'
 import { createOverlay, OVERLAY_HOST_ATTRIBUTE } from './overlay'
 import { startPicker, type Picker } from './picker'
@@ -234,9 +234,23 @@ function start(instance: ContentInstance): void {
   document.addEventListener('visibilitychange', checkContext)
   window.addEventListener('pageshow', checkContext)
 
+  /**
+   * Asks for this tab's guide, if one is playing: a link, a form, a reload or
+   * bfcache brought this document, and the run continues here (ADR 0019).
+   */
+  async function resumeGuide() {
+    const step = readResumeAnswer(await askWorker({ type: 'player.resume' }))
+    if (!step || instance.state !== 'active') return
+    // Never over Edit Mode's selection or preview.
+    if (picker === undefined && preview === undefined) player.show(step)
+  }
+
   void askWorker({ type: 'page.hello' }).then((answer) => {
     if (instance.state !== 'starting') return
-    if (readHelloAnswer(answer) === true) instance.state = 'active'
+    if (readHelloAnswer(answer) === true) {
+      instance.state = 'active'
+      void resumeGuide()
+    }
     // Not authorized, or the worker is unreachable (orphaned copy): stay silent.
     else stop(contextAlive() ? 'inactive' : 'stopped')
   })

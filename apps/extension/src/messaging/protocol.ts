@@ -217,6 +217,8 @@ export const backgroundRequestSchema = z.discriminatedUnion('type', [
     runId: runIdSchema,
     reason: z.enum(PLAYER_END_REASONS),
   }),
+  // A document the worker authorized asks for its tab's run (Phase 6b, ADR 0019).
+  z.strictObject({ type: z.literal('player.resume') }),
   // What a content script may send: "may I run on this page?", and the answer
   // to the capture the worker asked it for (checked against the session).
   z.strictObject({ type: z.literal('page.hello') }),
@@ -451,6 +453,8 @@ export type PlayerStep = z.infer<typeof playerStepSchema>
 
 export const playerStartResultSchema = messageResultSchema(z.object({ runId: runIdSchema }))
 export const playerStepResultSchema = messageResultSchema(playerStepSchema)
+/** The current step of the tab's run, bound to the asking document, or `null`. */
+export const playerResumeResultSchema = messageResultSchema(playerStepSchema.nullable())
 
 // --- Requests handled by the content script ----------------------------------
 

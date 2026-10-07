@@ -70,7 +70,7 @@ function fakePlayer() {
     start: vi.fn(answer),
     go: vi.fn(answer),
     end: vi.fn(answer),
-    pageHello: vi.fn(() => Promise.resolve()),
+    resume: vi.fn(answer),
     tabClosed: vi.fn(() => Promise.resolve()),
     endOnTab: vi.fn(() => Promise.resolve()),
     verify: vi.fn(() => Promise.resolve()),
@@ -453,13 +453,30 @@ describe('handleBackgroundMessage', () => {
     expect(refused.player.endOnTab).not.toHaveBeenCalled()
   })
 
-  it('tells the player when a page says hello and when a site is turned off', async () => {
+  it('lets a page ask for its tab’s guide, and tells the player when a site is turned off', async () => {
     const handlers = deps()
 
     await handleBackgroundMessage({ type: 'page.hello' }, contentScriptSender, handlers)
+    await handleBackgroundMessage({ type: 'player.resume' }, contentScriptSender, handlers)
     await handleBackgroundMessage({ type: 'site.disable', tabId: 7 }, popupSender, handlers)
 
-    expect(handlers.player.pageHello).toHaveBeenCalledWith(contentScriptSender)
+    // A hello alone never moves a run: the page asks for it with player.resume.
+    expect(handlers.player.resume).toHaveBeenCalledExactlyOnceWith(contentScriptSender)
     expect(handlers.player.verify).toHaveBeenCalledOnce()
+    for (const sender of [popupSender, panelSender]) {
+      expect(
+        await handleBackgroundMessage({ type: 'player.resume' }, sender, deps()),
+      ).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
+    }
+    // Nothing in the message chooses a run, a tab or a document.
+    for (const forged of [
+      { type: 'player.resume', tabId: 3 },
+      { type: 'player.resume', runId: 'Rn1_run-id-0123456789abcdef' },
+    ]) {
+      expect(await handleBackgroundMessage(forged, contentScriptSender, deps())).toMatchObject({
+        ok: false,
+        error: { code: 'BAD_REQUEST' },
+      })
+    }
   })
 })
