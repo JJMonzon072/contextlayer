@@ -113,6 +113,12 @@ export interface Player {
   stop(): void
   /** The URL changed in this document: the current step is shown again for it. */
   urlChanged(): void
+  /**
+   * The document goes into bfcache: the UI and every wait go, but the run is
+   * not marked as ended here, since the worker gives it back when the
+   * document returns (ADR 0019).
+   */
+  suspend(): void
   readonly runId: string | undefined
 }
 
@@ -344,8 +350,11 @@ export function createPlayer(deps: PlayerDeps): Player {
     window[method]('resize', schedule, { capture: true, passive: true })
   }
 
-  /** Removes everything this player drew; the worker is told by the caller, if at all. */
-  function teardown() {
+  /**
+   * Removes everything this player drew; the worker is told by the caller, if
+   * at all. The run is marked as ended on this page unless `remember` is false.
+   */
+  function teardown(remember = true) {
     const shown = current
     renderToken += 1
     stopView()
@@ -358,11 +367,11 @@ export function createPlayer(deps: PlayerDeps): Player {
     track(false)
     overlay.highlight(null)
     overlay.hidePlayerCard()
-    if (shown) remember(shown.step.runId)
+    if (shown && remember) markEnded(shown.step.runId)
   }
 
   /** Marks a run as ended for good on this page (bounded). */
-  function remember(runId: string) {
+  function markEnded(runId: string) {
     ended.delete(runId)
     ended.add(runId)
     for (const oldest of ended) {
@@ -705,10 +714,13 @@ export function createPlayer(deps: PlayerDeps): Player {
     hide(runId) {
       // Fail closed: a hide that arrives before its show still ends the run here.
       if (current?.step.runId === runId) teardown()
-      else remember(runId)
+      else markEnded(runId)
     },
     stop() {
       teardown()
+    },
+    suspend() {
+      teardown(false)
     },
     urlChanged() {
       const showing = current

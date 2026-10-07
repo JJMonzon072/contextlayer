@@ -180,12 +180,36 @@ function start(instance: ContentInstance): void {
     remembered.clear()
     overlay.destroy()
     document.removeEventListener('visibilitychange', checkContext)
-    window.removeEventListener('pageshow', checkContext)
+    window.removeEventListener('pageshow', onPageShow)
+    window.removeEventListener('pagehide', onPageHide)
     if (contextAlive()) chrome.runtime.onMessage.removeListener(onMessage)
   }
 
   function checkContext() {
     if (!contextAlive()) stop()
+  }
+
+  /** Into bfcache: the guide's UI and waits go now; the document may come back (ADR 0019). */
+  function onPageHide(event: PageTransitionEvent) {
+    if (event.persisted) player.suspend()
+  }
+
+  /**
+   * Back from bfcache: the same document and this same script, not run again.
+   * It says hello again, so the worker records this document for the tab and
+   * checks the site is still on, then asks for the tab's guide.
+   */
+  function onPageShow(event: PageTransitionEvent) {
+    checkContext()
+    if (event.persisted && instance.state === 'active') void helloAgain()
+  }
+
+  async function helloAgain() {
+    const active = readHelloAnswer(await askWorker({ type: 'page.hello' }))
+    if (instance.state !== 'active') return
+    if (active === true) await resumeGuide()
+    else if (active === false) stop('inactive')
+    else checkContext()
   }
 
   function onMessage(
@@ -232,7 +256,8 @@ function start(instance: ContentInstance): void {
 
   chrome.runtime.onMessage.addListener(onMessage)
   document.addEventListener('visibilitychange', checkContext)
-  window.addEventListener('pageshow', checkContext)
+  window.addEventListener('pageshow', onPageShow)
+  window.addEventListener('pagehide', onPageHide)
 
   /**
    * Asks for this tab's guide, if one is playing: a link, a form, a reload or

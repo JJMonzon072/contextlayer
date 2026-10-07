@@ -751,6 +751,41 @@ describe('waiting for a target (Phase 6b)', () => {
     expect(ui.highlights.slice(drawn)).not.toContain(null)
   })
 
+  it('suspends for bfcache without ending the run, and shows it again when it comes back', async () => {
+    const ui = setup()
+    const target = capture('#new')
+    document.querySelector('#new')?.remove()
+    ui.player.show(step(1, { target }))
+    await run(0)
+    expect(observing).toBe(1)
+
+    // pagehide (persisted): the UI and the wait go, nothing is sent.
+    ui.player.suspend()
+    expect(ui.isOpen()).toBe(false)
+    expect(observing).toBe(0)
+    expect(ui.sent).toEqual([])
+
+    // pageshow (persisted): the worker gives the run back with the next generation.
+    expect(ui.player.show(step(1, { target, generation: 2 }))).toBe(true)
+    await run(0)
+    expect(ui.isOpen()).toBe(true)
+    expect(ui.text('.progress')).toBe('Step 2 of 3')
+    expect(observing).toBe(1)
+  })
+
+  it('never brings back a run hidden while the document was in bfcache', async () => {
+    const ui = setup()
+    ui.player.show(step(0))
+    await run(0)
+    ui.player.suspend()
+
+    // The guide ended elsewhere; the hide arrived for this document.
+    ui.player.hide(RUN)
+
+    expect(ui.player.show(step(0, { generation: 3 }))).toBe(false)
+    expect(ui.isOpen()).toBe(false)
+  })
+
   it('stops observing when the step changes, the guide ends, is hidden or stops', async () => {
     const target = capture('#new')
     document.querySelector('#new')?.remove()
